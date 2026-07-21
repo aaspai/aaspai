@@ -1,0 +1,30 @@
+# CODEOWNERS
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Each line is a path pattern followed by one or more owners. The last matching
+# rule wins. Owners can be GitHub users (@user) or teams (@org/team).
+
+# Default owner for the whole repo.
+*                                  @sandeep-sanwariya
+
+# Architecture, contracts, and shared packages get the same review (solo
+# maintainer today; add a security-reviewer team here when one exists).
+/packages/contracts/               @sandeep-sanwariya
+/packages/db/                      @sandeep-sanwariya
+/packages/auth/                    @sandeep-sanwariya
+/packages/identity/                @sandeep-sanwariya
+/packages/harness/                 @sandeep-sanwariya
+/packages/runtime/                 @sandeep-sanwariya
+/packages/crypto/                  @sandeep-sanwariya
+
+# Server entrypoints.
+/apps/api/                         @sandeep-sanwariya
+/apps/worker/                      @sandeep-sanwariya
+/apps/cli/                         @sandeep-sanwariya
+
+# CI, releases, and license/legal.
+/.github/                          @sandeep-sanwariya
+/LICENSE                           @sandeep-sanwariya
+/CONTRIBUTING.md                   @sandeep-sanwariya
+/SECURITY.md                       @sandeep-sanwariya
+/CODE_OF_CONDUCT.md                @sandeep-sanwariya

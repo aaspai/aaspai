@@ -1,0 +1,28 @@
+node_modules/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+.pnp.*
+*.log
+.DS_Store
+.env
+.env.local
+.env.*.local
+dist/
+build/
+.next/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+study/
+workspace/
+
+# aaspai runtime (agent state, knowledge, scratch — never committed)
+.aaspai/
+
+# `docs/` is public concept documentation and IS committed.

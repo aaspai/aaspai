@@ -1,0 +1,12 @@
+denylist:
+  - ".env"
+  - ".env.*"
+  - "auth/**"
+  - "payments/**"
+  - "secrets/**"
+allowlist: []
+maxFilesChanged: 0
+actions:
+  read: { allowed: true }
+  write: { allowed: false }
+  network: { allowed: true, scope: internal }

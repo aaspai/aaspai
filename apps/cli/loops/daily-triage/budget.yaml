@@ -1,0 +1,10 @@
+perRun:
+  tokens: 50000
+  costUsd: 2.00
+  durationMs: 300000
+perDay:
+  tokens: 200000
+  costUsd: 8.00
+  runs: 5
+soft: 0.8
+hard: 1.0

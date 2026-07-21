@@ -1,0 +1,9 @@
+name: Generic issue
+description: Anything that does not fit the other templates.
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+    validations:
+      required: true

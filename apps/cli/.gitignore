@@ -1,0 +1,8 @@
+# aaspai runtime
+.aaspai/state.db
+.aaspai/state.db-journal
+.aaspai/state.db-wal
+.aaspai/state.db-shm
+.aaspai/views/
+.aaspai/events/
+.aaspai/tmp/

@@ -1,0 +1,75 @@
+name: Bug report
+description: Report something that is broken or behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      content: |
+        Thanks for reporting. Please fill in the sections below. Sensitive
+        security issues should NOT be filed here — see SECURITY.md.
+
+  - type: input
+    id: version
+    attributes:
+      label: Commit / version
+      description: The commit hash, tag, or branch where the bug reproduces.
+      placeholder: e.g. `a1b2c3d` or `main @ 2026-07-21`
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: e.g. v20.11.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you thought would happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened. Paste error output, stack traces, or relevant logs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal commands or code that triggers the issue.
+      placeholder: |
+        1. `yarn install`
+        2. `yarn workspace @aaspai/api dev`
+        3. `curl ...`
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that might help (workarounds, screenshots, links to related issues).
+    validations:
+      required: false

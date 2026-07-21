@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a new capability or change to existing behavior.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      content: |
+        Describe the problem you are trying to solve first, then the proposed
+        solution. This makes it easier to discuss alternatives.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing or painful today? Who is affected?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like it to work? Include API shape, config keys, or UI if relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you considered and why you didn't pick them.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links, prior art, screenshots, or relevant issues/PRs.
+    validations:
+      required: false

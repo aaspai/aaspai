@@ -1,0 +1,11 @@
+name: Question
+description: Ask a question about usage, design, or roadmap.
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: Be as specific as possible. Link to the relevant code or doc.
+    validations:
+      required: true

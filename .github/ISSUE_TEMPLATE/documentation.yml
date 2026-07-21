@@ -1,0 +1,33 @@
+name: Documentation issue
+description: Report a problem or gap in the documentation.
+labels: ["documentation"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Where
+      description: File path or URL of the doc.
+      placeholder: e.g. `README.md` or `docs/ARCHITECTURE.md`
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Type of issue
+      options:
+        - Incorrect / outdated
+        - Missing information
+        - Unclear or ambiguous
+        - Typo / grammar
+        - Broken link
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What is wrong, and what should it say instead?
+    validations:
+      required: true
