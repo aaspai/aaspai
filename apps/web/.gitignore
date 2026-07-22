@@ -1,0 +1,17 @@
+# Next.js build artifacts
+.next/
+out/
+build/
+
+# Dev server logs (local only)
+dev.log
+dev.err.log
+
+# TypeScript incremental
+*.tsbuildinfo
+
+# Local DB (only if dev server creates one here)
+.aaspai/state.db
+.aaspai/state.db-journal
+.aaspai/state.db-wal
+.aaspai/state.db-shm
