@@ -15,6 +15,7 @@ export {
   getDefaultDb,
   type SqliteDb,
 } from "./connection";
+export { runMigrations } from "./migrations.js";
 export * as schema from "./schema";
 export type { API_SCOPE_VALUES, ApiScope } from "./schema/api-keys";
 // Phase 2 schema re-exports (tables + row types) so consumers don't have

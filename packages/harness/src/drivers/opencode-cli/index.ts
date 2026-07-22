@@ -228,7 +228,7 @@ async function runOpencodeCli(
       const s = chunk.toString("utf8");
       stdoutBuf += s;
       // opencode --format json emits one JSON event per line
-      let nl = stdoutBuf.indexOf("\n");
+      const nl = stdoutBuf.indexOf("\n");
       while (nl >= 0) {
         const line = stdoutBuf.slice(0, nl);
         stdoutBuf = stdoutBuf.slice(nl + 1);
