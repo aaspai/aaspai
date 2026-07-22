@@ -17,9 +17,9 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { getDefaultDb, sessions, wakeups } from "@aaspai/db";
+import { getDefaultDb, sessionEvents, sessions, wakeups } from "@aaspai/db";
 import { FileAgentConfigSource } from "@aaspai/file-loader";
-import { desc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 
 /**
  * Resolve the workspace root and pin `AASPAI_CWD` + `AASPAI_DB` so
@@ -288,5 +288,134 @@ export async function getStateSnapshot(): Promise<StateSnapshot> {
       reason: r.reason,
       loopId: r.loopId,
     })),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  Session detail
+// ─────────────────────────────────────────────────────────────────────
+
+export type TranscriptKind =
+  | "init"
+  | "assistant"
+  | "thinking"
+  | "tool_call"
+  | "tool_result"
+  | "result"
+  | "system"
+  | "stdout"
+  | "stderr"
+  | "unknown";
+
+export interface TranscriptEntry {
+  /** sequence number within the session (1, 2, 3, …) */
+  seq: number;
+  kind: TranscriptKind;
+  ts: string;
+  /** raw payload parsed from session_events.payload_json */
+  payload: Record<string, unknown>;
+}
+
+export interface SessionDetail extends SessionSummary {
+  prompt: string;
+  config: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  usage: Record<string, unknown> | null;
+  sessionDisplayId: string | null;
+  parentSessionId: string | null;
+  wakeupId: string | null;
+  /** Ordered list of every event recorded during the run. */
+  transcript: TranscriptEntry[];
+  /** All wakeup fields (for the wakeup that triggered this session). */
+  wakeup: {
+    id: string;
+    status: string;
+    reason: string | null;
+    source: string | null;
+    loopId: string;
+    requestedAt: string;
+    finishedAt: string | null;
+    error: string | null;
+  } | null;
+}
+
+function safeJson(s: string | null | undefined): Record<string, unknown> | null {
+  if (!s) return null;
+  try {
+    const parsed = JSON.parse(s) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getSessionDetail(id: string): Promise<SessionDetail | null> {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) return null;
+  const handle = getDefaultDb();
+  const rows = await handle.db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+  const s = rows[0];
+  if (!s) return null;
+
+  // Pull the full event transcript (ordered by sequence number).
+  const events = await handle.db
+    .select()
+    .from(sessionEvents)
+    .where(eq(sessionEvents.sessionId, id))
+    .orderBy(asc(sessionEvents.seq));
+  const transcript: TranscriptEntry[] = events.map((e) => {
+    const payload = safeJson(e.payloadJson) ?? {};
+    const kind = (
+      typeof payload.kind === "string" ? (payload.kind as string) : e.kind
+    ) as TranscriptKind;
+    return {
+      seq: e.seq,
+      kind,
+      ts: e.ts,
+      payload,
+    };
+  });
+
+  // Pull the wakeup that triggered this session, if any.
+  let wakeup: SessionDetail["wakeup"] = null;
+  if (s.wakeupId && s.wakeupId !== "manual") {
+    const wRows = await handle.db.select().from(wakeups).where(eq(wakeups.id, s.wakeupId)).limit(1);
+    const w = wRows[0];
+    if (w) {
+      wakeup = {
+        id: w.id,
+        status: w.status ?? "unknown",
+        reason: w.reason,
+        source: w.source,
+        loopId: w.loopId,
+        requestedAt: w.requestedAt,
+        finishedAt: w.finishedAt,
+        error: w.error,
+      };
+    }
+  }
+
+  return {
+    id: s.id,
+    status: s.status ?? "unknown",
+    agentId: s.agentId,
+    adapter: s.adapter,
+    startedAt: s.startedAt,
+    finishedAt: s.finishedAt,
+    durationMs: s.durationMs,
+    errorMessage: s.errorMessage,
+    prompt: s.prompt,
+    config: safeJson(s.configJson) ?? {},
+    runtime: safeJson(s.runtimeJson) ?? {},
+    result: safeJson(s.resultJson),
+    usage: safeJson(s.usageJson),
+    sessionDisplayId: s.sessionDisplayId,
+    parentSessionId: s.parentSessionId,
+    wakeupId: s.wakeupId,
+    transcript,
+    wakeup,
   };
 }

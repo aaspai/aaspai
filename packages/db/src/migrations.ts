@@ -64,7 +64,8 @@ const SQLITE_STATEMENTS = [
     session_id TEXT NOT NULL,
     ts TEXT NOT NULL,
     kind TEXT NOT NULL,
-    payload_json TEXT NOT NULL
+    payload_json TEXT NOT NULL,
+    seq INTEGER NOT NULL DEFAULT 0
   )`,
   `CREATE TABLE IF NOT EXISTS budget_ledger (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,8 +89,47 @@ const SQLITE_STATEMENTS = [
   )`,
 ];
 
+/**
+ * Schema-evolution statements. These run after the CREATE TABLE
+ * IF NOT EXISTS statements above and bring older databases up to
+ * the current shape. They are written to be idempotent so they
+ * can run on every `db migrate` invocation.
+ */
+const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
+  // session_events.seq was added after the initial scaffold. Older
+  // DBs need it added; we back-fill with the row id so the order
+  // is preserved.
+  {
+    check: "SELECT 1 FROM pragma_table_info('session_events') WHERE name = 'seq'",
+    sql: "ALTER TABLE session_events ADD COLUMN seq INTEGER NOT NULL DEFAULT 0",
+  },
+];
+
+// Existing databases receive `0` for the newly added column. The runtime
+// assigns sequence numbers from 1, so zero is an unambiguous marker for old
+// rows that need to be ordered by their original autoincrement id.
+const DATA_NORMALIZATION = ["UPDATE session_events SET seq = id WHERE seq = 0"];
+
 export function runMigrations(handle: DbHandle): void {
   for (const stmt of SQLITE_STATEMENTS) {
+    handle.db.run(stmt as never);
+  }
+  for (const evo of SCHEMA_EVOLUTION) {
+    // `check` returns rows when the column already exists. If it
+    // returns no rows, the column is missing and we run the ALTER.
+    const present = handle.db.all(evo.check as never);
+    if (!present || (Array.isArray(present) && present.length === 0)) {
+      try {
+        handle.db.run(evo.sql as never);
+      } catch (err) {
+        // Swallow: most likely a race where another process added
+        // the column between the check and the ALTER.
+        const msg = String((err as Error).message ?? err);
+        if (!/duplicate column|already exists/i.test(msg)) throw err;
+      }
+    }
+  }
+  for (const stmt of DATA_NORMALIZATION) {
     handle.db.run(stmt as never);
   }
 }
