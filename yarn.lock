@@ -54,33 +54,6 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@aaspai/cli@workspace:apps/cli":
-  version: 0.0.0-use.local
-  resolution: "@aaspai/cli@workspace:apps/cli"
-  dependencies:
-    "@aaspai/contracts": "workspace:*"
-    "@aaspai/db": "workspace:*"
-    "@aaspai/file-loader": "workspace:*"
-    "@aaspai/harness": "workspace:*"
-    "@aaspai/knowledge": "workspace:*"
-    "@aaspai/loops": "workspace:*"
-    "@aaspai/observability": "workspace:*"
-    "@aaspai/runtime": "workspace:*"
-    "@aaspai/sessions": "workspace:*"
-    "@aaspai/skills": "workspace:*"
-    "@aaspai/tools": "workspace:*"
-    "@biomejs/biome": "npm:^2.1.1"
-    "@types/node": "npm:^24.0.0"
-    commander: "npm:^12.1.0"
-    picocolors: "npm:^1.1.1"
-    rimraf: "npm:^6.1.3"
-    tsx: "npm:^4.16.2"
-    typescript: "npm:^5.8.3"
-  bin:
-    cli: ./dist/cli.js
-  languageName: unknown
-  linkType: soft
-
 "@aaspai/config@workspace:packages/config":
   version: 0.0.0-use.local
   resolution: "@aaspai/config@workspace:packages/config"
@@ -299,7 +272,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@aaspai/tools@workspace:*, @aaspai/tools@workspace:packages/tools":
+"@aaspai/tools@workspace:packages/tools":
   version: 0.0.0-use.local
   resolution: "@aaspai/tools@workspace:packages/tools"
   dependencies:
@@ -1355,6 +1328,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"aaspai-cli@workspace:apps/cli":
+  version: 0.0.0-use.local
+  resolution: "aaspai-cli@workspace:apps/cli"
+  dependencies:
+    "@biomejs/biome": "npm:^2.1.1"
+    "@types/node": "npm:^24.0.0"
+    better-sqlite3: "npm:^12.11.1"
+    commander: "npm:^12.1.0"
+    esbuild: "npm:0.25"
+    picocolors: "npm:^1.1.1"
+    rimraf: "npm:^6.1.3"
+    tsx: "npm:^4.16.2"
+    typescript: "npm:^5.8.3"
+  bin:
+    aaspai: ./dist/aaspai.js
+  languageName: unknown
+  linkType: soft
+
 "aaspai@workspace:.":
   version: 0.0.0-use.local
   resolution: "aaspai@workspace:."
@@ -1834,7 +1825,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"esbuild@npm:^0.25.4":
+"esbuild@npm:0.25, esbuild@npm:^0.25.4":
   version: 0.25.12
   resolution: "esbuild@npm:0.25.12"
   dependencies:

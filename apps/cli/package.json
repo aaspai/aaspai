@@ -1,38 +1,40 @@
 {
-  "name": "@aaspai/cli",
+  "name": "aaspai-cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "Self-hosted control plane for AI-agent workforces",
   "license": "AGPL-3.0-only",
-  "type": "module",
-  "bin": "./dist/cli.js",
-  "main": "./src/index.ts",
+  "bin": {
+    "aaspai": "./dist/aaspai.js"
+  },
+  "main": "./dist/aaspai.js",
+  "types": "./dist/aaspai.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc",
+    "build": "rimraf dist && tsc --noEmit && node build.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "start": "node --import tsx ./src/cli.ts",
-    "clean": "rimraf dist .turbo"
+    "clean": "rimraf dist .turbo",
+    "prepublishOnly": "yarn build"
   },
   "dependencies": {
-    "@aaspai/contracts": "workspace:*",
-    "@aaspai/db": "workspace:*",
-    "@aaspai/file-loader": "workspace:*",
-    "@aaspai/harness": "workspace:*",
-    "@aaspai/knowledge": "workspace:*",
-    "@aaspai/loops": "workspace:*",
-    "@aaspai/observability": "workspace:*",
-    "@aaspai/runtime": "workspace:*",
-    "@aaspai/sessions": "workspace:*",
-    "@aaspai/skills": "workspace:*",
-    "@aaspai/tools": "workspace:*",
+    "better-sqlite3": "^12.11.1",
     "commander": "^12.1.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.1.1",
     "@types/node": "^24.0.0",
+    "esbuild": "0.25",
     "rimraf": "^6.1.3",
     "tsx": "^4.16.2",
     "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=20.18.0 <21"
   }
 }
