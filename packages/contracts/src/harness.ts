@@ -173,6 +173,7 @@ export const adapterExecutionContextSchema = z
       .object({
         cwd: z.string().trim().min(1),
         prompt: z.string().trim().min(1).max(1_048_576),
+        role: z.string().trim().min(1).max(64).optional(),
         attachments: z
           .array(
             z
