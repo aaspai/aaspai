@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { join } from "node:path";
 import { tmpdir as realTmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@aaspai/observability", () => ({
   getLogger: () => ({
@@ -23,7 +23,8 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...mod,
     existsSync: ((p: string) => {
-      if (typeof p === "string" && p.includes("opencode") && !p.includes("aaspai-opencode")) return true;
+      if (typeof p === "string" && p.includes("opencode") && !p.includes("aaspai-opencode"))
+        return true;
       return mod.existsSync(p);
     }) as typeof mod.existsSync,
   };
@@ -31,8 +32,16 @@ vi.mock("node:fs", async (importOriginal) => {
 
 interface ChildMock {
   pid?: number;
-  stdout: { on: (e: string, h: (chunk: string) => void) => void; _data: string[]; _emit: (c: string) => void };
-  stderr: { on: (e: string, h: (chunk: string) => void) => void; _data: string[]; _emit: (c: string) => void };
+  stdout: {
+    on: (e: string, h: (chunk: string) => void) => void;
+    _data: string[];
+    _emit: (c: string) => void;
+  };
+  stderr: {
+    on: (e: string, h: (chunk: string) => void) => void;
+    _data: string[];
+    _emit: (c: string) => void;
+  };
   stdin: { on: (e: string, h: () => void) => void; write: () => void; end: () => void };
   on: (e: string, h: (code: number) => void) => void;
   _emitClose: (code: number) => void;
@@ -64,7 +73,9 @@ function makeChild(): ChildMock {
       _emit: (c: string) => stderrHandlers.forEach((h) => h(c)),
     } as never,
     stdin: {
-      on: (e: string, h: () => void) => { if (e === "error") stdinErrHandlers.push(h); },
+      on: (e: string, h: () => void) => {
+        if (e === "error") stdinErrHandlers.push(h);
+      },
       write: () => {},
       end: () => {},
     } as never,
@@ -110,7 +121,11 @@ describe("opencode_cli per-process serialization", () => {
       const child = makeChild();
       // After a short delay, emit 'close' with code 0.
       setTimeout(() => {
-        try { child._emitClose(0); } catch { /* child may already be torn down */ }
+        try {
+          child._emitClose(0);
+        } catch {
+          /* child may already be torn down */
+        }
         childrenAlive.count--;
       }, 30);
       return child as never;
@@ -161,7 +176,13 @@ describe("opencode_cli cross-process lock", () => {
     // Run one execute; it should acquire and release the lock
     spawn.mockImplementation(() => {
       const child = makeChild();
-      setTimeout(() => { try { child._emitClose(0); } catch { /* */ } }, 10);
+      setTimeout(() => {
+        try {
+          child._emitClose(0);
+        } catch {
+          /* */
+        }
+      }, 10);
       return child as never;
     });
 

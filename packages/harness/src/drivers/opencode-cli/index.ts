@@ -20,9 +20,9 @@
  *                     should run in a specific worktree)
  */
 import { execFile, spawn } from "node:child_process";
-import { existsSync, openSync, closeSync, writeSync, unlinkSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { tmpdir, hostname } from "node:os";
 import { promisify } from "node:util";
 import {
   type AdapterExecutionContext,
@@ -347,10 +347,10 @@ async function runOpencodeCli(
 
 /**
  * Per-process queue. The opencode CLI uses a single SQLite database
-  * (default `~/.local/share/opencode/opencode.db`) and concurrent
-  * invocations can race on writes. Serialize calls within this
-  * process AND across processes via a file-based advisory lock.
-  */
+ * (default `~/.local/share/opencode/opencode.db`) and concurrent
+ * invocations can race on writes. Serialize calls within this
+ * process AND across processes via a file-based advisory lock.
+ */
 let cliChain: Promise<unknown> = Promise.resolve();
 function serialize<T>(fn: () => Promise<T>): Promise<T> {
   const next = cliChain.then(fn, fn);
@@ -366,8 +366,7 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
  * if it's stale (PID not running), we steal it. The lock is
  * blocking with a short retry loop (50ms × 200 = 10s max).
  */
-const LOCK_PATH = process.env.AASPAI_OPENCODE_LOCK_PATH
-  ?? join(tmpdir(), "aaspai-opencode.lock");
+const LOCK_PATH = process.env.AASPAI_OPENCODE_LOCK_PATH ?? join(tmpdir(), "aaspai-opencode.lock");
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_WAIT_MS = 10_000;
 let lockChain: Promise<void> = Promise.resolve();
@@ -400,11 +399,17 @@ async function acquireLock(): Promise<() => void> {
           const holderPid = Number(m[1]);
           if (holderPid !== process.pid && !isPidRunning(holderPid)) {
             // Stale lock — steal it.
-            try { unlinkSync(LOCK_PATH); } catch { /* race: another process stole it first */ }
+            try {
+              unlinkSync(LOCK_PATH);
+            } catch {
+              /* race: another process stole it first */
+            }
             continue;
           }
         }
-      } catch { /* unreadable; try again */ }
+      } catch {
+        /* unreadable; try again */
+      }
       await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
     }
   });
@@ -416,7 +421,9 @@ async function acquireLock(): Promise<() => void> {
     try {
       const current = readFileSync(LOCK_PATH, "utf8").trim();
       if (current === myId) unlinkSync(LOCK_PATH);
-    } catch { /* already gone */ }
+    } catch {
+      /* already gone */
+    }
   };
 }
 

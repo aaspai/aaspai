@@ -129,10 +129,12 @@ export class WorkerDaemon {
       // Mark shuttingDown immediately so pollWakeups/claimAndRun
       // bail; then call stop() which awaits the in-flight session.
       this.shuttingDown = true;
-      void this.stop().then(() => process.exit(0)).catch((err) => {
-        log.error("graceful shutdown failed", { err: String(err) });
-        process.exit(1);
-      });
+      void this.stop()
+        .then(() => process.exit(0))
+        .catch((err) => {
+          log.error("graceful shutdown failed", { err: String(err) });
+          process.exit(1);
+        });
     };
     process.once("SIGINT", handle);
     process.once("SIGTERM", handle);
@@ -157,7 +159,11 @@ export class WorkerDaemon {
     await this.agentSource.stop();
     await this.knowledgeSource.stop();
     await this.loopSource.stop();
-    try { await closeDefaultDb(); } catch { /* already closed */ }
+    try {
+      await closeDefaultDb();
+    } catch {
+      /* already closed */
+    }
     log.info("worker stopped");
   }
 
@@ -261,7 +267,11 @@ export class WorkerDaemon {
         return;
       }
       if (attempt > 0) {
-        log.info("retrying wakeup after backoff", { wakeupId, attempt, backoffMs: backoffsMs[attempt] });
+        log.info("retrying wakeup after backoff", {
+          wakeupId,
+          attempt,
+          backoffMs: backoffsMs[attempt],
+        });
         await new Promise((r) => setTimeout(r, backoffsMs[attempt]));
       }
       try {
@@ -273,7 +283,10 @@ export class WorkerDaemon {
       }
     }
     log.error("wakeup exhausted retries", { wakeupId, err: String(lastError) });
-    await this.markFailed(wakeupId, `exhausted retries: ${String(lastError?.message ?? lastError)}`);
+    await this.markFailed(
+      wakeupId,
+      `exhausted retries: ${String(lastError?.message ?? lastError)}`,
+    );
   }
 
   private async executeWakeup(wakeupId: string): Promise<void> {

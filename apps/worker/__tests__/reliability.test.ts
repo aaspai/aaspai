@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@aaspai/observability", () => ({
   getLogger: () => ({
@@ -27,7 +27,16 @@ vi.mock("@aaspai/sessions", () => {
   };
 });
 
-async function setupDb(): Promise<{ tmpDir: string; wakeupsTable: unknown; handle: { db: { insert: (t: unknown) => { values: (v: unknown) => Promise<unknown> }; select: () => { from: (t: unknown) => { all: () => Promise<unknown[]> } } } } }> {
+async function setupDb(): Promise<{
+  tmpDir: string;
+  wakeupsTable: unknown;
+  handle: {
+    db: {
+      insert: (t: unknown) => { values: (v: unknown) => Promise<unknown> };
+      select: () => { from: (t: unknown) => { all: () => Promise<unknown[]> } };
+    };
+  };
+}> {
   const tmpDir = mkdtempSync(join(tmpdir(), "aaspai-reliability-"));
   process.env.AASPAI_DB = `sqlite:${join(tmpDir, "state.db")}`;
   const { getDefaultDb, runMigrations, wakeups } = await import("@aaspai/db");
@@ -42,15 +51,26 @@ async function teardownDb(tmpDir: string): Promise<void> {
       const { closeDefaultDb } = await import("@aaspai/db");
       await closeDefaultDb();
       break;
-    } catch { /* try again */ }
+    } catch {
+      /* try again */
+    }
     await new Promise((r) => setTimeout(r, 50));
   }
   await new Promise((r) => setTimeout(r, 50));
-  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
+  try {
+    rmSync(tmpDir, { recursive: true, force: true });
+  } catch {
+    /* best effort */
+  }
   vi.resetModules();
 }
 
-async function insertQueued(handle: { db: { insert: (t: unknown) => { values: (v: unknown) => Promise<unknown> } } }, wakeupsTable: unknown, id: string, reason: string): Promise<void> {
+async function insertQueued(
+  handle: { db: { insert: (t: unknown) => { values: (v: unknown) => Promise<unknown> } } },
+  wakeupsTable: unknown,
+  id: string,
+  reason: string,
+): Promise<void> {
   await (handle.db.insert(wakeupsTable) as { values: (v: unknown) => Promise<unknown> }).values({
     id,
     organizationId: "org_test",
@@ -69,9 +89,15 @@ async function insertQueued(handle: { db: { insert: (t: unknown) => { values: (v
 describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
   const originalEnv = { ...process.env };
 
-  beforeEach(() => { sessionExecute = vi.fn().mockResolvedValue({ status: "completed", output: "ok", sessionId: "sess_test" }); });
+  beforeEach(() => {
+    sessionExecute = vi
+      .fn()
+      .mockResolvedValue({ status: "completed", output: "ok", sessionId: "sess_test" });
+  });
 
-  afterEach(() => { process.env = { ...originalEnv }; });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
 
   it("does not claim a wakeup that is already claimed by another worker", async () => {
     const { tmpDir, wakeupsTable, handle } = await setupDb();
@@ -100,12 +126,19 @@ describe("WorkerDaemon in-flight guard (issue #4)", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    sessionExecute = vi.fn().mockImplementation(
-      () => new Promise((r) => setTimeout(() => r({ status: "completed", output: "ok", sessionId: "sess_test" }), 200)),
-    );
+    sessionExecute = vi
+      .fn()
+      .mockImplementation(
+        () =>
+          new Promise((r) =>
+            setTimeout(() => r({ status: "completed", output: "ok", sessionId: "sess_test" }), 200),
+          ),
+      );
   });
 
-  afterEach(() => { process.env = { ...originalEnv }; });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
 
   it("drops a pollWakeups call when a session is still in flight", async () => {
     const { tmpDir, wakeupsTable, handle } = await setupDb();
@@ -129,7 +162,9 @@ describe("WorkerDaemon in-flight guard (issue #4)", () => {
     expect(sessionExecute).toHaveBeenCalledTimes(1);
     const { wakeups } = await import("@aaspai/db");
     const db = (await import("@aaspai/db")).getDefaultDb();
-    const rows = await (db.db.select().from(wakeups) as { all: () => Promise<Array<{ id: string; status: string }>> }).all();
+    const rows = await (
+      db.db.select().from(wakeups) as { all: () => Promise<Array<{ id: string; status: string }>> }
+    ).all();
     const w2row = rows.find((r) => r.id === w2);
     expect(w2row?.status).toBe("queued");
 
@@ -140,7 +175,9 @@ describe("WorkerDaemon in-flight guard (issue #4)", () => {
 describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
   const originalEnv = { ...process.env };
 
-  afterEach(() => { process.env = { ...originalEnv }; });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
 
   it("retries transient errors and gives up after 3 attempts with reason 'exhausted retries'", async () => {
     const { tmpDir, wakeupsTable, handle } = await setupDb();
@@ -156,7 +193,11 @@ describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
     expect(sessionExecute).toHaveBeenCalledTimes(3);
     const { wakeups } = await import("@aaspai/db");
     const db = (await import("@aaspai/db")).getDefaultDb();
-    const rows = await (db.db.select().from(wakeups) as { all: () => Promise<Array<{ id: string; status: string; error: string | null }>> }).all();
+    const rows = await (
+      db.db.select().from(wakeups) as {
+        all: () => Promise<Array<{ id: string; status: string; error: string | null }>>;
+      }
+    ).all();
     const row = rows.find((r) => r.id === wakeupId);
     expect(row?.status).toBe("failed");
     expect(row?.error).toMatch(/exhausted retries/);
@@ -183,7 +224,11 @@ describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
     expect(sessionExecute).toHaveBeenCalledTimes(2);
     const { wakeups } = await import("@aaspai/db");
     const db = (await import("@aaspai/db")).getDefaultDb();
-    const rows = await (db.db.select().from(wakeups) as { all: () => Promise<Array<{ id: string; status: string; error: string | null }>> }).all();
+    const rows = await (
+      db.db.select().from(wakeups) as {
+        all: () => Promise<Array<{ id: string; status: string; error: string | null }>>;
+      }
+    ).all();
     const row = rows.find((r) => r.id === wakeupId);
     expect(row?.status).toBe("completed");
 
@@ -194,7 +239,9 @@ describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
 describe("WorkerDaemon graceful shutdown", () => {
   const originalEnv = { ...process.env };
 
-  afterEach(() => { process.env = { ...originalEnv }; });
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
 
   it("stop() awaits the in-flight session before closing the DB", async () => {
     const { tmpDir, wakeupsTable, handle } = await setupDb();
@@ -203,7 +250,10 @@ describe("WorkerDaemon graceful shutdown", () => {
 
     let resolveSession!: (v: { status: string; output: string; sessionId: string }) => void;
     sessionExecute = vi.fn().mockImplementation(
-      () => new Promise<{ status: string; output: string; sessionId: string }>((r) => { resolveSession = r; }),
+      () =>
+        new Promise<{ status: string; output: string; sessionId: string }>((r) => {
+          resolveSession = r;
+        }),
     );
 
     const { WorkerDaemon } = await import("../src/daemon.js");
@@ -217,7 +267,9 @@ describe("WorkerDaemon graceful shutdown", () => {
     // the session resolves.
     const stopPromise = daemon.stop();
     let stopCompleted = false;
-    void stopPromise.then(() => { stopCompleted = true; });
+    void stopPromise.then(() => {
+      stopCompleted = true;
+    });
 
     // Confirm stop() is blocked on the in-flight session
     await new Promise((r) => setTimeout(r, 100));
