@@ -15,6 +15,11 @@ export function initCommand(): Command {
         ["aaspai.config.ts", SCAFFOLD_TEMPLATES.CONFIG_TS],
         ["AGENTS.md", SCAFFOLD_TEMPLATES.AGENTS_MD],
         ["agents/_index.md", SCAFFOLD_TEMPLATES.AGENT_INDEX],
+        ["agents/ceo/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_CEO],
+        ["agents/ceo/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
+        ["agents/ceo/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
+        ["agents/ceo/skills.lock.json", "[]\n"],
+        ["agents/ceo/relations.yaml", "reportsTo: null\nmanages: []\npeers: []\n"],
         ["agents/operator/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_OPERATOR],
         ["agents/operator/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
         ["agents/operator/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
@@ -73,12 +78,28 @@ export function initCommand(): Command {
 
       console.log("");
       console.log(pc.green(`✓ Created ${created} files (${skipped} already existed)`));
+
+      // Run migrations automatically. `init` is the one command a new
+      // user runs; it should leave the project ready to use.
+      const { getDefaultDb, runMigrations } = await import("@aaspai/db");
+      const handle = getDefaultDb();
+      runMigrations(handle);
+      console.log(`  ${pc.green("+")} .aaspai/state.db (migrations applied)`);
+
       console.log("");
       console.log("Next steps:");
-      console.log(`  ${pc.cyan("yarn dev")}                  # start the aaspai daemon`);
-      console.log(`  ${pc.cyan("aaspai agent list")}        # see the seeded agents`);
-      console.log(`  ${pc.cyan("aaspai loop list")}         # see the seeded loops`);
-      console.log(`  ${pc.cyan("aaspai session start --agent agent/operator --prompt 'hello'")}`);
+      console.log(
+        `  ${pc.cyan("aaspai chat ceo")}                            # talk to your chief of staff`,
+      );
+      console.log(
+        `  ${pc.cyan("aaspai agent list")}                          # see the seeded agents`,
+      );
+      console.log(
+        `  ${pc.cyan("aaspai state")}                               # one-screen dashboard`,
+      );
+      console.log(
+        `  ${pc.cyan("aaspai start --port 7420")}                  # worker + API + web UI`,
+      );
       console.log("");
     });
 }

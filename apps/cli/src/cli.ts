@@ -8,6 +8,7 @@
  */
 import { Command } from "commander";
 import { agentCommand } from "./commands/agent.js";
+import { chatCommand } from "./commands/chat.js";
 import { dbCommand } from "./commands/db.js";
 import { initCommand } from "./commands/init.js";
 import { knowledgeCommand } from "./commands/knowledge.js";
@@ -59,6 +60,7 @@ program
 program.addCommand(initCommand());
 program.addCommand(dbCommand());
 program.addCommand(agentCommand());
+program.addCommand(chatCommand());
 program.addCommand(knowledgeCommand());
 program.addCommand(loopCommand());
 program.addCommand(sessionCommand());

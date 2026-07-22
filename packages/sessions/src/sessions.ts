@@ -175,6 +175,7 @@ export class Sessions {
         context: {
           cwd: req.cwd ?? process.cwd(),
           prompt: fullPrompt,
+          role: agent.role,
         },
         onLog: async (stream, chunk) => {
           for (const line of chunk.split(/\r?\n/)) {
