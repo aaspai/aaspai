@@ -20,7 +20,9 @@
  *                     should run in a specific worktree)
  */
 import { execFile, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, openSync, closeSync, writeSync, unlinkSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir, hostname } from "node:os";
 import { promisify } from "node:util";
 import {
   type AdapterExecutionContext,
@@ -345,16 +347,91 @@ async function runOpencodeCli(
 
 /**
  * Per-process queue. The opencode CLI uses a single SQLite database
- * (default `~/.local/share/opencode/opencode.db`) and concurrent
- * invocations can race on writes. Serialize calls within this
- * process; cross-process concurrency still races but is rare in
- * the foundation slice (single worker).
- */
+  * (default `~/.local/share/opencode/opencode.db`) and concurrent
+  * invocations can race on writes. Serialize calls within this
+  * process AND across processes via a file-based advisory lock.
+  */
 let cliChain: Promise<unknown> = Promise.resolve();
 function serialize<T>(fn: () => Promise<T>): Promise<T> {
   const next = cliChain.then(fn, fn);
   cliChain = next.catch(() => undefined);
   return next;
+}
+
+/**
+ * Cross-process lock. The opencode CLI is a single global state
+ * machine for the user (one auth.json, one opencode.db), so we
+ * serialize across processes too. Implemented as a tiny file in
+ * the OS temp dir: the file holds this process's PID + hostname;
+ * if it's stale (PID not running), we steal it. The lock is
+ * blocking with a short retry loop (50ms × 200 = 10s max).
+ */
+const LOCK_PATH = process.env.AASPAI_OPENCODE_LOCK_PATH
+  ?? join(tmpdir(), "aaspai-opencode.lock");
+const LOCK_RETRY_MS = 50;
+const LOCK_MAX_WAIT_MS = 10_000;
+let lockChain: Promise<void> = Promise.resolve();
+
+async function acquireLock(): Promise<() => void> {
+  const myId = `${process.pid}@${hostname()}`;
+  const startedAt = Date.now();
+  // Queue our turn behind any other process waiting on the same
+  // per-process promise chain.
+  const myTurn = lockChain.then(async () => {
+    while (true) {
+      if (Date.now() - startedAt > LOCK_MAX_WAIT_MS) {
+        throw new Error(`opencode_cli cross-process lock timeout after ${LOCK_MAX_WAIT_MS}ms`);
+      }
+      if (!existsSync(LOCK_PATH)) {
+        try {
+          const fd = openSync(LOCK_PATH, "wx");
+          writeSync(fd, myId);
+          closeSync(fd);
+          return;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        }
+      }
+      // Lock file exists. Check if it's stale (PID not running).
+      try {
+        const holder = readFileSync(LOCK_PATH, "utf8").trim();
+        const m = /^(\d+)@/.exec(holder);
+        if (m) {
+          const holderPid = Number(m[1]);
+          if (holderPid !== process.pid && !isPidRunning(holderPid)) {
+            // Stale lock — steal it.
+            try { unlinkSync(LOCK_PATH); } catch { /* race: another process stole it first */ }
+            continue;
+          }
+        }
+      } catch { /* unreadable; try again */ }
+      await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
+    }
+  });
+  lockChain = myTurn.catch(() => undefined);
+  return async () => {
+    await myTurn;
+    // Only delete the lock if we still own it (the holder string
+    // starts with our pid).
+    try {
+      const current = readFileSync(LOCK_PATH, "utf8").trim();
+      if (current === myId) unlinkSync(LOCK_PATH);
+    } catch { /* already gone */ }
+  };
+}
+
+function isPidRunning(pid: number): boolean {
+  if (pid <= 0) return false;
+  try {
+    // signal 0 is the POSIX "check if process exists" trick.
+    // Windows doesn't have kill(pid, 0) but process.kill with no
+    // signal returns true for live processes and throws ESRCH for
+    // dead ones.
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 export const opencodeCli: ServerAdapterModule = {
@@ -390,9 +467,19 @@ export const opencodeCli: ServerAdapterModule = {
       });
     }
 
-    const cliResult = await serialize(() =>
-      runOpencodeCli(prompt, config.model, config.title, ctx.onLog),
-    );
+    // Acquire the cross-process lock (blocks until we have it),
+    // then run inside the per-process serializer. The release
+    // function is called in a finally so a throwing CLI doesn't
+    // hold the lock forever.
+    const release = await acquireLock();
+    let cliResult: Awaited<ReturnType<typeof runOpencodeCli>>;
+    try {
+      cliResult = await serialize(() =>
+        runOpencodeCli(prompt, config.model, config.title, ctx.onLog),
+      );
+    } finally {
+      await release();
+    }
 
     const sessionId = cliResult.sessionId ?? shortId("oc");
     return {
