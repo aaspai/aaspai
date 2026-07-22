@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { parseClaudeStreamLine } from "@aaspai/harness/drivers/claude-local";
 import { parseCodexStreamLine } from "@aaspai/harness/drivers/codex-local";
+import { describe, expect, it } from "vitest";
 
 const ts = "2026-01-01T00:00:00.000Z";
 
@@ -12,7 +12,12 @@ describe("parseClaudeStreamLine", () => {
 
   it("returns an init entry for system/init", () => {
     const out = parseClaudeStreamLine(
-      JSON.stringify({ type: "system", subtype: "init", session_id: "s1", message: "claude-sonnet-4-6" }),
+      JSON.stringify({
+        type: "system",
+        subtype: "init",
+        session_id: "s1",
+        message: "claude-sonnet-4-6",
+      }),
       ts,
     );
     expect(out[0]?.kind).toBe("init");

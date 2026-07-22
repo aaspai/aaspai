@@ -5,8 +5,7 @@
  * OKF concept paths), resolve which concepts apply and return them
  * as markdown bodies that can be injected into the agent's context.
  */
-import type { AgentConfig } from "@aaspai/contracts/phase2";
-import type { KnowledgeConcept, KnowledgeSource } from "@aaspai/contracts/phase2";
+import type { AgentConfig, KnowledgeConcept, KnowledgeSource } from "@aaspai/contracts/phase2";
 import { getLogger } from "@aaspai/observability";
 
 const log = getLogger("knowledge.loader");
@@ -65,10 +64,7 @@ export class KnowledgeLoader {
     return { paths: [...concepts.keys()], concepts, context };
   }
 
-  private async expandPattern(
-    pattern: string,
-    exclude: Set<string>,
-  ): Promise<string[]> {
+  private async expandPattern(pattern: string, exclude: Set<string>): Promise<string[]> {
     if (!pattern.includes("*")) {
       return exclude.has(pattern) ? [] : [pattern];
     }

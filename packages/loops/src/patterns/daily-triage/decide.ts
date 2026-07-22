@@ -6,11 +6,17 @@
  *   - failed wakeups:     report (log for visibility, no auto-fix)
  *   - everything else:    noop
  */
+
+import type { DecideResult, WorkItem } from "@aaspai/contracts/phase2";
 import type { DecideFn } from "@aaspai/loops/pattern";
-import type { WorkItem, DecideResult } from "@aaspai/contracts/phase2";
 
 const decide: DecideFn = (async (item: WorkItem): Promise<DecideResult> => {
-  const data = (item.data ?? {}) as { kind?: string; status?: string; errorMessage?: string; error?: string };
+  const data = (item.data ?? {}) as {
+    kind?: string;
+    status?: string;
+    errorMessage?: string;
+    error?: string;
+  };
 
   if (data.kind === "session" && data.status === "failed") {
     return {
@@ -43,4 +49,3 @@ const decide: DecideFn = (async (item: WorkItem): Promise<DecideResult> => {
 }) as DecideFn;
 
 export default decide;
-

@@ -1,7 +1,8 @@
 import { BUILT_IN_TOOLS } from "./built-in.js";
 import { ToolRegistry } from "./registry.js";
-export { ToolRegistry, type ToolResolution } from "./registry.js";
+
 export { BUILT_IN_TOOLS } from "./built-in.js";
+export { ToolRegistry, type ToolResolution } from "./registry.js";
 
 /** A registry preloaded with the built-in tool set. */
 export function createBuiltInRegistry(): ToolRegistry {

@@ -1,16 +1,18 @@
+import { randomUUID } from "node:crypto";
+import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
+import { Sessions } from "@aaspai/sessions";
+import { SkillRegistry } from "@aaspai/skills";
 import { Command } from "commander";
 import pc from "picocolors";
-import { randomUUID } from "node:crypto";
-import { Sessions } from "@aaspai/sessions";
-import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
-import { SkillRegistry } from "@aaspai/skills";
 
 export function sessionCommand(): Command {
   const cmd = new Command("session").description("Session operations");
 
   function makeSessions(): Sessions {
     const agentSource = new FileAgentConfigSource(process.env.AASPAI_AGENTS_DIR ?? "./agents");
-    const knowledgeSource = new FileKnowledgeSource(process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge");
+    const knowledgeSource = new FileKnowledgeSource(
+      process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
+    );
     const skills = new SkillRegistry();
     return new Sessions({ agentSource, knowledgeSource, skillRegistry: skills });
   }
@@ -78,8 +80,12 @@ export function sessionCommand(): Command {
         }
       };
       await Promise.all([
-        Promise.resolve(maybeStop((s as unknown as { opts: { agentSource: unknown } }).opts.agentSource)),
-        Promise.resolve(maybeStop((s as unknown as { opts: { knowledgeSource: unknown } }).opts.knowledgeSource)),
+        Promise.resolve(
+          maybeStop((s as unknown as { opts: { agentSource: unknown } }).opts.agentSource),
+        ),
+        Promise.resolve(
+          maybeStop((s as unknown as { opts: { knowledgeSource: unknown } }).opts.knowledgeSource),
+        ),
       ]);
       process.exit(0);
     });

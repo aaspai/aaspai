@@ -1,6 +1,6 @@
+import { createBuiltInRegistry } from "@aaspai/tools";
 import { Command } from "commander";
 import pc from "picocolors";
-import { createBuiltInRegistry } from "@aaspai/tools";
 
 export function toolCommand(): Command {
   const cmd = new Command("tool").description("Tool operations");
@@ -16,7 +16,9 @@ export function toolCommand(): Command {
       const r = registry();
       console.log(pc.cyan(`Tools (${r.list().length} built-in)`));
       for (const t of r.list()) {
-        console.log(`  ${t.name.padEnd(20)} ${pc.gray(`[${t.risk}] ${t.description.slice(0, 70)}`)}`);
+        console.log(
+          `  ${t.name.padEnd(20)} ${pc.gray(`[${t.risk}] ${t.description.slice(0, 70)}`)}`,
+        );
       }
     });
 

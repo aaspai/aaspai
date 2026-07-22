@@ -12,20 +12,34 @@ import {
 // ─────────────────────────────────────────────────────────────────
 
 export const agentRoleSchema = z.enum([
-  "ceo", "cto", "cmo", "cfo", "security",
-  "engineer", "designer", "pm", "qa",
-  "devops", "researcher", "operator", "general",
+  "ceo",
+  "cto",
+  "cmo",
+  "cfo",
+  "security",
+  "engineer",
+  "designer",
+  "pm",
+  "qa",
+  "devops",
+  "researcher",
+  "operator",
+  "general",
 ]);
 export type AgentRole = z.infer<typeof agentRoleSchema>;
 
 export const toolRiskSchema = z.enum([
-  "safe", "side_effect", "destructive", "network", "expensive",
+  "safe",
+  "side_effect",
+  "destructive",
+  "network",
+  "expensive",
 ]);
 export type ToolRisk = z.infer<typeof toolRiskSchema>;
 
 export const agentConfigSchema = z
   .object({
-    id: identifierSchema,                              // "agent/<slug>"
+    id: identifierSchema, // "agent/<slug>"
     type: z.literal("Agent"),
     title: z.string().trim().min(1).max(256),
     description: z.string().trim().min(1).max(4_096),
@@ -41,9 +55,10 @@ export const agentConfigSchema = z
     runtimeConfig: jsonObjectSchema.default({}),
     runtime: jsonObjectSchema.default({}),
     tools: jsonObjectSchema.default({}),
-    skills: z.array(
-      z.object({ key: z.string(), version: z.string() }).strict(),
-    ).max(64).default([]),
+    skills: z
+      .array(z.object({ key: z.string(), version: z.string() }).strict())
+      .max(64)
+      .default([]),
     knowledge: jsonObjectSchema.default({}),
     budget: jsonObjectSchema.default({}),
     relations: jsonObjectSchema.default({}),
@@ -69,8 +84,8 @@ export type OkfFrontmatter = z.infer<typeof okfFrontmatterSchema>;
 
 export const knowledgeConceptSchema = z
   .object({
-    id: z.string().trim().min(1).max(512),            // "runbooks/deploy-vercel"
-    path: z.string().trim().min(1).max(1_024),        // absolute file path
+    id: z.string().trim().min(1).max(512), // "runbooks/deploy-vercel"
+    path: z.string().trim().min(1).max(1_024), // absolute file path
     type: z.string().trim().min(1).max(64),
     title: z.string().trim().min(1).max(512),
     description: z.string().trim().min(1).max(4_096),
@@ -83,7 +98,7 @@ export const knowledgeConceptSchema = z
     related: z.array(z.string()).max(64).default([]),
     lastUpdatedBy: z.string().optional(),
     lastUpdatedAt: isoTimestampSchema.optional(),
-    hash: z.string().length(64),                        // sha256 of the file content
+    hash: z.string().length(64), // sha256 of the file content
   })
   .strict();
 export type KnowledgeConcept = z.infer<typeof knowledgeConceptSchema>;
@@ -114,17 +129,19 @@ export type LoopStatus = z.infer<typeof loopStatusSchema>;
 
 export const loopPatternSchema = z
   .object({
-    id: identifierSchema,                              // "loop/<slug>"
+    id: identifierSchema, // "loop/<slug>"
     type: z.literal("LoopPattern"),
     title: z.string().trim().min(1).max(256),
     description: z.string().trim().min(1).max(4_096),
     timestamp: isoTimestampSchema,
     schedule: triggerSchema,
-    agent: identifierSchema,                           // which agent runs the actions
+    agent: identifierSchema, // which agent runs the actions
     autonomyLevel: autonomyLevelSchema.default("L1"),
     status: loopStatusSchema.default("enabled"),
     pauseReason: z.string().max(1_024).optional(),
-    concurrencyPolicy: z.enum(["coalesce_if_active", "always_enqueue", "skip_if_active"]).default("coalesce_if_active"),
+    concurrencyPolicy: z
+      .enum(["coalesce_if_active", "always_enqueue", "skip_if_active"])
+      .default("coalesce_if_active"),
     catchUpPolicy: z.enum(["skip_missed", "enqueue_missed_with_cap"]).default("skip_missed"),
     configJson: z.string().max(65_536).default("{}"),
     gateJson: z.string().max(65_536).default("{}"),
@@ -159,16 +176,31 @@ export const workItemSchema = z
 export type WorkItem = z.infer<typeof workItemSchema>;
 
 export const decideResultSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("report"), payload: z.object({
-    title: z.string().min(1).max(512),
-    body: z.string().min(1).max(65_536),
-  }).strict() }).strict(),
-  z.object({
-    kind: z.literal("act"),
-    wakeupId: z.string().min(1).max(512).optional(),
-    reason: z.string().min(1).max(1_024),
-  }).strict(),
-  z.object({ kind: z.literal("escalate"), reason: z.string().min(1).max(1_024), severity: z.enum(["info", "warn", "critical"]) }).strict(),
+  z
+    .object({
+      kind: z.literal("report"),
+      payload: z
+        .object({
+          title: z.string().min(1).max(512),
+          body: z.string().min(1).max(65_536),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("act"),
+      wakeupId: z.string().min(1).max(512).optional(),
+      reason: z.string().min(1).max(1_024),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("escalate"),
+      reason: z.string().min(1).max(1_024),
+      severity: z.enum(["info", "warn", "critical"]),
+    })
+    .strict(),
   z.object({ kind: z.literal("noop") }).strict(),
 ]);
 export type DecideResult = z.infer<typeof decideResultSchema>;
@@ -178,15 +210,21 @@ export type DecideResult = z.infer<typeof decideResultSchema>;
 // ─────────────────────────────────────────────────────────────────
 
 export const wakeupStatusSchema = z.enum([
-  "queued", "claimed", "coalesced", "completed", "failed", "skipped", "cancelled",
+  "queued",
+  "claimed",
+  "coalesced",
+  "completed",
+  "failed",
+  "skipped",
+  "cancelled",
 ]);
 export type WakeupStatus = z.infer<typeof wakeupStatusSchema>;
 
 export const wakeupSchema = z
   .object({
-    id: identifierSchema,                              // "wake_<uuid>"
+    id: identifierSchema, // "wake_<uuid>"
     organizationId: identifierSchema,
-    loopId: identifierSchema,                         // FK to loops
+    loopId: identifierSchema, // FK to loops
     source: z.enum(["timer", "assignment", "routine", "on_demand", "continuation", "manual"]),
     triggerDetail: z.string().max(512).optional(),
     reason: z.string().max(1_024).optional(),
@@ -211,16 +249,24 @@ export type Wakeup = z.infer<typeof wakeupSchema>;
 // ─────────────────────────────────────────────────────────────────
 
 export const sessionStatusSchema = z.enum([
-  "queued", "running", "paused_for_question",
-  "succeeded", "failed", "cancelled", "timed_out", "interrupted",
+  "queued",
+  "running",
+  "paused_for_question",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "interrupted",
 ]);
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 
-export const pendingQuestionSchema = z.object({
-  prompt: z.string().min(1).max(8_192),
-  options: z.array(z.string().min(1).max(256)).max(64).optional(),
-  askedAt: isoTimestampSchema,
-}).strict();
+export const pendingQuestionSchema = z
+  .object({
+    prompt: z.string().min(1).max(8_192),
+    options: z.array(z.string().min(1).max(256)).max(64).optional(),
+    askedAt: isoTimestampSchema,
+  })
+  .strict();
 export type PendingQuestion = z.infer<typeof pendingQuestionSchema>;
 
 export const sessionRequestSchema = z
@@ -228,21 +274,26 @@ export const sessionRequestSchema = z
     organizationId: identifierSchema,
     agentId: identifierSchema,
     adapter: z.string().trim().min(1).max(64),
-    runtime: jsonObjectSchema,                          // ExecutionTarget
+    runtime: jsonObjectSchema, // ExecutionTarget
     prompt: z.string().min(1).max(1_048_576),
     config: jsonObjectSchema.default({}),
-    skills: z.array(z.object({ key: z.string(), version: z.string() }).strict())
-      .max(64).default([]),
-    resume: z.object({
-      sessionId: z.string().min(1).max(512),
-      sessionParams: jsonObjectSchema.optional(),
-    }).strict().optional(),
+    skills: z
+      .array(z.object({ key: z.string(), version: z.string() }).strict())
+      .max(64)
+      .default([]),
+    resume: z
+      .object({
+        sessionId: z.string().min(1).max(512),
+        sessionParams: jsonObjectSchema.optional(),
+      })
+      .strict()
+      .optional(),
     budget: jsonObjectSchema.default({}),
     cwd: z.string().trim().min(1).max(8_192).optional(),
     attachments: z.array(jsonObjectSchema).max(64).optional(),
     idempotencyKey: z.string().min(1).max(512),
     traceId: identifierSchema.optional(),
-    wakeupId: identifierSchema.optional(),               // links back to the loop's wakeup
+    wakeupId: identifierSchema.optional(), // links back to the loop's wakeup
   })
   .strict();
 export type SessionRequest = z.infer<typeof sessionRequestSchema>;
@@ -256,10 +307,17 @@ export const sessionResultSchema = z
     exitCode: z.number().int().nullable().optional(),
     usage: jsonObjectSchema.optional(),
     costUsd: z.number().nonnegative().optional(),
-    errorFamily: z.enum([
-      "transient_upstream", "provider_quota", "model_refusal",
-      "auth", "config", "internal", "user_cancelled",
-    ]).optional(),
+    errorFamily: z
+      .enum([
+        "transient_upstream",
+        "provider_quota",
+        "model_refusal",
+        "auth",
+        "config",
+        "internal",
+        "user_cancelled",
+      ])
+      .optional(),
     errorCode: z.string().max(128).optional(),
     summary: z.string().max(8_192).optional(),
     question: pendingQuestionSchema.optional(),
@@ -269,7 +327,10 @@ export const sessionResultSchema = z
 export type SessionResult = z.infer<typeof sessionResultSchema>;
 
 // Re-export schemas for direct use in places like `safeParse(row.resultJson, sessionResultSchema)`
-export { sessionResultSchema as SessionResultSchema, pendingQuestionSchema as PendingQuestionSchema };
+export {
+  pendingQuestionSchema as PendingQuestionSchema,
+  sessionResultSchema as SessionResultSchema,
+};
 
 export const sessionStateSchema = z
   .object({
@@ -298,13 +359,19 @@ export type SessionState = z.infer<typeof sessionStateSchema>;
 
 export const skillSchema = z
   .object({
-    key: z.string().trim().min(1).max(256),           // "deploy-vercel"
-    version: z.string().trim().min(1).max(64),        // "1.0.0"
+    key: z.string().trim().min(1).max(256), // "deploy-vercel"
+    version: z.string().trim().min(1).max(64), // "1.0.0"
     name: z.string().trim().min(1).max(256),
     description: z.string().trim().min(1).max(4_096),
     instructions: z.string().max(1_048_576),
-    files: z.array(z.object({ path: z.string().min(1).max(1_024), content: z.string().max(1_048_576) }).strict())
-      .max(256).default([]),
+    files: z
+      .array(
+        z
+          .object({ path: z.string().min(1).max(1_024), content: z.string().max(1_048_576) })
+          .strict(),
+      )
+      .max(256)
+      .default([]),
     adapterTypes: z.array(z.string()).max(32).default([]),
     owner: z.string().min(1).max(256),
     visibility: z.enum(["private", "organization", "public"]).default("private"),
@@ -321,16 +388,24 @@ export type Skill = z.infer<typeof skillSchema>;
 
 export const toolSchema = z
   .object({
-    name: z.string().trim().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9_]*$/),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(128)
+      .regex(/^[A-Za-z][A-Za-z0-9_]*$/),
     description: z.string().trim().min(1).max(4_096),
     risk: toolRiskSchema,
-    inputSchema: jsonObjectSchema,                      // JSON Schema-ish
+    inputSchema: jsonObjectSchema, // JSON Schema-ish
     outputSchema: jsonObjectSchema.optional(),
-    requires: z.object({
-      adapters: z.array(z.string()).max(32).optional(),
-      scopes: z.array(z.string()).max(16).optional(),
-      network: z.boolean().optional(),
-    }).strict().optional(),
+    requires: z
+      .object({
+        adapters: z.array(z.string()).max(32).optional(),
+        scopes: z.array(z.string()).max(16).optional(),
+        network: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     execute: z.custom<(input: unknown, ctx: unknown) => Promise<unknown>>(
       (v) => typeof v === "function",
     ),
@@ -344,18 +419,20 @@ export type Tool = z.infer<typeof toolSchema>;
 
 export const sourceDescriptorSchema = z
   .object({
-    kind: z.string().trim().min(1).max(64),           // "file" | "db" | "http" | "composite" | "memory"
+    kind: z.string().trim().min(1).max(64), // "file" | "db" | "http" | "composite" | "memory"
     label: z.string().trim().min(1).max(256),
     detail: jsonObjectSchema.optional(),
   })
   .strict();
 export type SourceDescriptor = z.infer<typeof sourceDescriptorSchema>;
 
-export const changeEventSchema = z.object({
-  kind: z.enum(["added", "updated", "removed"]),
-  id: z.string().min(1).max(512),
-  at: isoTimestampSchema,
-}).passthrough();
+export const changeEventSchema = z
+  .object({
+    kind: z.enum(["added", "updated", "removed"]),
+    id: z.string().min(1).max(512),
+    at: isoTimestampSchema,
+  })
+  .passthrough();
 export type ChangeEvent = z.infer<typeof changeEventSchema>;
 
 export interface AgentConfigSource {
@@ -370,7 +447,10 @@ export interface KnowledgeSource {
   get(id: string): Promise<Readonly<KnowledgeConcept>>;
   has(id: string): Promise<boolean>;
   list(): Promise<readonly string[]>;
-  search(query: string, opts?: { limit?: number; tags?: string[] }): Promise<readonly KnowledgeConcept[]>;
+  search(
+    query: string,
+    opts?: { limit?: number; tags?: string[] },
+  ): Promise<readonly KnowledgeConcept[]>;
   watch(callback: (change: ChangeEvent) => void): () => void;
   describe(): SourceDescriptor;
 }
@@ -417,20 +497,29 @@ export type GatePolicy = z.infer<typeof gatePolicySchema>;
 
 export const budgetSchema = z
   .object({
-    perRun: z.object({
-      tokens: nonNegativeIntegerSchema.default(0),
-      costUsd: z.number().nonnegative().default(0),
-      durationMs: nonNegativeIntegerSchema.default(0),
-    }).strict().optional(),
-    perDay: z.object({
-      tokens: nonNegativeIntegerSchema.default(0),
-      costUsd: z.number().nonnegative().default(0),
-      runs: nonNegativeIntegerSchema.default(0),
-    }).strict().optional(),
-    perMonth: z.object({
-      tokens: nonNegativeIntegerSchema.default(0),
-      costUsd: z.number().nonnegative().default(0),
-    }).strict().optional(),
+    perRun: z
+      .object({
+        tokens: nonNegativeIntegerSchema.default(0),
+        costUsd: z.number().nonnegative().default(0),
+        durationMs: nonNegativeIntegerSchema.default(0),
+      })
+      .strict()
+      .optional(),
+    perDay: z
+      .object({
+        tokens: nonNegativeIntegerSchema.default(0),
+        costUsd: z.number().nonnegative().default(0),
+        runs: nonNegativeIntegerSchema.default(0),
+      })
+      .strict()
+      .optional(),
+    perMonth: z
+      .object({
+        tokens: nonNegativeIntegerSchema.default(0),
+        costUsd: z.number().nonnegative().default(0),
+      })
+      .strict()
+      .optional(),
     soft: z.number().min(0).max(1).default(0.8),
     hard: z.number().min(0).max(1).default(1.0),
   })
@@ -476,10 +565,12 @@ export type CircuitPolicy = z.infer<typeof circuitPolicySchema>;
 
 export const circuitDecisionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("continue") }).strict(),
-  z.object({
-    kind: z.literal("escalate"),
-    reason: z.enum(["stagnation", "no_progress", "budget", "max_iterations"]),
-    summary: z.string().min(1).max(8_192),
-  }).strict(),
+  z
+    .object({
+      kind: z.literal("escalate"),
+      reason: z.enum(["stagnation", "no_progress", "budget", "max_iterations"]),
+      summary: z.string().min(1).max(8_192),
+    })
+    .strict(),
 ]);
 export type CircuitDecision = z.infer<typeof circuitDecisionSchema>;

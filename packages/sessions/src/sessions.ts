@@ -10,25 +10,30 @@
  * wires this to the DB-backed session store.
  */
 import { randomUUID } from "node:crypto";
-import { getDefaultDb } from "@aaspai/db";
-import { sessions as sessionsTable, sessionEvents as sessionEventsTable, type SessionInsert, type SessionEventInsert } from "@aaspai/db";
-import { getLogger } from "@aaspai/observability";
-import { getAdapter, type AdapterType } from "@aaspai/harness";
+import type { TranscriptEntry } from "@aaspai/contracts/harness";
 import {
-  sessionResultSchema,
-  pendingQuestionSchema,
   type AgentConfigSource,
   type KnowledgeSource,
+  type PendingQuestion,
+  pendingQuestionSchema,
   type SessionRequest,
   type SessionResult,
   type SessionState,
   type SessionStatus,
-  type PendingQuestion,
+  sessionResultSchema,
 } from "@aaspai/contracts/phase2";
 import type { JsonObject } from "@aaspai/contracts/primitives";
-import type { TranscriptEntry } from "@aaspai/contracts/harness";
+import {
+  getDefaultDb,
+  type SessionEventInsert,
+  type SessionInsert,
+  sessionEvents as sessionEventsTable,
+  sessions as sessionsTable,
+} from "@aaspai/db";
+import { type AdapterType, getAdapter } from "@aaspai/harness";
 import { KnowledgeLoader } from "@aaspai/knowledge";
-import { SkillRegistry } from "@aaspai/skills";
+import { getLogger } from "@aaspai/observability";
+import type { SkillRegistry } from "@aaspai/skills";
 
 const log = getLogger("sessions");
 
@@ -103,18 +108,27 @@ export class Sessions {
       adapter: req.adapter,
       runtimeJson: JSON.stringify(req.runtime),
       prompt: req.prompt,
-      configJson: JSON.stringify({ ...req.config, agentConfig: { id: agent.id, adapter: agent.adapter } }),
+      configJson: JSON.stringify({
+        ...req.config,
+        agentConfig: { id: agent.id, adapter: agent.adapter },
+      }),
       status: "running",
       sessionDisplayId: sessionId.slice(0, 8),
       startedAt: now,
     };
     const db = getDefaultDb();
-    await db.db.insert(sessionsTable).values({ ...insert, wakeupId: insert.wakeupId ?? "manual" } as never);
+    await db.db
+      .insert(sessionsTable)
+      .values({ ...insert, wakeupId: insert.wakeupId ?? "manual" } as never);
 
     // 5. Resolve the adapter and run the session
     const adapter = getAdapter(req.adapter as AdapterType);
     let seq = 0;
-    const recordEvent = async (stream: "stdout" | "stderr", payload: JsonObject, kind: TranscriptEntry["kind"]) => {
+    const recordEvent = async (
+      stream: "stdout" | "stderr",
+      payload: JsonObject,
+      kind: TranscriptEntry["kind"],
+    ) => {
       seq += 1;
       const eventInsert: SessionEventInsert = {
         sessionId,
@@ -133,9 +147,8 @@ export class Sessions {
     // 5a. Build the full prompt — the dry-run adapter reads the system
     // prompt from context, real adapters just see a bigger prompt.
     const knowledgeBlock = knowledge.context ? `\n\n---\n\n${knowledge.context}\n` : "";
-    const systemBlock = agent.systemPrompt.trim().length > 0
-      ? `${agent.systemPrompt.trim()}\n\n---\n\n`
-      : "";
+    const systemBlock =
+      agent.systemPrompt.trim().length > 0 ? `${agent.systemPrompt.trim()}\n\n---\n\n` : "";
     const fullPrompt = `${systemBlock}${req.prompt}${knowledgeBlock}`;
 
     let result: SessionResult;
@@ -170,7 +183,19 @@ export class Sessions {
               const parsed = JSON.parse(line);
               if (parsed && typeof parsed === "object" && "kind" in parsed) {
                 const k = String((parsed as { kind: unknown }).kind);
-                if (["assistant", "thinking", "tool_call", "tool_result", "init", "result", "stderr", "system", "stdout"].includes(k)) {
+                if (
+                  [
+                    "assistant",
+                    "thinking",
+                    "tool_call",
+                    "tool_result",
+                    "init",
+                    "result",
+                    "stderr",
+                    "system",
+                    "stdout",
+                  ].includes(k)
+                ) {
                   await recordEvent(stream, parsed as JsonObject, k as TranscriptEntry["kind"]);
                   continue;
                 }
@@ -196,7 +221,9 @@ export class Sessions {
       const durationMs = Date.now() - startedAtMs;
       const status: SessionStatus = adapterResult.timedOut
         ? "timed_out"
-        : (adapterResult.exitCode === 0 ? "succeeded" : "failed");
+        : adapterResult.exitCode === 0
+          ? "succeeded"
+          : "failed";
 
       result = {
         sessionId: adapterResult.sessionId ?? sessionId,
@@ -227,7 +254,8 @@ export class Sessions {
           errorCode: result.errorCode,
           // Only set errorMessage for actual failures. For successful
           // sessions the summary lives in the result JSON, not here.
-          errorMessage: status === "succeeded" ? undefined : (result.summary || result.errorCode || "failed"),
+          errorMessage:
+            status === "succeeded" ? undefined : result.summary || result.errorCode || "failed",
         } as never)
         .where(eqId(sessionsTable.id, sessionId));
       log.info("session completed", { sessionId, status, durationMs, agent: agent.id });
@@ -270,7 +298,11 @@ export class Sessions {
 
   async get(id: string): Promise<SessionState | null> {
     const db = getDefaultDb();
-    const rows = await db.db.select().from(sessionsTable).where(eqId(sessionsTable.id, id)).limit(1);
+    const rows = await db.db
+      .select()
+      .from(sessionsTable)
+      .where(eqId(sessionsTable.id, id))
+      .limit(1);
     const row = rows[0];
     if (!row) return null;
     return rowToState(row);
@@ -286,7 +318,14 @@ export class Sessions {
     const db = getDefaultDb();
     await db.db
       .update(sessionsTable)
-      .set({ status: "paused_for_question", pendingQuestionJson: JSON.stringify({ pausedReason: reason, askedAt: new Date().toISOString(), prompt: reason }) } as never)
+      .set({
+        status: "paused_for_question",
+        pendingQuestionJson: JSON.stringify({
+          pausedReason: reason,
+          askedAt: new Date().toISOString(),
+          prompt: reason,
+        }),
+      } as never)
       .where(eqId(sessionsTable.id, id));
     log.info("session paused", { id, reason });
   }
@@ -305,7 +344,11 @@ export class Sessions {
     const db = getDefaultDb();
     await db.db
       .update(sessionsTable)
-      .set({ status: "cancelled", finishedAt: new Date().toISOString(), errorMessage: `Stopped: ${reason}` } as never)
+      .set({
+        status: "cancelled",
+        finishedAt: new Date().toISOString(),
+        errorMessage: `Stopped: ${reason}`,
+      } as never)
       .where(eqId(sessionsTable.id, id));
     log.info("session stopped", { id, reason });
   }
@@ -314,7 +357,11 @@ export class Sessions {
     const db = getDefaultDb();
     await db.db
       .update(sessionsTable)
-      .set({ status: "cancelled", finishedAt: new Date().toISOString(), errorMessage: `Cancelled: ${reason}` } as never)
+      .set({
+        status: "cancelled",
+        finishedAt: new Date().toISOString(),
+        errorMessage: `Cancelled: ${reason}`,
+      } as never)
       .where(eqId(sessionsTable.id, id));
     log.info("session cancelled", { id, reason });
   }
@@ -328,7 +375,9 @@ function eqId<T>(col: T, val: string) {
 
 function rowToState(row: typeof sessionsTable.$inferSelect): SessionState {
   const result = row.resultJson ? safeParse(row.resultJson, sessionResultSchema) : undefined;
-  const question = row.pendingQuestionJson ? safeParse(row.pendingQuestionJson, pendingQuestionSchema) : undefined;
+  const question = row.pendingQuestionJson
+    ? safeParse(row.pendingQuestionJson, pendingQuestionSchema)
+    : undefined;
   const runtime = row.runtimeJson ? safeParseUntyped(row.runtimeJson) : {};
   return {
     id: row.id,
@@ -350,7 +399,10 @@ function rowToState(row: typeof sessionsTable.$inferSelect): SessionState {
   };
 }
 
-function safeParse<T>(json: string | null, schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false } }): T | undefined {
+function safeParse<T>(
+  json: string | null,
+  schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false } },
+): T | undefined {
   if (!json) return undefined;
   try {
     const result = schema.safeParse(JSON.parse(json));
@@ -362,5 +414,9 @@ function safeParse<T>(json: string | null, schema: { safeParse: (v: unknown) => 
 
 function safeParseUntyped(json: string | null): unknown {
   if (!json) return null;
-  try { return JSON.parse(json); } catch { return null; }
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 }

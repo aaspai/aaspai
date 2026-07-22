@@ -1,8 +1,8 @@
-import { Command } from "commander";
-import { writeText, ensureDir, SCAFFOLD_TEMPLATES, pc, shortPath } from "./_shared.js";
-import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { readFile, appendFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { Command } from "commander";
+import { ensureDir, pc, SCAFFOLD_TEMPLATES, shortPath, writeText } from "./_shared.js";
 
 export function initCommand(): Command {
   return new Command("init")
@@ -36,7 +36,10 @@ export function initCommand(): Command {
         ["loops/daily-triage/LOOP.md", SCAFFOLD_TEMPLATES.LOOP_DAILY_TRIAGE],
         ["loops/daily-triage/gate.yaml", SCAFFOLD_TEMPLATES.LOOP_GATE],
         ["loops/daily-triage/budget.yaml", SCAFFOLD_TEMPLATES.LOOP_BUDGET],
-        ["loops/daily-triage/schedule.yaml", "kind: cron\nexpression: \"0 8 * * 1-5\"\ntimezone: UTC\n"],
+        [
+          "loops/daily-triage/schedule.yaml",
+          'kind: cron\nexpression: "0 8 * * 1-5"\ntimezone: UTC\n',
+        ],
       ];
 
       let created = 0;
@@ -61,7 +64,10 @@ export function initCommand(): Command {
           console.log(`  ${pc.green("+")} .gitignore (appended runtime ignores)`);
         }
       } else {
-        await writeText(gitignore, `# aaspai runtime\n.aaspai/state.db\n.aaspai/state.db-journal\n.aaspai/state.db-wal\n.aaspai/state.db-shm\n.aaspai/views/\n.aaspai/events/\n.aaspai/tmp/\n`);
+        await writeText(
+          gitignore,
+          `# aaspai runtime\n.aaspai/state.db\n.aaspai/state.db-journal\n.aaspai/state.db-wal\n.aaspai/state.db-shm\n.aaspai/views/\n.aaspai/events/\n.aaspai/tmp/\n`,
+        );
         console.log(`  ${pc.green("+")} .gitignore`);
       }
 

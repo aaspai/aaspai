@@ -1,5 +1,5 @@
-import chokidar, { type FSWatcher } from "chokidar";
 import { EventEmitter } from "node:events";
+import chokidar, { type FSWatcher } from "chokidar";
 
 /**
  * Wraps chokidar with a saner API for the file-loader sources.
@@ -25,12 +25,7 @@ export class FileWatcher extends EventEmitter {
       ignoreInitial: false,
       persistent: true,
       awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 50 },
-      ignored: [
-        "**/node_modules/**",
-        "**/.git/**",
-        "**/dist/**",
-        "**/node_modules",
-      ],
+      ignored: ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/node_modules"],
     });
     this.watcher
       .on("add", (path) => this.emit("changed", { kind: "added" as const, path }))

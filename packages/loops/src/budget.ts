@@ -33,7 +33,14 @@ export class BudgetEnforcer {
 
   constructor(private readonly budget: Budget) {}
 
-  record(input: { scope: string; scopeId: string; window: string; tokens: number; costUsd: number; runs?: number }): void {
+  record(input: {
+    scope: string;
+    scopeId: string;
+    window: string;
+    tokens: number;
+    costUsd: number;
+    runs?: number;
+  }): void {
     this.entries.push({
       scope: input.scope,
       scopeId: input.scopeId,
@@ -46,7 +53,9 @@ export class BudgetEnforcer {
   }
 
   status(scope: string, scopeId: string, window: string): BudgetStatus {
-    const matching = this.entries.filter((e) => e.scope === scope && e.scopeId === scopeId && e.window === window);
+    const matching = this.entries.filter(
+      (e) => e.scope === scope && e.scopeId === scopeId && e.window === window,
+    );
     const tokens = matching.reduce((s, e) => s + e.tokens, 0);
     const costUsd = matching.reduce((s, e) => s + e.costUsd, 0);
     const runs = matching.reduce((s, e) => s + e.runs, 0);

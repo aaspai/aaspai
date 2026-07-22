@@ -107,7 +107,10 @@ export class CompositeSource<T extends ComposableSource> {
  */
 import type { AgentConfig, AgentConfigSource } from "@aaspai/contracts/phase2";
 
-export class CompositeAgentConfigSource extends CompositeSource<AgentConfigSource> implements AgentConfigSource {
+export class CompositeAgentConfigSource
+  extends CompositeSource<AgentConfigSource>
+  implements AgentConfigSource
+{
   async get(id: string): Promise<Readonly<AgentConfig>> {
     const source = await this.pick(id);
     return await source.get(id);
@@ -143,7 +146,10 @@ export class CompositeAgentConfigSource extends CompositeSource<AgentConfigSourc
 /** Same shape, for the knowledge port. */
 import type { KnowledgeConcept, KnowledgeSource } from "@aaspai/contracts/phase2";
 
-export class CompositeKnowledgeSource extends CompositeSource<KnowledgeSource> implements KnowledgeSource {
+export class CompositeKnowledgeSource
+  extends CompositeSource<KnowledgeSource>
+  implements KnowledgeSource
+{
   async get(id: string): Promise<Readonly<KnowledgeConcept>> {
     const source = await this.pick(id);
     return await source.get(id);
@@ -192,9 +198,12 @@ export class CompositeKnowledgeSource extends CompositeSource<KnowledgeSource> i
 }
 
 /** Same shape, for the loop port. */
-import type { LoopPattern, LoopConfigSource } from "@aaspai/contracts/phase2";
+import type { LoopConfigSource, LoopPattern } from "@aaspai/contracts/phase2";
 
-export class CompositeLoopConfigSource extends CompositeSource<LoopConfigSource> implements LoopConfigSource {
+export class CompositeLoopConfigSource
+  extends CompositeSource<LoopConfigSource>
+  implements LoopConfigSource
+{
   async get(id: string): Promise<Readonly<LoopPattern>> {
     const source = await this.pick(id);
     return await source.get(id);

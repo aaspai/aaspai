@@ -1,13 +1,13 @@
 import type { AdapterInfo, AdapterType, ServerAdapterModule } from "@aaspai/contracts/harness";
 import { claudeLocal } from "./drivers/claude-local/index.js";
 import { codexLocal } from "./drivers/codex-local/index.js";
-import { cursorLocal } from "./drivers/cursor-local/index.js";
 import { cursorCloud } from "./drivers/cursor-cloud/index.js";
-import { openclawGateway } from "./drivers/openclaw-gateway/index.js";
-import { hermesGateway } from "./drivers/hermes-gateway/index.js";
+import { cursorLocal } from "./drivers/cursor-local/index.js";
 import { dryRunLocal } from "./drivers/dry-run-local/index.js";
-import { opencodeLocal } from "./drivers/opencode-local/index.js";
+import { hermesGateway } from "./drivers/hermes-gateway/index.js";
+import { openclawGateway } from "./drivers/openclaw-gateway/index.js";
 import { opencodeCli } from "./drivers/opencode-cli/index.js";
+import { opencodeLocal } from "./drivers/opencode-local/index.js";
 
 /**
  * The full adapter registry. Maps every known `AdapterType` to its

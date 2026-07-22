@@ -19,7 +19,9 @@ export function formatCodexTranscriptEntry(entry: TranscriptEntry): string {
       return `${head} ${entry.output ?? ""}`;
     }
     case "result":
-      return pc.blue(`[result]${entry.summary ? ` ${entry.summary}` : ""}${entry.isError ? " (error)" : ""}`);
+      return pc.blue(
+        `[result]${entry.summary ? ` ${entry.summary}` : ""}${entry.isError ? " (error)" : ""}`,
+      );
     case "stderr":
       return pc.red(`[stderr] ${entry.text}`);
     case "system":

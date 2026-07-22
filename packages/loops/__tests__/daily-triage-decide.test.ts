@@ -1,6 +1,6 @@
+import type { DecideResult, WorkItem } from "@aaspai/contracts/phase2";
 import { describe, expect, it } from "vitest";
 import decide from "../src/patterns/daily-triage/decide.js";
-import type { WorkItem, DecideResult } from "@aaspai/contracts/phase2";
 
 function makeItem(data: Record<string, unknown>): WorkItem {
   return {
@@ -21,7 +21,10 @@ describe("daily-triage decide", () => {
 
   it("returns report for succeeded sessions", async () => {
     const item = makeItem({ kind: "session", status: "succeeded" });
-    const r: DecideResult = await decide(item, {} as never, { loopId: "loop/daily-triage", now: new Date() });
+    const r: DecideResult = await decide(item, {} as never, {
+      loopId: "loop/daily-triage",
+      now: new Date(),
+    });
     expect(r.kind).toBe("report");
   });
 

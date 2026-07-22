@@ -1,11 +1,17 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { z } from "zod";
-import { loopPatternSchema, type LoopPattern, type LoopConfigSource, type ChangeEvent, type SourceDescriptor } from "@aaspai/contracts/phase2";
+import {
+  type ChangeEvent,
+  type LoopConfigSource,
+  type LoopPattern,
+  loopPatternSchema,
+  type SourceDescriptor,
+} from "@aaspai/contracts/phase2";
 import { getLogger } from "@aaspai/observability";
+import * as yaml from "js-yaml";
+import { z } from "zod";
 import { FileWatcher } from "./chokidar-watcher.js";
 import { parseOkfFile, sha256HexSync } from "./okf-parser.js";
-import * as yaml from "js-yaml";
 
 const log = getLogger("file-loader.loop-source");
 
@@ -160,17 +166,27 @@ export class FileLoopConfigSource implements LoopConfigSource {
     let gateYaml: string | null = null;
     let budgetYaml: string | null = null;
     let scheduleYaml: string | null = null;
-    try { gateYaml = await readFile(join(dir, "gate.yaml"), "utf8"); } catch { /* optional */ }
-    try { budgetYaml = await readFile(join(dir, "budget.yaml"), "utf8"); } catch { /* optional */ }
-    try { scheduleYaml = await readFile(join(dir, "schedule.yaml"), "utf8"); } catch { /* optional */ }
+    try {
+      gateYaml = await readFile(join(dir, "gate.yaml"), "utf8");
+    } catch {
+      /* optional */
+    }
+    try {
+      budgetYaml = await readFile(join(dir, "budget.yaml"), "utf8");
+    } catch {
+      /* optional */
+    }
+    try {
+      scheduleYaml = await readFile(join(dir, "schedule.yaml"), "utf8");
+    } catch {
+      /* optional */
+    }
 
     const parsed = parseOkfFile(loopMd, { filePath: join(dir, "LOOP.md") });
     const fm = parsed.frontmatter as Record<string, unknown>;
     const id = (fm.id as string) ?? `loop/${basename(dir)}`;
     if (id !== `loop/${basename(dir)}`) {
-      throw new Error(
-        `Loop id "${id}" does not match directory name "${basename(dir)}"`,
-      );
+      throw new Error(`Loop id "${id}" does not match directory name "${basename(dir)}"`);
     }
 
     const loop: LoopPattern = loopPatternSchema.parse({

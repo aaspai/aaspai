@@ -16,10 +16,7 @@ import { describe, expect, it } from "vitest";
  * of underlying provider (in-memory fixture, Better Auth adapter, etc.).
  * Provider-specific tests belong in the adapter's own test file.
  */
-export function describeAuthVerifierContract(
-  label: string,
-  factory: () => AuthVerifier,
-): void {
+export function describeAuthVerifierContract(label: string, factory: () => AuthVerifier): void {
   describe(`AuthVerifier contract: ${label}`, () => {
     it("fails closed for missing credential", async () => {
       const verifier = factory();

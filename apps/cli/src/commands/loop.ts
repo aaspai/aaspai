@@ -1,10 +1,21 @@
-import { Command } from "commander";
-import pc from "picocolors";
-import { FileAgentConfigSource, FileKnowledgeSource, FileLoopConfigSource } from "@aaspai/file-loader";
-import { PatternRegistry, KillSwitch, Scheduler, LoopRunner, STARTER_PATTERNS, type ResolvedLoopPattern } from "@aaspai/loops";
+import { closeDefaultDb, getDefaultDb } from "@aaspai/db";
+import {
+  FileAgentConfigSource,
+  FileKnowledgeSource,
+  FileLoopConfigSource,
+} from "@aaspai/file-loader";
+import {
+  KillSwitch,
+  LoopRunner,
+  PatternRegistry,
+  type ResolvedLoopPattern,
+  Scheduler,
+  STARTER_PATTERNS,
+} from "@aaspai/loops";
 import { Sessions } from "@aaspai/sessions";
 import { SkillRegistry } from "@aaspai/skills";
-import { getDefaultDb, closeDefaultDb } from "@aaspai/db";
+import { Command } from "commander";
+import pc from "picocolors";
 
 export function loopCommand(): Command {
   const cmd = new Command("loop").description("Loop operations");
@@ -21,7 +32,9 @@ export function loopCommand(): Command {
 
   function runner(): LoopRunner {
     const agentSource = new FileAgentConfigSource(process.env.AASPAI_AGENTS_DIR ?? "./agents");
-    const knowledgeSource = new FileKnowledgeSource(process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge");
+    const knowledgeSource = new FileKnowledgeSource(
+      process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
+    );
     const skills = new SkillRegistry();
     const sessions = new Sessions({ agentSource, knowledgeSource, skillRegistry: skills });
     return new LoopRunner({ organizationId: "default", loopSource: source(), sessions });
@@ -38,7 +51,9 @@ export function loopCommand(): Command {
         console.log(pc.cyan(`Loops (${ids.length} from files, 7 starter patterns registered)`));
         for (const id of ids) {
           const cfg = await s.get(id);
-          console.log(`  ${id.padEnd(30)} ${pc.gray(`status=${cfg.status}, agent=${cfg.agent}, level=${cfg.autonomyLevel}`)}`);
+          console.log(
+            `  ${id.padEnd(30)} ${pc.gray(`status=${cfg.status}, agent=${cfg.agent}, level=${cfg.autonomyLevel}`)}`,
+          );
         }
       } finally {
         await s.stop();
@@ -56,9 +71,13 @@ export function loopCommand(): Command {
         const cfg = await s.get(id);
         console.log(pc.cyan(`# ${cfg.title}`));
         console.log(pc.gray(`id: ${cfg.id}`));
-        console.log(pc.gray(`status: ${cfg.status}  agent: ${cfg.agent}  level: ${cfg.autonomyLevel}`));
+        console.log(
+          pc.gray(`status: ${cfg.status}  agent: ${cfg.agent}  level: ${cfg.autonomyLevel}`),
+        );
         console.log(pc.gray(`schedule: ${JSON.stringify(cfg.schedule)}`));
-        console.log(pc.gray(`concurrency: ${cfg.concurrencyPolicy}  catchUp: ${cfg.catchUpPolicy}`));
+        console.log(
+          pc.gray(`concurrency: ${cfg.concurrencyPolicy}  catchUp: ${cfg.catchUpPolicy}`),
+        );
       } finally {
         await s.stop();
         process.exit(0);
@@ -83,7 +102,11 @@ export function loopCommand(): Command {
           if (builtin) {
             resolved = builtin;
           } else {
-            console.log(pc.yellow(`! Loop ${id} is in the filesystem but has no built-in discover/decide. Falling back to no-op.`));
+            console.log(
+              pc.yellow(
+                `! Loop ${id} is in the filesystem but has no built-in discover/decide. Falling back to no-op.`,
+              ),
+            );
             resolved = {
               pattern: loop,
               discover: async () => [],

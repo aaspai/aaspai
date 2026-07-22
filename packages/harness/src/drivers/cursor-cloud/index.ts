@@ -10,7 +10,8 @@ export const cursorCloudInfo = {
     { id: "sonnet", label: "Claude Sonnet" },
     { id: "opus", label: "Claude Opus" },
   ],
-  agentConfigurationDoc: "# cursor_cloud\n\nStub. Real impl pending (HTTPS SDK + Agent.create/Agent.resume).",
+  agentConfigurationDoc:
+    "# cursor_cloud\n\nStub. Real impl pending (HTTPS SDK + Agent.create/Agent.resume).",
   status: "stub" as const,
 };
 

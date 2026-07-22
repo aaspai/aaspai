@@ -1,22 +1,22 @@
-import { describe, expect, it } from "vitest";
 import {
   ADAPTER_TYPE_VALUES,
-  HARNESS_PROTOCOL_VERSION,
   adapterExecutionContextSchema,
   adapterExecutionResultSchema,
-  transcriptEntrySchema,
+  buildAgentEnv,
   claudeLocalConfigSchema,
   codexLocalConfigSchema,
-  redactHomePath,
-  redactCommandText,
-  redactEnv,
+  getAdapter,
+  HARNESS_PROTOCOL_VERSION,
+  isAdapterReady,
+  listAdapters,
   REDACTED_HOME_PATH_USER,
   REDACTED_SECRET_VALUE,
-  buildAgentEnv,
-  listAdapters,
-  getAdapter,
-  isAdapterReady,
+  redactCommandText,
+  redactEnv,
+  redactHomePath,
+  transcriptEntrySchema,
 } from "@aaspai/harness";
+import { describe, expect, it } from "vitest";
 
 describe("harness contract", () => {
   it("exposes a stable protocol version", () => {
@@ -117,7 +117,9 @@ describe("codex_local config", () => {
 describe("redaction", () => {
   it("replaces HOME with the redaction marker", () => {
     process.env.HOME = "/home/sande";
-    expect(redactHomePath("/home/sande/projects/foo")).toBe(`${REDACTED_HOME_PATH_USER}/projects/foo`);
+    expect(redactHomePath("/home/sande/projects/foo")).toBe(
+      `${REDACTED_HOME_PATH_USER}/projects/foo`,
+    );
   });
 
   it("redacts well-known secret env values in command text", () => {

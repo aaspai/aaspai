@@ -5,17 +5,21 @@
  * recent run history). In Phase 4+ it can also be a queryable view
  * over the event log.
  */
-import { getDefaultDb } from "@aaspai/db";
-import { wakeups, sessions, type WakeupRow, type SessionRow } from "@aaspai/db";
-import { desc, eq } from "drizzle-orm";
+
 import type { WorkItemRef } from "@aaspai/contracts/phase2";
+import { getDefaultDb, type SessionRow, sessions, type WakeupRow, wakeups } from "@aaspai/db";
+import { desc, eq } from "drizzle-orm";
 
 export interface LoopStateView {
   loopId: string;
   highPriority: WorkItemRef[];
   watch: WorkItemRef[];
   noise: WorkItemRef[];
-  lastRun?: { at: string; outcome: "succeeded" | "failed" | "cancelled" | "escalated" | "noop"; summary: string };
+  lastRun?: {
+    at: string;
+    outcome: "succeeded" | "failed" | "cancelled" | "escalated" | "noop";
+    summary: string;
+  };
   recentRuns: Array<{ at: string; outcome: string; summary: string }>;
   paused: boolean;
 }
@@ -25,7 +29,10 @@ export class StateStore {
    * Read the loop's current state view. Pulls the last 30 days of
    * wakeups + sessions for this loop.
    */
-  async view(loopId: string, opts: { recentDays?: number; limit?: number } = {}): Promise<LoopStateView> {
+  async view(
+    loopId: string,
+    opts: { recentDays?: number; limit?: number } = {},
+  ): Promise<LoopStateView> {
     const limit = opts.limit ?? 50;
     const recentDays = opts.recentDays ?? 30;
     const cutoff = new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000).toISOString();
@@ -49,8 +56,10 @@ export class StateStore {
     const noise: WorkItemRef[] = [];
 
     for (const w of recentWakeups) {
-      if (w.status === "failed") highPriority.push({ kind: "wakeup", id: w.id, title: w.reason ?? w.triggerDetail ?? "" });
-      else if (w.status === "completed") watch.push({ kind: "wakeup", id: w.id, title: w.reason ?? "" });
+      if (w.status === "failed")
+        highPriority.push({ kind: "wakeup", id: w.id, title: w.reason ?? w.triggerDetail ?? "" });
+      else if (w.status === "completed")
+        watch.push({ kind: "wakeup", id: w.id, title: w.reason ?? "" });
       else noise.push({ kind: "wakeup", id: w.id });
     }
 
@@ -70,7 +79,15 @@ export class StateStore {
       watch,
       noise,
       lastRun: lastRun
-        ? { at: lastRun.at, outcome: lastRun.outcome as LoopStateView["lastRun"] extends infer L ? L extends { outcome: infer O } ? O : never : never, summary: lastRun.summary }
+        ? {
+            at: lastRun.at,
+            outcome: lastRun.outcome as LoopStateView["lastRun"] extends infer L
+              ? L extends { outcome: infer O }
+                ? O
+                : never
+              : never,
+            summary: lastRun.summary,
+          }
         : undefined,
       recentRuns,
       paused: false,

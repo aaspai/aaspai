@@ -1,8 +1,7 @@
+import { closeDefaultDb, getDefaultDb, sessionEvents, sessions, wakeups } from "@aaspai/db";
 import { Command } from "commander";
-import pc from "picocolors";
-import { getDefaultDb, closeDefaultDb } from "@aaspai/db";
-import { wakeups, sessions, sessionEvents } from "@aaspai/db";
 import { desc, eq, gte } from "drizzle-orm";
+import pc from "picocolors";
 
 export function stateCommand(): Command {
   const cmd = new Command("state").description("State views");
@@ -32,7 +31,9 @@ export function stateCommand(): Command {
           console.log("  (none)");
         } else {
           for (const s of recentSessions) {
-            console.log(`  - ${s.id.slice(0, 20)}...  ${pc.gray(s.status)}  agent=${s.agentId}  adapter=${s.adapter}`);
+            console.log(
+              `  - ${s.id.slice(0, 20)}...  ${pc.gray(s.status)}  agent=${s.agentId}  adapter=${s.adapter}`,
+            );
           }
         }
         console.log("");
@@ -58,11 +59,19 @@ export function stateCommand(): Command {
     .action(async () => {
       const handle = getDefaultDb();
       try {
-        const recentSessions = await handle.db.select().from(sessions).orderBy(desc(sessions.startedAt)).limit(20);
-        const recentWakeups = await handle.db.select().from(wakeups).orderBy(desc(wakeups.requestedAt)).limit(20);
+        const recentSessions = await handle.db
+          .select()
+          .from(sessions)
+          .orderBy(desc(sessions.startedAt))
+          .limit(20);
+        const recentWakeups = await handle.db
+          .select()
+          .from(wakeups)
+          .orderBy(desc(wakeups.requestedAt))
+          .limit(20);
 
         // Group sessions by loop via their wakeup
-        const wakeupById = new Map<string, typeof recentWakeups[number]>();
+        const wakeupById = new Map<string, (typeof recentWakeups)[number]>();
         for (const w of recentWakeups) wakeupById.set(w.id, w);
 
         const out: string[] = [];
@@ -88,7 +97,9 @@ export function stateCommand(): Command {
                   out.push("**Summary:**", "");
                   out.push("> " + r.summary.split("\n").join("\n> "));
                 }
-              } catch { /* ignore */ }
+              } catch {
+                /* ignore */
+              }
             }
             // Pull the first assistant message from the transcript
             const events = await handle.db
@@ -108,7 +119,9 @@ export function stateCommand(): Command {
                   out.push(preview);
                   out.push("```");
                 }
-              } catch { /* ignore */ }
+              } catch {
+                /* ignore */
+              }
             }
             out.push("");
           }
@@ -118,7 +131,9 @@ export function stateCommand(): Command {
           out.push("_(no wakeups yet)_");
         } else {
           for (const w of recentWakeups) {
-            out.push(`- \`${w.id}\` — status=${w.status}, loop=${w.loopId}, ${w.reason ?? "(no reason)"}`);
+            out.push(
+              `- \`${w.id}\` — status=${w.status}, loop=${w.loopId}, ${w.reason ?? "(no reason)"}`,
+            );
           }
         }
         process.stdout.write(out.join("\n") + "\n");

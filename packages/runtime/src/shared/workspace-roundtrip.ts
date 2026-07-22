@@ -26,9 +26,7 @@ export const WORKSPACE_ROUNDTRIP_STUB_MESSAGE =
   "prepareRuntimeForExecution / restoreRuntimeFromExecution are not yet implemented in @aaspai/runtime. " +
   "Use the local target for now; the round-trip lands in the L3 session-control slice.";
 
-export async function prepareRuntimeForExecution(
-  _options: PrepareWorkspaceOptions,
-): Promise<void> {
+export async function prepareRuntimeForExecution(_options: PrepareWorkspaceOptions): Promise<void> {
   throw new Error(WORKSPACE_ROUNDTRIP_STUB_MESSAGE);
 }
 

@@ -1,1 +1,1 @@
-export { WorkerDaemon, type DaemonOptions } from "./daemon.js";
+export { type DaemonOptions, WorkerDaemon } from "./daemon.js";

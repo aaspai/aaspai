@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
 import { InMemoryAuthVerifier } from "@aaspai/auth";
-import { authPrincipalSchema, type AuthVerificationResult } from "@aaspai/contracts";
+import { type AuthVerificationResult, authPrincipalSchema } from "@aaspai/contracts";
 import { describeAuthVerifierContract } from "@aaspai/testing/contracts";
+import { describe, expect, it } from "vitest";
 
 const principal = authPrincipalSchema.parse({
   protocolVersion: 1,
@@ -14,9 +14,10 @@ const principal = authPrincipalSchema.parse({
 });
 
 describe("InMemoryAuthVerifier", () => {
-  describeAuthVerifierContract("InMemory", () => new InMemoryAuthVerifier([
-    { token: "valid-token", principal },
-  ]));
+  describeAuthVerifierContract(
+    "InMemory",
+    () => new InMemoryAuthVerifier([{ token: "valid-token", principal }]),
+  );
 
   it("succeeds for a known credential", async () => {
     const v = new InMemoryAuthVerifier([{ token: "valid-token", principal }]);

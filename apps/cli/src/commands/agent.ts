@@ -1,6 +1,6 @@
+import { type CompositeAgentConfigSource, FileAgentConfigSource } from "@aaspai/file-loader";
 import { Command } from "commander";
 import pc from "picocolors";
-import { FileAgentConfigSource, CompositeAgentConfigSource } from "@aaspai/file-loader";
 
 export function agentCommand(): Command {
   const cmd = new Command("agent").description("Agent operations");
@@ -26,7 +26,9 @@ export function agentCommand(): Command {
         console.log(pc.cyan("Agents"));
         for (const id of ids) {
           const cfg = await s.get(id);
-          console.log(`  ${id.padEnd(28)} ${pc.gray(`adapter=${cfg.adapter}, role=${cfg.role}, model=${cfg.model ?? "default"}`)}`);
+          console.log(
+            `  ${id.padEnd(28)} ${pc.gray(`adapter=${cfg.adapter}, role=${cfg.role}, model=${cfg.model ?? "default"}`)}`,
+          );
         }
       } finally {
         if (s instanceof FileAgentConfigSource) await s.stop();
@@ -45,8 +47,12 @@ export function agentCommand(): Command {
         const cfg = await s.get(id);
         console.log(pc.cyan(`# ${cfg.title}`));
         console.log(pc.gray(`id: ${cfg.id}`));
-        console.log(pc.gray(`adapter: ${cfg.adapter}  model: ${cfg.model ?? "default"}  role: ${cfg.role}`));
-        console.log(pc.gray(`reportsTo: ${cfg.reportsTo ?? "(root)"}  manages: [${cfg.manages.join(", ")}]`));
+        console.log(
+          pc.gray(`adapter: ${cfg.adapter}  model: ${cfg.model ?? "default"}  role: ${cfg.role}`),
+        );
+        console.log(
+          pc.gray(`reportsTo: ${cfg.reportsTo ?? "(root)"}  manages: [${cfg.manages.join(", ")}]`),
+        );
         console.log("");
         console.log(pc.gray("--- system prompt ---"));
         console.log(cfg.systemPrompt);
@@ -79,7 +85,10 @@ export function agentCommand(): Command {
     .action(async (id: string) => {
       const fs = await import("node:fs/promises");
       const path = await import("node:path");
-      const dir = path.join(process.env.AASPAI_AGENTS_DIR ?? "./agents", id.replace(/^agent\//, ""));
+      const dir = path.join(
+        process.env.AASPAI_AGENTS_DIR ?? "./agents",
+        id.replace(/^agent\//, ""),
+      );
       await fs.mkdir(path.join(dir, "AGENT.md").slice(0, -8) || dir, { recursive: true });
       const template = `---
 id: ${id}
@@ -117,7 +126,11 @@ Describe this agent's purpose here.
 `;
       await fs.writeFile(path.join(dir, "AGENT.md"), template, "utf8");
       await fs.writeFile(path.join(dir, "config.yaml"), "adapterConfig: {}\n", "utf8");
-      await fs.writeFile(path.join(dir, "tools.yaml"), "allow: []\ndeny: []\nrequire_approval_for: []\n", "utf8");
+      await fs.writeFile(
+        path.join(dir, "tools.yaml"),
+        "allow: []\ndeny: []\nrequire_approval_for: []\n",
+        "utf8",
+      );
       await fs.writeFile(path.join(dir, "skills.lock.json"), "[]\n", "utf8");
       await fs.writeFile(path.join(dir, "relations.yaml"), "reportsTo: null\n", "utf8");
       console.log(pc.green(`✓ Created ${dir}/`));

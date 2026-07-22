@@ -1,2 +1,2 @@
-export { parseSkillFile, loadSkillFile, writeSkillFile, sha256HexSync } from "./parsers.js";
+export { loadSkillFile, parseSkillFile, sha256HexSync, writeSkillFile } from "./parsers.js";
 export { SkillRegistry } from "./registry.js";

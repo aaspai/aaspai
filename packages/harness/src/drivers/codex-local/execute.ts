@@ -6,12 +6,17 @@ import type {
   UsageSummary,
 } from "@aaspai/contracts/harness";
 import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
-import { runProcess } from "../../shared/run-process.js";
 import { buildAgentEnv } from "../../shared/env.js";
-import { redactHomePath, redactCommandText } from "../../shared/redact.js";
-import { codexLocalConfigSchema, codexLocalInfo, parseCodexLocalConfig, type CodexLocalConfig } from "./config.js";
-import { parseCodexStreamLine } from "./parse.js";
+import { redactCommandText, redactHomePath } from "../../shared/redact.js";
+import { runProcess } from "../../shared/run-process.js";
 import type { CodexStreamEvent } from "./config.js";
+import {
+  type CodexLocalConfig,
+  codexLocalConfigSchema,
+  codexLocalInfo,
+  parseCodexLocalConfig,
+} from "./config.js";
+import { parseCodexStreamLine } from "./parse.js";
 
 /**
  * Adapter for OpenAI Codex running as a local subprocess.
@@ -33,7 +38,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   try {
     config = parseCodexLocalConfig(ctx.config);
   } catch (err) {
-    return buildErrorResult("config", "Invalid codex_local config", err instanceof Error ? err.message : String(err));
+    return buildErrorResult(
+      "config",
+      "Invalid codex_local config",
+      err instanceof Error ? err.message : String(err),
+    );
   }
   const command = config.command;
   const args = buildCodexArgs(config, ctx);
@@ -58,7 +67,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const collectedErrors: string[] = [];
   const collectedUsage: UsageSummary = {};
   let sessionId: string | undefined = ctx.runtime.sessionId;
-  let model: string | undefined = config.model;
+  const model: string | undefined = config.model;
   let stopReason: string | undefined;
   let timedOut = false;
 
@@ -106,8 +115,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const sid = ok.thread_id ?? ok.session_id;
     if (sid && !sessionId) sessionId = sid;
     if (ok.usage) {
-      if (typeof ok.usage.input_tokens === "number") collectedUsage.inputTokens = ok.usage.input_tokens;
-      if (typeof ok.usage.output_tokens === "number") collectedUsage.outputTokens = ok.usage.output_tokens;
+      if (typeof ok.usage.input_tokens === "number")
+        collectedUsage.inputTokens = ok.usage.input_tokens;
+      if (typeof ok.usage.output_tokens === "number")
+        collectedUsage.outputTokens = ok.usage.output_tokens;
       if (typeof ok.usage.cached_input_tokens === "number") {
         collectedUsage.cachedInputTokens = ok.usage.cached_input_tokens;
       }
@@ -174,9 +185,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 }
 
-export async function testEnvironment(
-  ctx: { config: unknown; cwd?: string },
-): Promise<{ ok: boolean; checks: { name: string; level: "info" | "warn" | "error"; message: string }[] }> {
+export async function testEnvironment(ctx: { config: unknown; cwd?: string }): Promise<{
+  ok: boolean;
+  checks: { name: string; level: "info" | "warn" | "error"; message: string }[];
+}> {
   const config = parseCodexLocalConfig(ctx.config);
   const result = await runProcess({ command: config.command, args: ["--version"], cwd: ctx.cwd });
   const ok = result.exitCode === 0;
@@ -194,13 +206,11 @@ export async function testEnvironment(
   };
 }
 
-function buildCodexArgs(
-  config: CodexLocalConfig,
-  ctx: AdapterExecutionContext,
-): string[] {
+function buildCodexArgs(config: CodexLocalConfig, ctx: AdapterExecutionContext): string[] {
   const args: string[] = ["exec", "--json"];
   if (config.model) args.push("--model", config.model);
-  if (config.modelReasoningEffort) args.push("-c", `model_reasoning_effort=${config.modelReasoningEffort}`);
+  if (config.modelReasoningEffort)
+    args.push("-c", `model_reasoning_effort=${config.modelReasoningEffort}`);
   args.push("--sandbox", config.sandbox);
   args.push("--approval-mode", config.approvalMode);
   if (config.maxTurns) args.push("--max-turns", String(config.maxTurns));

@@ -2,10 +2,10 @@
  * discover.ts — read recent sessions + recent wakeups from the DB.
  * Returns them as `WorkItem`s for the decide function to evaluate.
  */
-import { getDefaultDb } from "@aaspai/db";
-import { sessions, wakeups, type SessionRow, type WakeupRow } from "@aaspai/db";
-import { desc, gte } from "drizzle-orm";
+
 import type { WorkItem } from "@aaspai/contracts/phase2";
+import { getDefaultDb, type SessionRow, sessions, type WakeupRow, wakeups } from "@aaspai/db";
+import { desc, gte } from "drizzle-orm";
 
 const LOOKBACK_HOURS = 24;
 

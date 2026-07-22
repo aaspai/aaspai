@@ -1,10 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type {
-  RunProcessOptions,
-  RunProcessResult,
-} from "@aaspai/contracts/runtime";
+import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
 
 /**
  * 6-method filesystem + exec client every sandbox provider implements.
@@ -80,9 +77,7 @@ export class LocalSandboxClient implements SandboxClient {
     return await fsReadFile(this.resolve(remotePath));
   }
 
-  async listFiles(
-    remotePath: string,
-  ): Promise<{ name: string; size: number; isDir: boolean }[]> {
+  async listFiles(remotePath: string): Promise<{ name: string; size: number; isDir: boolean }[]> {
     const { readdir, stat } = await import("node:fs/promises");
     const full = this.resolve(remotePath);
     const entries = await readdir(full, { withFileTypes: true });

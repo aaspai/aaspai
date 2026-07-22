@@ -1,9 +1,13 @@
-import { Hono } from "hono";
-import { getDefaultDb } from "@aaspai/db";
-import { sessions as sessionsTable, sessionEvents as sessionEventsTable, wakeups as wakeupsTable } from "@aaspai/db";
-import { getLogger } from "@aaspai/observability";
-import { eq, desc } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
+import {
+  getDefaultDb,
+  sessionEvents as sessionEventsTable,
+  sessions as sessionsTable,
+  wakeups as wakeupsTable,
+} from "@aaspai/db";
+import { getLogger } from "@aaspai/observability";
+import { desc, eq } from "drizzle-orm";
+import type { Hono } from "hono";
 
 const log = getLogger("api.routes.sessions");
 
@@ -24,10 +28,7 @@ export function registerSessionRoutes(app: Hono): void {
       reason?: string;
     };
     if (!body.agentId || !body.prompt) {
-      return c.json(
-        { error: "invalid_request", message: "agentId and prompt are required" },
-        400,
-      );
+      return c.json({ error: "invalid_request", message: "agentId and prompt are required" }, 400);
     }
 
     const sessionId = `sess_${randomUUID()}`;
