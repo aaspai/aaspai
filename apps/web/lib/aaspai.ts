@@ -320,6 +320,7 @@ export interface SessionDetail extends SessionSummary {
   prompt: string;
   config: Record<string, unknown>;
   runtime: Record<string, unknown>;
+  sessionParams: Record<string, unknown>;
   result: Record<string, unknown> | null;
   usage: Record<string, unknown> | null;
   sessionDisplayId: string | null;
@@ -398,6 +399,16 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | null
     }
   }
 
+  const result = safeJson(s.resultJson);
+  const resultSessionParams = result?.sessionParams;
+  const sessionParams =
+    safeJson(s.sessionParamsJson) ??
+    (resultSessionParams &&
+    typeof resultSessionParams === "object" &&
+    !Array.isArray(resultSessionParams)
+      ? (resultSessionParams as Record<string, unknown>)
+      : {});
+
   return {
     id: s.id,
     status: s.status ?? "unknown",
@@ -410,7 +421,8 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | null
     prompt: s.prompt,
     config: safeJson(s.configJson) ?? {},
     runtime: safeJson(s.runtimeJson) ?? {},
-    result: safeJson(s.resultJson),
+    sessionParams,
+    result,
     usage: safeJson(s.usageJson),
     sessionDisplayId: s.sessionDisplayId,
     parentSessionId: s.parentSessionId,
