@@ -156,9 +156,10 @@ function synthesizeCeoResponse(message: string, lower: string): string {
     lower.includes("we need a")
   ) {
     // Try to extract a role name from the message
-    const roleMatch = /(?:hire|create|add|need)\s+(?:a|an)\s+([a-z][a-z\s-]+?)(?:\s+who|\s+that|\s+for|\s+to|\.|$)/i.exec(
-      message,
-    );
+    const roleMatch =
+      /(?:hire|create|add|need)\s+(?:a|an)\s+([a-z][a-z\s-]+?)(?:\s+who|\s+that|\s+for|\s+to|\.|$)/i.exec(
+        message,
+      );
     const roleName = roleMatch?.[1]?.trim() ?? "new-hire";
     const slug = roleName.toLowerCase().replace(/\s+/g, "-");
     const role = inferRole(roleName);
@@ -173,7 +174,9 @@ function synthesizeCeoResponse(message: string, lower: string): string {
       `  --reports-to agent/ceo`,
       "```",
       "",
-      "Run that, then `aaspai agent list` to see them. You can chat with them with `aaspai chat " + slug + "`.",
+      "Run that, then `aaspai agent list` to see them. You can chat with them with `aaspai chat " +
+        slug +
+        "`.",
     ].join("\n");
   }
 
@@ -211,7 +214,13 @@ function inferRole(name: string): string {
   const n = name.toLowerCase();
   if (n.includes("market") || n.includes("content") || n.includes("social")) return "cmo";
   if (n.includes("design") || n.includes("ux") || n.includes("ui")) return "designer";
-  if (n.includes("engineer") || n.includes("dev") || n.includes("backend") || n.includes("frontend")) return "engineer";
+  if (
+    n.includes("engineer") ||
+    n.includes("dev") ||
+    n.includes("backend") ||
+    n.includes("frontend")
+  )
+    return "engineer";
   if (n.includes("qa") || n.includes("test")) return "qa";
   if (n.includes("pm") || n.includes("product") || n.includes("manager")) return "pm";
   if (n.includes("data") || n.includes("analyst") || n.includes("research")) return "researcher";
@@ -305,4 +314,3 @@ export const dryRunLocal: ServerAdapterModule = {
 };
 
 export const dryRunLocalInfo = dryRunLocal.info;
-

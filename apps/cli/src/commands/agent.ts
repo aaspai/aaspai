@@ -83,33 +83,45 @@ export function agentCommand(): Command {
     .command("new <id>")
     .description("Scaffold a new agent directory")
     .option("-t, --title <title>", "Display title (e.g. 'Marketing Manager')")
-    .option("-r, --role <role>", "Role: ceo|cto|cmo|cfo|engineer|designer|pm|qa|devops|researcher|operator|general", "general")
-    .option("-a, --adapter <adapter>", "Adapter (e.g. dry_run_local, claude_local, opencode_cli)", "dry_run_local")
+    .option(
+      "-r, --role <role>",
+      "Role: ceo|cto|cmo|cfo|engineer|designer|pm|qa|devops|researcher|operator|general",
+      "general",
+    )
+    .option(
+      "-a, --adapter <adapter>",
+      "Adapter (e.g. dry_run_local, claude_local, opencode_cli)",
+      "dry_run_local",
+    )
     .option("-m, --model <model>", "Model identifier (depends on adapter)")
     .option("--reports-to <agentId>", "Who this agent reports to (e.g. agent/ceo)")
     .option("--manages <ids>", "Comma-separated list of agents this one manages")
     .option("-d, --description <text>", "One-line description of the agent's role")
-    .action(async (id: string, opts: {
-      title?: string;
-      role?: string;
-      adapter?: string;
-      model?: string;
-      reportsTo?: string;
-      manages?: string;
-      description?: string;
-    }) => {
-      const fs = await import("node:fs/promises");
-      const path = await import("node:path");
-      const slug = id.replace(/^agent\//, "");
-      const dir = path.join(
-        process.env.AASPAI_AGENTS_DIR ?? "./agents",
-        slug,
-      );
-      await fs.mkdir(dir, { recursive: true });
-      const title = opts.title ?? slug.replace(/-/g, " ");
-      const manages = (opts.manages ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-      const description = opts.description ?? `${title} on the team.`;
-      const template = `---
+    .action(
+      async (
+        id: string,
+        opts: {
+          title?: string;
+          role?: string;
+          adapter?: string;
+          model?: string;
+          reportsTo?: string;
+          manages?: string;
+          description?: string;
+        },
+      ) => {
+        const fs = await import("node:fs/promises");
+        const path = await import("node:path");
+        const slug = id.replace(/^agent\//, "");
+        const dir = path.join(process.env.AASPAI_AGENTS_DIR ?? "./agents", slug);
+        await fs.mkdir(dir, { recursive: true });
+        const title = opts.title ?? slug.replace(/-/g, " ");
+        const manages = (opts.manages ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const description = opts.description ?? `${title} on the team.`;
+        const template = `---
 id: ${id}
 type: Agent
 title: "${title}"
@@ -164,33 +176,38 @@ ${description}
 
 (Pending: define this in conversation with the ceo.)
 `;
-      await fs.writeFile(path.join(dir, "AGENT.md"), template, "utf8");
-      await fs.writeFile(path.join(dir, "config.yaml"), "adapterConfig: {}\nruntimeConfig: {}\n", "utf8");
-      await fs.writeFile(
-        path.join(dir, "tools.yaml"),
-        "allow: []\ndeny: []\nrequire_approval_for: []\n",
-        "utf8",
-      );
-      await fs.writeFile(path.join(dir, "skills.lock.json"), "[]\n", "utf8");
-      await fs.writeFile(
-        path.join(dir, "relations.yaml"),
-        `reportsTo: ${opts.reportsTo ?? "null"}\n`,
-        "utf8",
-      );
-      console.log(pc.green(`✓ Created ${dir}/`));
-      console.log("");
-      console.log(pc.gray(`  id:        ${id}`));
-      console.log(pc.gray(`  adapter:   ${opts.adapter ?? "dry_run_local"}`));
-      console.log(pc.gray(`  model:     ${opts.model ?? "aaspai-dryrun"}`));
-      console.log(pc.gray(`  role:      ${opts.role ?? "general"}`));
-      console.log(pc.gray(`  reportsTo: ${opts.reportsTo ?? "(root)"}`));
-      if (manages.length > 0) {
-        console.log(pc.gray(`  manages:   ${manages.join(", ")}`));
-      }
-      console.log("");
-      console.log(`Next: ${pc.cyan(`aaspai chat ${id}`)} to talk to the new hire.`);
-      process.exit(0);
-    });
+        await fs.writeFile(path.join(dir, "AGENT.md"), template, "utf8");
+        await fs.writeFile(
+          path.join(dir, "config.yaml"),
+          "adapterConfig: {}\nruntimeConfig: {}\n",
+          "utf8",
+        );
+        await fs.writeFile(
+          path.join(dir, "tools.yaml"),
+          "allow: []\ndeny: []\nrequire_approval_for: []\n",
+          "utf8",
+        );
+        await fs.writeFile(path.join(dir, "skills.lock.json"), "[]\n", "utf8");
+        await fs.writeFile(
+          path.join(dir, "relations.yaml"),
+          `reportsTo: ${opts.reportsTo ?? "null"}\n`,
+          "utf8",
+        );
+        console.log(pc.green(`✓ Created ${dir}/`));
+        console.log("");
+        console.log(pc.gray(`  id:        ${id}`));
+        console.log(pc.gray(`  adapter:   ${opts.adapter ?? "dry_run_local"}`));
+        console.log(pc.gray(`  model:     ${opts.model ?? "aaspai-dryrun"}`));
+        console.log(pc.gray(`  role:      ${opts.role ?? "general"}`));
+        console.log(pc.gray(`  reportsTo: ${opts.reportsTo ?? "(root)"}`));
+        if (manages.length > 0) {
+          console.log(pc.gray(`  manages:   ${manages.join(", ")}`));
+        }
+        console.log("");
+        console.log(`Next: ${pc.cyan(`aaspai chat ${id}`)} to talk to the new hire.`);
+        process.exit(0);
+      },
+    );
 
   cmd
     .command("validate")

@@ -108,7 +108,9 @@ async function showMd(): Promise<void> {
               out.push("**Summary:**", "");
               out.push("> " + r.summary.split("\n").join("\n> "));
             }
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
         // Pull the first assistant message from the transcript
         const events = await handle.db
@@ -128,7 +130,9 @@ async function showMd(): Promise<void> {
               out.push(preview);
               out.push("```");
             }
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
         }
         out.push("");
       }

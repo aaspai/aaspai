@@ -88,10 +88,18 @@ export function initCommand(): Command {
 
       console.log("");
       console.log("Next steps:");
-      console.log(`  ${pc.cyan("aaspai chat ceo")}                            # talk to your chief of staff`);
-      console.log(`  ${pc.cyan("aaspai agent list")}                          # see the seeded agents`);
-      console.log(`  ${pc.cyan("aaspai state")}                               # one-screen dashboard`);
-      console.log(`  ${pc.cyan("aaspai start --port 7420")}                  # worker + API + web UI`);
+      console.log(
+        `  ${pc.cyan("aaspai chat ceo")}                            # talk to your chief of staff`,
+      );
+      console.log(
+        `  ${pc.cyan("aaspai agent list")}                          # see the seeded agents`,
+      );
+      console.log(
+        `  ${pc.cyan("aaspai state")}                               # one-screen dashboard`,
+      );
+      console.log(
+        `  ${pc.cyan("aaspai start --port 7420")}                  # worker + API + web UI`,
+      );
       console.log("");
     });
 }

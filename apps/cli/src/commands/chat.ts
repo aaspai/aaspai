@@ -11,16 +11,16 @@
  *   /clear         - clear terminal
  *   /system <msg>  - prepend a system message to the next turn
  */
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
-import { join } from "node:path";
+
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { Command } from "commander";
-import pc from "picocolors";
+import { join } from "node:path";
+import { stdin as input, stdout as output } from "node:process";
+import { createInterface } from "node:readline/promises";
 import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
 import { Sessions } from "@aaspai/sessions";
-import { randomUUID } from "node:crypto";
-
+import { Command } from "commander";
+import pc from "picocolors";
 
 interface ChatOptions {
   adapter?: string;
@@ -54,7 +54,7 @@ export function chatCommand(): Command {
       await agentSource.start();
       await knowledgeSource.start();
 
-      let agent;
+      let agent: Awaited<ReturnType<typeof agentSource.get>>;
       try {
         agent = await agentSource.get(agentId);
       } catch {
@@ -83,7 +83,12 @@ export function chatCommand(): Command {
       });
 
       // Conversation buffer (in-memory)
-      const turns: Array<{ role: "user" | "assistant"; text: string; sessionId?: string; ts: string }> = [];
+      const turns: Array<{
+        role: "user" | "assistant";
+        text: string;
+        sessionId?: string;
+        ts: string;
+      }> = [];
 
       // Show first greeting from the agent
       console.log(pc.bold(pc.cyan(`[${agent.title}]`)), "hi — what can I do for you?");
@@ -161,7 +166,7 @@ export function chatCommand(): Command {
 
           // Run the session
           const sessionId = `chat_${randomUUID()}`;
-          process.stdout.write(pc.bold(pc.cyan(`[${agent.title}]`)) + " ");
+          process.stdout.write(`${pc.bold(pc.cyan(`[${agent.title}]`))} `);
           const result = await sessions.execute({
             organizationId: "default",
             agentId,
