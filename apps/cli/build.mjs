@@ -7,10 +7,11 @@
  * the shebang prepended, is marked as an ES module, and bundles
  * better-sqlite3 as an external (native bindings, can't be bundled).
  */
-import { build } from "esbuild";
-import { readFileSync, mkdirSync, existsSync } from "node:fs";
+
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outDir = join(__dirname, "dist");
@@ -55,7 +56,9 @@ await build({
 try {
   const { chmod } = await import("node:fs/promises");
   await chmod(outFile, 0o755);
-} catch { /* best effort on Windows */ }
+} catch {
+  /* best effort on Windows */
+}
 
 console.log(`✓ Built ${outFile}`);
 try {
@@ -65,4 +68,6 @@ try {
     const totalBytes = Object.values(meta.outputs).reduce((s, o) => s + (o.bytes ?? 0), 0);
     console.log(`  size: ${(totalBytes / 1024).toFixed(1)} KB`);
   }
-} catch { /* size reporting is best-effort */ }
+} catch {
+  /* size reporting is best-effort */
+}
