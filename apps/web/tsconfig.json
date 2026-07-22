@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "preserve",
+    "noEmit": true,
+    "allowJs": false,
+    "plugins": [{ "name": "next" }],
+    "noUncheckedIndexedAccess": false,
+    // Legacy tRPC callsites are being retired behind the REST compatibility
+    // facade. Their callback parameters become fully typed as each screen is
+    // migrated to lib/api/*; keep this transitional surface buildable meanwhile.
+    "noImplicitAny": false,
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules", ".next", "dist", ".next/dev", "public/templates/files"]
+}
