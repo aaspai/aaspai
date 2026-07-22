@@ -25,7 +25,7 @@ import {
 import { KillSwitch, PatternRegistry, Scheduler, STARTER_PATTERNS } from "@aaspai/loops";
 import { getLogger } from "@aaspai/observability";
 import { Sessions } from "@aaspai/sessions";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 const log = getLogger("worker.daemon");
 
@@ -53,6 +53,9 @@ export class WorkerDaemon {
 
   private tickHandle: NodeJS.Timeout | null = null;
   private pollHandle: NodeJS.Timeout | null = null;
+  private pollInFlight = false;
+  private inFlightSession: Promise<void> | null = null;
+  private shuttingDown = false;
   private running = false;
   private startedAt: string | null = null;
 
@@ -101,8 +104,6 @@ export class WorkerDaemon {
       loops: (await this.loopSource.list()).length,
     });
 
-    await this.recoverStaleClaims();
-
     this.scheduler.start();
     this.tickHandle = setInterval(() => {
       this.tickScheduler().catch((err) => log.error("scheduler tick failed", { err: String(err) }));
@@ -114,20 +115,55 @@ export class WorkerDaemon {
     }, this.wakeupPollIntervalMs);
     this.pollHandle.unref();
 
+    this.installShutdownHandlers();
+
+    await this.recoverStaleClaims();
+
     log.info("worker started");
   }
 
+  private installShutdownHandlers(): void {
+    const handle = (signal: NodeJS.Signals) => {
+      log.info("received shutdown signal", { signal });
+      // stop() is async but we can't await a signal handler.
+      // Mark shuttingDown immediately so pollWakeups/claimAndRun
+      // bail; then call stop() which awaits the in-flight session.
+      this.shuttingDown = true;
+      void this.stop()
+        .then(() => process.exit(0))
+        .catch((err) => {
+          log.error("graceful shutdown failed", { err: String(err) });
+          process.exit(1);
+        });
+    };
+    process.once("SIGINT", handle);
+    process.once("SIGTERM", handle);
+  }
+
   async stop(): Promise<void> {
-    if (!this.running) return;
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
     this.running = false;
     log.info("worker stopping");
     if (this.tickHandle) clearInterval(this.tickHandle);
     if (this.pollHandle) clearInterval(this.pollHandle);
     this.scheduler.stop();
+    if (this.inFlightSession) {
+      log.info("awaiting in-flight session before shutdown");
+      try {
+        await this.inFlightSession;
+      } catch (err) {
+        log.warn("in-flight session ended with error during shutdown", { err: String(err) });
+      }
+    }
     await this.agentSource.stop();
     await this.knowledgeSource.stop();
     await this.loopSource.stop();
-    await closeDefaultDb();
+    try {
+      await closeDefaultDb();
+    } catch {
+      /* already closed */
+    }
     log.info("worker stopped");
   }
 
@@ -165,46 +201,92 @@ export class WorkerDaemon {
   /**
    * Pick up queued wakeups and run them. Each wakeup spawns a session
    * via `@aaspai/sessions`, which records the result to the DB and
-   * to `session_events`. Foundation slice: processes one wakeup at a
-   * time per tick (single-replica). Phase 4 adds parallelism.
+   * to `session_events`. The in-flight guard prevents overlap: a
+   * 5s poll that fires while a previous session is still running
+   * is dropped (not queued, not delayed) so we never have more
+   * than one opencode.exe process at a time per worker.
    */
   private async pollWakeups(): Promise<void> {
-    const handle = getDefaultDb();
-    const queued = await handle.db
-      .select()
-      .from(wakeupsTable)
-      .where(eq(wakeupsTable.status, "queued"))
-      .limit(10);
+    if (this.shuttingDown) return;
+    if (this.pollInFlight || this.inFlightSession) {
+      log.debug("poll skipped: previous tick or session still in flight");
+      return;
+    }
+    this.pollInFlight = true;
+    try {
+      const handle = getDefaultDb();
+      const queued = await handle.db
+        .select()
+        .from(wakeupsTable)
+        .where(eq(wakeupsTable.status, "queued"))
+        .limit(10);
 
-    for (const wakeup of queued) {
-      try {
-        await this.claimAndRun(wakeup.id);
-      } catch (err) {
-        log.error("wakeup failed", { wakeupId: wakeup.id, err: String(err) });
-        await this.markFailed(wakeup.id, String(err));
+      for (const wakeup of queued) {
+        if (this.shuttingDown) break;
+        if (this.inFlightSession) break;
+        this.inFlightSession = this.claimAndRun(wakeup.id)
+          .catch((err) =>
+            log.error("wakeup unhandled error", {
+              wakeupId: wakeup.id,
+              err: String(err),
+            }),
+          )
+          .finally(() => {
+            this.inFlightSession = null;
+          });
       }
+    } finally {
+      this.pollInFlight = false;
     }
   }
 
   private async claimAndRun(wakeupId: string): Promise<void> {
     const handle = getDefaultDb();
 
-    // Mark as claimed FIRST, so that if this worker is killed before
-    // the session row is created, the wakeup doesn't get re-claimed
-    // by another worker. The startup-time stale-claim recovery
-    // (recoverStaleClaims) will eventually move it to `failed` if
-    // it sits in `claimed` too long.
-    await handle.db
+    // Atomic claim: only succeeds if the wakeup is still `queued`.
+    // If another worker (or a stale poll from this same worker)
+    // already claimed it, 0 rows are affected and we skip.
+    const now = new Date().toISOString();
+    const claimed = await handle.db
       .update(wakeupsTable)
-      .set({ status: "claimed", claimedAt: new Date().toISOString() } as never)
-      .where(eq(wakeupsTable.id, wakeupId));
+      .set({ status: "claimed", claimedAt: now } as never)
+      .where(and(eq(wakeupsTable.id, wakeupId), eq(wakeupsTable.status, "queued")))
+      .returning({ id: wakeupsTable.id });
 
-    try {
-      await this.executeWakeup(wakeupId);
-    } catch (err) {
-      log.error("wakeup failed", { wakeupId, err: String(err) });
-      await this.markFailed(wakeupId, String((err as Error).message ?? err));
+    if (claimed.length === 0) {
+      log.debug("wakeup not claimable (already claimed or finished)", { wakeupId });
+      return;
     }
+
+    const maxAttempts = 3;
+    const backoffsMs = [0, 1_000, 5_000];
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (this.shuttingDown) {
+        await this.markFailed(wakeupId, "worker shutting down");
+        return;
+      }
+      if (attempt > 0) {
+        log.info("retrying wakeup after backoff", {
+          wakeupId,
+          attempt,
+          backoffMs: backoffsMs[attempt],
+        });
+        await new Promise((r) => setTimeout(r, backoffsMs[attempt]));
+      }
+      try {
+        await this.executeWakeup(wakeupId);
+        return;
+      } catch (err) {
+        lastError = err as Error;
+        log.warn("wakeup attempt failed", { wakeupId, attempt, err: String(err) });
+      }
+    }
+    log.error("wakeup exhausted retries", { wakeupId, err: String(lastError) });
+    await this.markFailed(
+      wakeupId,
+      `exhausted retries: ${String(lastError?.message ?? lastError)}`,
+    );
   }
 
   private async executeWakeup(wakeupId: string): Promise<void> {
