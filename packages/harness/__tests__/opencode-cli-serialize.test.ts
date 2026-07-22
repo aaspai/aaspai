@@ -63,14 +63,20 @@ function makeChild(): ChildMock {
         if (e === "data") stdoutHandlers.push(h);
       },
       _data: [],
-      _emit: (c: string) => stdoutHandlers.forEach((h) => h(c)),
+      _emit: (c: string) =>
+        stdoutHandlers.forEach((h) => {
+          h(c);
+        }),
     } as never,
     stderr: {
       on: (e: string, h: (chunk: string) => void) => {
         if (e === "data") stderrHandlers.push(h);
       },
       _data: [],
-      _emit: (c: string) => stderrHandlers.forEach((h) => h(c)),
+      _emit: (c: string) =>
+        stderrHandlers.forEach((h) => {
+          h(c);
+        }),
     } as never,
     stdin: {
       on: (e: string, h: () => void) => {
@@ -83,8 +89,14 @@ function makeChild(): ChildMock {
       if (e === "close") closeHandlers.push(h as (c: number) => void);
       if (e === "error") errorHandlers.push(h as (err: Error) => void);
     },
-    _emitClose: (code: number) => closeHandlers.forEach((h) => h(code)),
-    _emitError: (err: Error) => errorHandlers.forEach((h) => h(err)),
+    _emitClose: (code: number) =>
+      closeHandlers.forEach((h) => {
+        h(code);
+      }),
+    _emitError: (err: Error) =>
+      errorHandlers.forEach((h) => {
+        h(err);
+      }),
     kill: () => {},
     killed: false,
   };
