@@ -1,5 +1,5 @@
 {
-  "name": "aaspai-cli",
+  "name": "@aaspai/cli",
   "version": "0.1.0",
   "description": "Self-hosted control plane for AI-agent workforces",
   "license": "AGPL-3.0-only",
