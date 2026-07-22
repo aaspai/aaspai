@@ -1,66 +1,54 @@
-# Bug #4 — 5s poll creates a hidden pile-up: new sessions start before old ones complete
+# Bug 4 — 5s poll creates a hidden pile-up: new sessions start before old ones complete
 
-**Status:** OPEN · priority:medium
-**Labels:** bug, worker
+**Labels:** `bug`, `worker`, `priority:medium`
 
-## Symptoms
-With `wakeupPollIntervalMs = 5000`, after a slow session starts, the
-5s `setInterval` keeps firing. Each fire calls `pollWakeups()` which
-walks queued wakeups. If more than one worker (or one worker + a
-crashed-then-restarted worker) is running, the queued list is
-double-claimed and multiple `opencode.exe` processes spawn.
+## Summary
 
-In our test on Windows we observed 3+ `opencode.exe` processes
-running concurrently when 3 wakeups were dispatched rapidly.
+`WorkerDaemon.pollWakeups()` runs every 5 seconds. It calls `claimAndRun` for each queued wakeup, with an `await` in the for loop. While the `await` should serialize within a single tick, **the NEXT tick fires 5 seconds later and starts new wakeups even if previous ones are still running**.
 
-## Root cause
-`setInterval(() => pollWakeups(), 5_000)` does not guard against
-overlap. A `pollWakeups()` invocation that takes 30s will be
-re-entered up to 6 times by the interval. The `for (const wakeup of
-queued) { await claimAndRun(...) }` loop is synchronous per call, so
-it doesn't itself start the 2nd session before the 1st finishes —
-but the bug is more visible in two failure modes:
+Combined with the opencode-cli serialize bug (#1), this means:
+- Tick 1: starts 3 wakeups in sequence
+- Tick 2 (5s later): starts another batch
+- Tick 3: another batch
+- The "running wakeups" count in the DB grows unboundedly
+- The opencode CLI process count grows unboundedly
+- Memory grows unboundedly
 
-1. Two pollWakeups() invocations can race on the same `queued` row
-   if a stale snapshot of the queue was taken before the previous
-   mark-as-claimed finished writing. SQLite + better-sqlite3
-   serializes writes per process, but reads are not transactionally
-   isolated against writes committed in the same process.
-2. When a worker is restarted (e.g. by the dev loop), the new
-   worker picks up wakeups that the old worker was in the middle
-   of. The new worker doesn't know about the in-flight session.
+The poll should either:
+1. Skip ticks while sessions are running, OR
+2. Have a max in-flight limit (e.g. 5) and wait for one to finish before starting another
 
-## Fix
-Add a single-in-flight semaphore:
+## Reproduction
 
-```ts
-private pollInFlight = false;
+```bash
+# Fire 10 sessions in rapid succession (each takes ~30-60s)
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  curl -X POST http://127.0.0.1:7420/v1/sessions \
+    -H "Content-Type: application/json" \
+    -d '{"agentId":"agent/operator","prompt":"ping","adapter":"opencode_cli"}' &
+done
+wait
 
-private async pollWakeups(): Promise<void> {
-  if (this.pollInFlight) {
-    log.debug("poll already in flight, skipping tick");
-    return;
-  }
-  this.pollInFlight = true;
-  try {
-    // existing body
-  } finally {
-    this.pollInFlight = false;
-  }
-}
+# Wait 30 seconds
+sleep 30
+
+# Count running opencode processes
+tasklist | grep opencode | wc -l
+# → 10+ (should be 1 if serialization works)
 ```
 
-In addition, mark wakeups as `claimed` in a single SQL statement
-with `WHERE status = 'queued'` so that only one worker can win the
-race even across processes (this is the same change as bug #2's
-recovery flow — the existing claim uses an UPDATE without a
-WHERE-status check, so any number of workers can mark the same
-wakeup `claimed` if they read it at the same time).
+## Expected
 
-## Acceptance
-- [ ] `yarn test` includes a unit test for the in-flight guard.
-- [ ] Manual test: fire 3 wakeups in quick succession, observe
-  exactly 1 `opencode.exe` running at a time, all 3 sessions
-  complete.
-- [ ] Manual test: restart the worker mid-session; the new worker
-  does NOT start a second session for the same wakeup.
+At any moment, ≤ 1 opencode process is running (after #1 is fixed). If the user wants parallelism, they can configure a max-in-flight concurrency (e.g. 3).
+
+## Actual
+
+Up to 10+ opencode processes running simultaneously. Memory grows. Sessions complete in random order, sometimes with "exit code 1" errors from the opencode CLI racing on its auth database.
+
+## Acceptance criteria
+
+- [ ] Single in-flight opencode process at any moment (after #1)
+- [ ] Optional: `AASPAI_MAX_INFLIGHT` env var to allow N concurrent opencode calls (default 1)
+- [ ] The poll loop checks if there's an in-flight session before starting a new one, OR uses a semaphore
+- [ ] Worker startup logs the in-flight count
+- [ ] End-to-end: fire 10 sessions, only 1 opencode process exists at a time
