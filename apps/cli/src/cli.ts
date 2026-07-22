@@ -20,10 +20,34 @@ import { toolCommand } from "./commands/tool.js";
 
 const program = new Command();
 
+// Read the version from package.json so we don't have to keep this
+// in sync with the version field at publish time. After esbuild
+// bundles the CLI as CJS, `__dirname` points to the dist directory
+// at runtime, so `../package.json` resolves to the package root.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+let pkgVersion = "0.0.0";
+try {
+  const candidates = [join(__dirname, "..", "package.json"), join(__dirname, "package.json")];
+  for (const p of candidates) {
+    try {
+      const pkg = JSON.parse(readFileSync(p, "utf8")) as { version?: string };
+      if (pkg.version) {
+        pkgVersion = pkg.version;
+        break;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+} catch {
+  /* fall through with default */
+}
+
 program
   .name("aaspai")
-  .description("aaspai — control plane for AI agent workforces")
-  .version("0.1.0")
+  .version(pkgVersion)
   .option("--cwd <path>", "working directory", process.cwd())
   .option("--config <path>", "path to aaspai.config.ts", "./aaspai.config.ts")
   .option("--no-color", "disable colors")
