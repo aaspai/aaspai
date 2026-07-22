@@ -14,15 +14,9 @@ export const metadata: Metadata = {
     "Run a team of AI agents (operator, developer, tester, …) on top of any agentic CLI. File-based config, SQLite state, single binary.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      suppressHydrationWarning
-      className={cn("font-sans", inter.variable)}
-    >
+    <html lang="en" suppressHydrationWarning className={cn("font-sans", inter.variable)}>
       <body className="min-h-screen bg-background text-foreground antialiased">
         <ThemeProvider>
           <TooltipProvider delayDuration={150}>

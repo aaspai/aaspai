@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown, Send, User } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 import { cn, formatRelative } from "@/lib/utils";
 
 type Role = "user" | "assistant" | "system";
@@ -43,7 +43,7 @@ export function ChatConsole({ agentId, agentTitle, adapter, model }: Props) {
 
   useEffect(() => {
     scrollToBottom();
-  }, [turns, scrollToBottom]);
+  }, [scrollToBottom]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -93,11 +93,7 @@ export function ChatConsole({ agentId, agentTitle, adapter, model }: Props) {
         throw new Error(errText || `HTTP ${res.status}`);
       }
       const data = (await res.json()) as { reply: string; sessionId?: string };
-      setTurns((prev) =>
-        prev.map((t) =>
-          t.id === userTurn.id ? { ...t, status: "done" } : t,
-        ),
-      );
+      setTurns((prev) => prev.map((t) => (t.id === userTurn.id ? { ...t, status: "done" } : t)));
       setTurns((prev) =>
         prev.map((t) =>
           t.id === placeholder.id
@@ -112,9 +108,7 @@ export function ChatConsole({ agentId, agentTitle, adapter, model }: Props) {
       );
     } catch (err) {
       setTurns((prev) =>
-        prev.map((t) =>
-          t.id === userTurn.id ? { ...t, status: "error", error: String(err) } : t,
-        ),
+        prev.map((t) => (t.id === userTurn.id ? { ...t, status: "error", error: String(err) } : t)),
       );
       setTurns((prev) =>
         prev.map((t) =>
@@ -142,16 +136,10 @@ export function ChatConsole({ agentId, agentTitle, adapter, model }: Props) {
 
   return (
     <Card className="flex flex-1 flex-col overflow-hidden">
-      <div
-        ref={scrollRef}
-        className="relative flex-1 overflow-y-auto"
-      >
+      <div ref={scrollRef} className="relative flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
           {turns.length === 0 && (
-            <EmptyChat
-              agentTitle={agentTitle}
-              onSuggest={(s) => setInput(s)}
-            />
+            <EmptyChat agentTitle={agentTitle} onSuggest={(s) => setInput(s)} />
           )}
           {turns.map((t) => (
             <TurnBubble key={t.id} turn={t} agentTitle={agentTitle} />
@@ -200,19 +188,12 @@ function TurnBubble({ turn, agentTitle }: { turn: Turn; agentTitle: string }) {
   const isUser = turn.role === "user";
   const isError = turn.status === "error";
   return (
-    <div
-      className={cn(
-        "flex w-full gap-3",
-        isUser ? "justify-end" : "justify-start",
-      )}
-    >
+    <div className={cn("flex w-full gap-3", isUser ? "justify-end" : "justify-start")}>
       {!isUser && (
         <div
           className={cn(
             "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold",
-            isError
-              ? "bg-destructive/15 text-destructive"
-              : "bg-primary/15 text-primary",
+            isError ? "bg-destructive/15 text-destructive" : "bg-primary/15 text-primary",
           )}
           title={agentTitle}
         >
@@ -244,9 +225,7 @@ function TurnBubble({ turn, agentTitle }: { turn: Turn; agentTitle: string }) {
           <span>{formatRelative(turn.ts)}</span>
           {turn.status === "sending" && <span>· sending…</span>}
           {turn.status === "error" && <span>· failed</span>}
-          {turn.sessionId && (
-            <span className="font-mono">· {turn.sessionId.slice(0, 12)}…</span>
-          )}
+          {turn.sessionId && <span className="font-mono">· {turn.sessionId.slice(0, 12)}…</span>}
         </div>
       </div>
       {isUser && (
@@ -278,8 +257,8 @@ function EmptyChat({
       </div>
       <h2 className="text-lg font-semibold">Talk to {agentTitle}</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Type a message below. The agent's reply depends on its adapter and the
-        system prompt in <code className="rounded bg-muted px-1 py-0.5 text-xs">AGENT.md</code>.
+        Type a message below. The agent's reply depends on its adapter and the system prompt in{" "}
+        <code className="rounded bg-muted px-1 py-0.5 text-xs">AGENT.md</code>.
       </p>
       <div className="mt-6 flex w-full flex-col gap-2">
         {suggestions.map((s) => (

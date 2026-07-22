@@ -1,16 +1,8 @@
 "use client";
 
+import { Bot, Database, Home, ListTree, MessagesSquare, ScrollText, Settings } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  Bot,
-  Database,
-  Home,
-  ListTree,
-  MessagesSquare,
-  ScrollText,
-  Settings,
-} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const nav = [

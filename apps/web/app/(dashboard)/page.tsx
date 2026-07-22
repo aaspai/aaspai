@@ -1,9 +1,8 @@
 import { Bot, Database, ScrollText, Sparkles } from "lucide-react";
 import Link from "next/link";
-
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { getStateSnapshot, isAaspaiWorkspace, workspaceRoot } from "@/lib/aaspai";
 import { formatRelative } from "@/lib/utils";
@@ -22,9 +21,7 @@ export default async function DashboardPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            Your AI agent workforce at a glance.
-          </p>
+          <p className="text-sm text-muted-foreground">Your AI agent workforce at a glance.</p>
         </div>
         <Button asChild>
           <Link href="/chat/agent/ceo">Talk to the CEO</Link>
@@ -98,19 +95,13 @@ export default async function DashboardPage() {
                         <span className="font-medium tabular-nums">
                           {s.agentId.replace(/^agent\//, "")}
                         </span>
-                        <span className="text-xs text-muted-foreground">
-                          via {s.adapter}
-                        </span>
+                        <span className="text-xs text-muted-foreground">via {s.adapter}</span>
                       </div>
-                      <p className="mt-1 truncate text-xs text-muted-foreground">
-                        {s.id}
-                      </p>
+                      <p className="mt-1 truncate text-xs text-muted-foreground">{s.id}</p>
                     </div>
                     <div className="shrink-0 text-right text-xs text-muted-foreground">
                       <div>{formatRelative(s.startedAt)}</div>
-                      {s.durationMs != null && (
-                        <div className="tabular-nums">{s.durationMs}ms</div>
-                      )}
+                      {s.durationMs != null && <div className="tabular-nums">{s.durationMs}ms</div>}
                     </div>
                   </li>
                 ))}
@@ -174,9 +165,7 @@ function StatCard({
       <CardContent className="flex items-center justify-between p-5">
         <div>
           <p className="text-sm font-medium text-muted-foreground">{title}</p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
-            {value}
-          </p>
+          <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{value}</p>
           <p className="mt-0.5 text-xs text-muted-foreground/80">{description}</p>
         </div>
         <div className="rounded-md bg-muted/60 p-2.5 text-muted-foreground">
@@ -200,10 +189,9 @@ function NoWorkspaceCard() {
       <CardHeader>
         <CardTitle>No aaspai workspace here</CardTitle>
         <CardDescription>
-          The web app reads from a single workspace directory. The current
-          working directory is{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">{cwd}</code> and it
-          does not contain an aaspai project.
+          The web app reads from a single workspace directory. The current working directory is{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-xs">{cwd}</code> and it does not
+          contain an aaspai project.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -214,26 +202,24 @@ function NoWorkspaceCard() {
           <li>
             <strong>Run the CLI first</strong> in your project:
             <pre className="mt-2 rounded-md bg-muted p-3 text-xs">
-{`cd /path/to/your/project
+              {`cd /path/to/your/project
 aaspai init
 aaspai db migrate`}
             </pre>
           </li>
           <li>
             <strong>Or set the workspace explicitly</strong> with the{" "}
-            <code className="rounded bg-muted px-1 py-0.5 text-xs">
-              AASPAI_CWD
-            </code>{" "}
-            env var when starting the web server:
+            <code className="rounded bg-muted px-1 py-0.5 text-xs">AASPAI_CWD</code> env var when
+            starting the web server:
             <pre className="mt-2 rounded-md bg-muted p-3 text-xs">
-{`AASPAI_CWD=/path/to/your/project npm run dev`}
+              {`AASPAI_CWD=/path/to/your/project npm run dev`}
             </pre>
           </li>
         </ol>
         <Separator />
         <p className="text-xs text-muted-foreground">
-          In production (SaaS), each user has their own workspace; the
-          picker above is replaced with a multi-tenant dashboard.
+          In production (SaaS), each user has their own workspace; the picker above is replaced with
+          a multi-tenant dashboard.
         </p>
       </CardContent>
     </Card>

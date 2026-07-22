@@ -3,10 +3,7 @@ import { getAgent, getAgentSystemPrompt, listRecentSessions } from "@/lib/aaspai
 
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  _req: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const agentId = decodeURIComponent(id);
   const [agent, systemPrompt, recentSessions] = await Promise.all([

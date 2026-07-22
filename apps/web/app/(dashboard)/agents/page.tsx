@@ -1,9 +1,8 @@
-import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAgentHierarchy, isAaspaiWorkspace } from "@/lib/aaspai";
 import { cn } from "@/lib/utils";
 
@@ -44,8 +43,8 @@ export default async function AgentsPage() {
         <CardHeader>
           <CardTitle>No aaspai workspace</CardTitle>
           <CardDescription>
-            Run <code className="rounded bg-muted px-1 py-0.5 text-xs">aaspai init</code> in
-            your project first.
+            Run <code className="rounded bg-muted px-1 py-0.5 text-xs">aaspai init</code> in your
+            project first.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -114,9 +113,7 @@ export default async function AgentsPage() {
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <CardTitle className="text-base">{a.title}</CardTitle>
-                    <CardDescription className="mt-0.5 text-xs">
-                      {a.id}
-                    </CardDescription>
+                    <CardDescription className="mt-0.5 text-xs">{a.id}</CardDescription>
                   </div>
                   <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                 </div>
@@ -133,8 +130,7 @@ export default async function AgentsPage() {
                 </div>
                 {a.manages.length > 0 && (
                   <p className="text-xs text-muted-foreground">
-                    Manages {a.manages.length}{" "}
-                    {a.manages.length === 1 ? "person" : "people"}
+                    Manages {a.manages.length} {a.manages.length === 1 ? "person" : "people"}
                   </p>
                 )}
               </CardContent>
@@ -163,9 +159,7 @@ function TreeNode({
   return (
     <li>
       <div
-        className={cn(
-          "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/40",
-        )}
+        className={cn("flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/40")}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         <span className="font-medium">{agent.title}</span>

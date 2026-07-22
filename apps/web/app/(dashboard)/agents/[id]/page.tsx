@@ -1,10 +1,9 @@
-import { notFound } from "next/navigation";
+import { ArrowLeft, MessagesSquare } from "lucide-react";
 import Link from "next/link";
-import { ArrowLeft, MessagesSquare, Network } from "lucide-react";
-
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { notFound } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
   getAgent,
@@ -32,9 +31,7 @@ const ROLE_LABEL: Record<string, string> = {
   general: "Generalist",
 };
 
-export default async function AgentDetailPage({
-  params,
-}: { params: Promise<{ id: string }> }) {
+export default async function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const agentId = decodeURIComponent(id);
 
@@ -197,15 +194,11 @@ export default async function AgentDetailPage({
                     >
                       {s.status}
                     </Badge>
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      via {s.adapter}
-                    </span>
+                    <span className="ml-2 text-xs text-muted-foreground">via {s.adapter}</span>
                   </div>
                   <div className="shrink-0 text-right text-xs text-muted-foreground">
                     <div>{formatRelative(s.startedAt)}</div>
-                    {s.durationMs != null && (
-                      <div className="tabular-nums">{s.durationMs}ms</div>
-                    )}
+                    {s.durationMs != null && <div className="tabular-nums">{s.durationMs}ms</div>}
                   </div>
                 </li>
               ))}

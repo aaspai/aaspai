@@ -1,5 +1,5 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getStateSnapshot, isAaspaiWorkspace, workspaceRoot } from "@/lib/aaspai";
 import { formatRelative } from "@/lib/utils";
 
@@ -67,9 +67,7 @@ export default async function StatePage() {
                     </div>
                     <div className="text-right text-xs text-muted-foreground">
                       <div>{formatRelative(s.startedAt)}</div>
-                      {s.durationMs != null && (
-                        <div className="tabular-nums">{s.durationMs}ms</div>
-                      )}
+                      {s.durationMs != null && <div className="tabular-nums">{s.durationMs}ms</div>}
                     </div>
                   </li>
                 ))}
@@ -117,9 +115,7 @@ function Counter({ label, value }: { label: string; value: number }) {
     <Card>
       <CardContent className="p-5">
         <p className="text-sm font-medium text-muted-foreground">{label}</p>
-        <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
-          {value}
-        </p>
+        <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{value}</p>
       </CardContent>
     </Card>
   );

@@ -1,12 +1,10 @@
-import { NextResponse } from "next/server";
-import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
 import { Sessions } from "@aaspai/sessions";
-import { randomUUID } from "node:crypto";
-
+import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getAgent, isAaspaiWorkspace, workspaceRoot } from "@/lib/aaspai";
-import { join } from "node:path";
-
 
 const bodySchema = z.object({
   message: z.string().min(1).max(1_048_576),
@@ -16,15 +14,9 @@ const bodySchema = z.object({
 
 export const dynamic = "force-dynamic";
 
-export async function POST(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   if (!isAaspaiWorkspace()) {
-    return NextResponse.json(
-      { error: "no aaspai workspace" },
-      { status: 404 },
-    );
+    return NextResponse.json({ error: "no aaspai workspace" }, { status: 404 });
   }
   const { id } = await params;
   const agentId = decodeURIComponent(id);
@@ -34,19 +26,15 @@ export async function POST(
     return NextResponse.json({ error: `agent ${agentId} not found` }, { status: 404 });
   }
 
-
-  let body;
+  let body: z.infer<typeof bodySchema>;
   try {
     body = bodySchema.parse(await req.json());
   } catch (err) {
-    return NextResponse.json(
-      { error: "invalid request", details: String(err) },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: "invalid request", details: String(err) }, { status: 400 });
   }
 
   const adapter = body.adapter ?? agent.adapter;
-  const model = body.model ?? agent.model ?? "default";
+  const _model = body.model ?? agent.model ?? "default";
 
   const root = workspaceRoot();
   const agentSource = new FileAgentConfigSource(join(root, "agents"));

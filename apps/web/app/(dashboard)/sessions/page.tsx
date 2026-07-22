@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isAaspaiWorkspace, listRecentSessions } from "@/lib/aaspai";
 import { formatRelative } from "@/lib/utils";
 
@@ -24,9 +24,7 @@ export default async function SessionsPage() {
     <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
-        <p className="text-sm text-muted-foreground">
-          {sessions.length} most recent agent runs.
-        </p>
+        <p className="text-sm text-muted-foreground">{sessions.length} most recent agent runs.</p>
       </header>
       <Card>
         <CardHeader>
@@ -51,10 +49,7 @@ export default async function SessionsPage() {
                 </thead>
                 <tbody>
                   {sessions.map((s) => (
-                    <tr
-                      key={s.id}
-                      className="border-b last:border-0 hover:bg-accent/30"
-                    >
+                    <tr key={s.id} className="border-b last:border-0 hover:bg-accent/30">
                       <td className="px-2 py-2">
                         <Badge
                           variant={
@@ -76,9 +71,7 @@ export default async function SessionsPage() {
                           {s.agentId.replace(/^agent\//, "")}
                         </Link>
                       </td>
-                      <td className="px-2 py-2 text-xs text-muted-foreground">
-                        {s.adapter}
-                      </td>
+                      <td className="px-2 py-2 text-xs text-muted-foreground">{s.adapter}</td>
                       <td className="px-2 py-2 text-xs text-muted-foreground">
                         {formatRelative(s.startedAt)}
                       </td>

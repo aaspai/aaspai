@@ -17,9 +17,8 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-
+import { getDefaultDb, sessions, wakeups } from "@aaspai/db";
 import { FileAgentConfigSource } from "@aaspai/file-loader";
-import { closeDefaultDb, getDefaultDb, sessions, wakeups } from "@aaspai/db";
 import { desc, eq } from "drizzle-orm";
 
 /**
@@ -209,11 +208,7 @@ export async function getSession(id: string): Promise<SessionSummary | null> {
   ensureWorkspaceEnv();
   if (!isAaspaiWorkspace()) return null;
   const handle = getDefaultDb();
-  const rows = await handle.db
-    .select()
-    .from(sessions)
-    .where(eq(sessions.id, id))
-    .limit(1);
+  const rows = await handle.db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
   const r = rows[0];
   if (!r) return null;
   return {
@@ -235,7 +230,11 @@ export async function getStateSnapshot(): Promise<StateSnapshot> {
     return {
       ok: false,
       workspace: root,
-      counts: { agents: 0, sessions: 0, wakeups: { queued: 0, running: 0, failed: 0, completed: 0 } },
+      counts: {
+        agents: 0,
+        sessions: 0,
+        wakeups: { queued: 0, running: 0, failed: 0, completed: 0 },
+      },
       recentSessions: [],
       recentWakeups: [],
     };
@@ -245,9 +244,7 @@ export async function getStateSnapshot(): Promise<StateSnapshot> {
   const recentSessions = await listRecentSessions(10);
 
   // Group sessions by status for the counts
-  const sessionRows = await handle.db
-    .select({ status: sessions.status })
-    .from(sessions);
+  const sessionRows = await handle.db.select({ status: sessions.status }).from(sessions);
   const sessionCounts = { queued: 0, running: 0, failed: 0, completed: 0 };
   for (const r of sessionRows) {
     const s = r.status ?? "unknown";
@@ -258,7 +255,12 @@ export async function getStateSnapshot(): Promise<StateSnapshot> {
   }
 
   const wakeupRows = await handle.db
-    .select({ id: wakeups.id, status: wakeups.status, reason: wakeups.reason, loopId: wakeups.loopId })
+    .select({
+      id: wakeups.id,
+      status: wakeups.status,
+      reason: wakeups.reason,
+      loopId: wakeups.loopId,
+    })
     .from(wakeups)
     .orderBy(desc(wakeups.requestedAt))
     .limit(10);
