@@ -1,40 +1,52 @@
-# Bug #1 — opencode_cli sessions run in parallel despite per-process serialization
+# Bug 1 — `opencode_cli` sessions run in parallel despite per-process serialization
 
-**Status:** CLOSED via PR #8
-**Labels:** bug, worker, opencode-cli, priority:high
+**Labels:** `bug`, `worker`, `opencode-cli`, `priority:high`
 
-## Symptoms
-On Windows, when 3 wakeups were dispatched in quick succession,
-3 separate `opencode.exe` processes appeared in Task Manager
-simultaneously. The cliChain serializer was supposed to prevent
-this but it didn't.
+## Summary
 
-## Root cause
-The cliChain only serialized within a single Node process. The
-worker had no in-flight guard on its 5s `setInterval`, so 3 polls
-could each fire `claimAndRun` before the first session's
-`opencode.exe` exited. Combined with no cross-process lock, two
-worker processes could both call `opencode run` at the same time
-and race on the opencode SQLite DB at
-`~/.local/share/opencode/opencode.db`.
+`packages/harness/src/drivers/opencode-cli/index.ts` was updated with a per-process `cliChain` queue intended to serialize concurrent `opencode run` invocations. The pattern was verified in isolation (one Node test confirmed f2 starts after f1 completes). But when the worker daemon calls it in production, **3 `opencode.exe` processes run concurrently**, each consuming 150–800 MB of RAM, and racing on the opencode SQLite auth database.
 
-## Fix (PR #6 + PR #8)
-- **PR #6 (worker):** in-flight guard on `pollWakeups`, atomic
-  claim (`UPDATE ... WHERE status='queued'`), retry-with-backoff,
-  graceful shutdown. Now the worker itself only starts one session
-  at a time.
-- **PR #8 (this fix, opencode-cli):** file-based cross-process
-  advisory lock at `${tmpdir}/aaspai-opencode.lock`. The lock
-  contains the holder's PID + hostname. Stale locks (PID not
-  running) are stolen. Same-process calls go through the existing
-  cliChain. Cross-process calls block on the file lock with a
-  50ms × 200 = 10s max wait, then throw a timeout error which
-  becomes a wakeup retry via PR #6's retry-with-backoff.
+## Reproduction
 
-## Acceptance
-- [x] Unit test: 3 concurrent `opencodeCli.execute()` calls keep
-  peak concurrent children ≤ 1 (`packages/harness/__tests__/opencode-cli-serialize.test.ts`).
-- [x] Unit test: lock is acquired and released between calls.
-- [ ] Manual: 2 worker processes firing in parallel don't both
-  run `opencode` (verified via `tasklist | grep opencode`).
-- [x] Monorepo: 275+ tests pass, typecheck clean.
+```bash
+# From a fresh project
+aaspai init && aaspai db migrate
+aaspai-worker start --daemon
+aaspai-api start --daemon
+
+# Fire 3 sessions in parallel via the API
+for agent in operator developer tester; do
+  curl -X POST http://127.0.0.1:7420/v1/sessions \
+    -H "Content-Type: application/json" \
+    -d "{\"agentId\":\"agent/$agent\",\"prompt\":\"ping\",\"adapter\":\"opencode_cli\"}" \
+    > /dev/null &
+done
+wait
+
+# On Windows, observe 3 opencode.exe processes in tasklist simultaneously
+tasklist | grep opencode
+# → 3 entries, 150-800 MB each, all running concurrently
+```
+
+## Expected
+
+One `opencode.exe` at a time, chained sequentially (f1 → f2 → f3).
+
+## Actual
+
+3 `opencode.exe` processes run in parallel. Memory blows up, and concurrent writes to `~/.local/share/opencode/opencode.db` cause intermittent "exit code 1" failures that look random.
+
+## Hypothesis
+
+Either:
+- The worker spawn picks up a cached version of the harness (tsx module cache)
+- The `cliChain` variable is being re-initialized per call (module evaluated multiple times)
+- A second code path bypasses `serialize()` and spawns the CLI directly
+
+## Acceptance criteria
+
+- [ ] `gh issue body contains 3 sessions fired in parallel`
+- [ ] At any point in time, `tasklist | grep opencode | wc -l` returns **1** (the single running CLI)
+- [ ] Sessions complete in serial: f1 starts, f1 ends, f2 starts, f2 ends, f3 starts, f3 ends
+- [ ] No "exit code 1" or "stream write after end" errors in the worker log
+- [ ] End-to-end test: `aaspai state md` shows all 3 sessions with real LLM output
