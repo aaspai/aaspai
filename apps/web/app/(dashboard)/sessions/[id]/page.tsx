@@ -175,6 +175,23 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
         </CardContent>
       </Card>
 
+      {Object.keys(session.sessionParams).length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Layers className="h-4 w-4" />
+              Adapter execution
+            </CardTitle>
+            <CardDescription>
+              Parameters captured when the adapter created and completed this run.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AdapterParamsView data={session.sessionParams} />
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-2">
         <JsonCard title="Session configuration" data={session.config} />
         <JsonCard title="Runtime configuration" data={session.runtime} />
@@ -188,15 +205,15 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
           </CardTitle>
           <CardDescription>
             {session.transcript.length === 0
-              ? "No events recorded for this session."
+              ? "No streamed events were recorded for this session."
               : `${session.transcript.length} event${session.transcript.length === 1 ? "" : "s"} in chronological order.`}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {session.transcript.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              The harness adapter did not stream any events for this run. The result above is the
-              full output.
+              No streamed events were persisted for this run. The adapter execution section above
+              contains the captured request and response details.
             </p>
           ) : (
             <ol className="space-y-3">
@@ -248,11 +265,16 @@ function Stat({
 }
 
 function ResultView({ result }: { result: Record<string, unknown> }) {
+  const sessionParams = isRecord(result.sessionParams) ? result.sessionParams : null;
   const text = (result as { text?: unknown }).text;
   const summary = (result as { summary?: unknown }).summary;
   const role = (result as { role?: unknown }).role;
   const dryRun = (result as { dryRun?: unknown }).dryRun;
-  const response = (result as { response?: unknown }).response;
+  const response = nonEmptyString((result as { response?: unknown }).response)
+    ? (result as { response: string }).response
+    : sessionParams && nonEmptyString(sessionParams.response)
+      ? (sessionParams.response as string)
+      : null;
   const facts = [
     ["status", result.status],
     ["exit code", result.exitCode],
@@ -282,7 +304,7 @@ function ResultView({ result }: { result: Record<string, unknown> }) {
         <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-sm leading-relaxed whitespace-pre-wrap">
           {text}
         </pre>
-      ) : typeof response === "string" && response.length > 0 ? (
+      ) : response ? (
         <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-sm leading-relaxed whitespace-pre-wrap">
           {response}
         </pre>
@@ -293,6 +315,43 @@ function ResultView({ result }: { result: Record<string, unknown> }) {
       )}
     </div>
   );
+}
+
+function AdapterParamsView({ data }: { data: Record<string, unknown> }) {
+  const prompt = typeof data.prompt === "string" ? data.prompt : null;
+  const response = typeof data.response === "string" ? data.response : null;
+  const metadata = Object.fromEntries(
+    Object.entries(data).filter(([key]) => key !== "prompt" && key !== "response"),
+  );
+
+  return (
+    <div className="space-y-4">
+      {prompt && <PayloadBlock label="Expanded adapter prompt" value={prompt} />}
+      {response && <PayloadBlock label="Captured adapter response" value={response} />}
+      {Object.keys(metadata).length > 0 && <JsonView data={metadata} />}
+    </div>
+  );
+}
+
+function PayloadBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </p>
+      <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-sm leading-relaxed whitespace-pre-wrap">
+        {value}
+      </pre>
+    </div>
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 function UsageView({ usage }: { usage: Record<string, unknown> }) {
