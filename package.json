@@ -16,5 +16,9 @@
   },
   "engines": {
     "node": ">=20.18.0 <21"
+  },
+  "resolutions": {
+    "node-gyp": "npm:10.2.0",
+    "undici": "npm:6.21.0"
   }
 }
