@@ -7,9 +7,13 @@ import { getAgent, isAaspaiWorkspace } from "@/lib/aaspai";
 
 export const dynamic = "force-dynamic";
 
-export default async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const agentId = decodeURIComponent(id);
+export default async function ChatPage({ params }: { params: Promise<{ id: string[] }> }) {
+  const { id: parts } = await params;
+  // The catch-all `[...id]` lets us route `/chat/agent/ceo` without
+  // a separate segment for `agent/`. Join the segments back to the
+  // agent ID and normalize (accept both `ceo` and `agent/ceo`).
+  const joined = (parts ?? []).join("/");
+  const agentId = joined.startsWith("agent/") ? joined : `agent/${joined}`;
   if (!isAaspaiWorkspace()) notFound();
   const agent = await getAgent(agentId);
   if (!agent) notFound();

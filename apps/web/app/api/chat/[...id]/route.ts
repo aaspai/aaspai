@@ -14,12 +14,15 @@ const bodySchema = z.object({
 
 export const dynamic = "force-dynamic";
 
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string[] }> }) {
   if (!isAaspaiWorkspace()) {
     return NextResponse.json({ error: "no aaspai workspace" }, { status: 404 });
   }
-  const { id } = await params;
-  const agentId = decodeURIComponent(id);
+  const { id: parts } = await params;
+  // The catch-all `[...id]` lets `/api/chat/agent/ceo` route to a
+  // single handler. Join the segments and normalize.
+  const joined = (parts ?? []).join("/");
+  const agentId = joined.startsWith("agent/") ? joined : `agent/${joined}`;
 
   const agent = await getAgent(agentId);
   if (!agent) {

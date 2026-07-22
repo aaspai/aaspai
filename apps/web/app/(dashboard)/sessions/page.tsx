@@ -49,37 +49,55 @@ export default async function SessionsPage() {
                 </thead>
                 <tbody>
                   {sessions.map((s) => (
-                    <tr key={s.id} className="border-b last:border-0 hover:bg-accent/30">
+                    <tr
+                      key={s.id}
+                      className="group cursor-pointer border-b last:border-0 transition-colors hover:bg-accent/40"
+                    >
                       <td className="px-2 py-2">
-                        <Badge
-                          variant={
-                            s.status === "succeeded"
-                              ? "default"
-                              : s.status === "failed"
-                                ? "destructive"
-                                : "secondary"
-                          }
-                        >
-                          {s.status}
-                        </Badge>
+                        <Link href={`/sessions/${encodeURIComponent(s.id)}`} className="block">
+                          <Badge
+                            variant={
+                              s.status === "succeeded"
+                                ? "default"
+                                : s.status === "failed"
+                                  ? "destructive"
+                                  : "secondary"
+                            }
+                          >
+                            {s.status}
+                          </Badge>
+                        </Link>
                       </td>
                       <td className="px-2 py-2">
                         <Link
-                          href={`/agents/${encodeURIComponent(s.agentId)}`}
-                          className="hover:underline"
+                          href={`/sessions/${encodeURIComponent(s.id)}`}
+                          className="block hover:underline"
                         >
                           {s.agentId.replace(/^agent\//, "")}
                         </Link>
                       </td>
-                      <td className="px-2 py-2 text-xs text-muted-foreground">{s.adapter}</td>
                       <td className="px-2 py-2 text-xs text-muted-foreground">
-                        {formatRelative(s.startedAt)}
+                        <Link href={`/sessions/${encodeURIComponent(s.id)}`} className="block">
+                          {s.adapter}
+                        </Link>
+                      </td>
+                      <td className="px-2 py-2 text-xs text-muted-foreground">
+                        <Link href={`/sessions/${encodeURIComponent(s.id)}`} className="block">
+                          {formatRelative(s.startedAt)}
+                        </Link>
                       </td>
                       <td className="px-2 py-2 text-right text-xs tabular-nums text-muted-foreground">
-                        {s.durationMs != null ? `${s.durationMs}ms` : "—"}
+                        <Link href={`/sessions/${encodeURIComponent(s.id)}`} className="block">
+                          {s.durationMs != null ? `${s.durationMs}ms` : "—"}
+                        </Link>
                       </td>
                       <td className="px-2 py-2 text-right font-mono text-[10px] text-muted-foreground/70">
-                        {s.id.slice(0, 16)}…
+                        <Link
+                          href={`/sessions/${encodeURIComponent(s.id)}`}
+                          className="block group-hover:text-foreground"
+                        >
+                          {s.id.slice(0, 16)}…
+                        </Link>
                       </td>
                     </tr>
                   ))}
