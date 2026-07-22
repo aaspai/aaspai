@@ -1,7 +1,7 @@
 import type { TranscriptEntry } from "@aaspai/contracts/harness";
 import type { JsonObject } from "@aaspai/contracts/primitives";
 import { redactHomePath } from "../../shared/redact.js";
-import { codexStreamEventSchema, type CodexStreamEvent } from "./config.js";
+import { type CodexStreamEvent, codexStreamEventSchema } from "./config.js";
 
 /**
  * Parse a single line of `codex exec --json` output into zero or more
@@ -49,7 +49,8 @@ function codexEventToTranscript(event: CodexStreamEvent, ts: string): Transcript
       ];
     }
     case "turn.failed": {
-      const errorText = typeof event.error === "string" ? event.error : JSON.stringify(event.error ?? {});
+      const errorText =
+        typeof event.error === "string" ? event.error : JSON.stringify(event.error ?? {});
       return [
         { kind: "result", ts, summary: errorText, isError: true, stopReason: "failed" },
         { kind: "stderr", ts, text: errorText },
@@ -59,7 +60,17 @@ function codexEventToTranscript(event: CodexStreamEvent, ts: string): Transcript
     case "item.started":
     case "item.updated": {
       const item = event.item as
-        | { type?: string; name?: string; text?: string; content?: unknown; id?: string; status?: string; input?: unknown; output?: unknown; is_error?: boolean }
+        | {
+            type?: string;
+            name?: string;
+            text?: string;
+            content?: unknown;
+            id?: string;
+            status?: string;
+            input?: unknown;
+            output?: unknown;
+            is_error?: boolean;
+          }
         | undefined;
       if (!item) return [{ kind: "system", ts, text: JSON.stringify(event) }];
       if (item.type === "agent_message" && typeof item.text === "string") {
@@ -76,7 +87,9 @@ function codexEventToTranscript(event: CodexStreamEvent, ts: string): Transcript
             : event.type === "item.started"
               ? "started"
               : "started";
-        const input: JsonObject | undefined = isObject(item.input) ? (item.input as JsonObject) : undefined;
+        const input: JsonObject | undefined = isObject(item.input)
+          ? (item.input as JsonObject)
+          : undefined;
         return [
           {
             kind: "tool_call",
@@ -89,7 +102,8 @@ function codexEventToTranscript(event: CodexStreamEvent, ts: string): Transcript
         ];
       }
       if (item.type === "command_execution_output" || item.type === "tool_result") {
-        const output = typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "");
+        const output =
+          typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "");
         return [
           {
             kind: "tool_result",
@@ -104,7 +118,8 @@ function codexEventToTranscript(event: CodexStreamEvent, ts: string): Transcript
       return [{ kind: "system", ts, text: JSON.stringify(event) }];
     }
     case "error": {
-      const text = typeof event.error === "string" ? event.error : JSON.stringify(event.error ?? {});
+      const text =
+        typeof event.error === "string" ? event.error : JSON.stringify(event.error ?? {});
       return [{ kind: "stderr", ts, text }];
     }
     default:

@@ -4,8 +4,13 @@
  * instruction, not a knowledge concept).
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { parseOkfFile, serializeOkfFile, sha256HexSync, type ParsedFile } from "@aaspai/file-loader/okf-parser";
-import { skillSchema, type Skill } from "@aaspai/contracts/phase2";
+import { type Skill, skillSchema } from "@aaspai/contracts/phase2";
+import {
+  type ParsedFile,
+  parseOkfFile,
+  serializeOkfFile,
+  sha256HexSync,
+} from "@aaspai/file-loader/okf-parser";
 
 export function parseSkillFile(raw: string, opts: { filePath?: string } = {}): ParsedFile<Skill> {
   const parsed = parseOkfFile(raw, opts);

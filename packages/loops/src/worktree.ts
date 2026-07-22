@@ -5,8 +5,9 @@
  * for the actual worktree creation. Phase 3 adds the manifest +
  * advisory locks (paperclip's `.loop-worktrees/manifest.json`).
  */
-import { mkdir, rm, writeFile, readFile } from "node:fs/promises";
+
 import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getLogger } from "@aaspai/observability";
 
@@ -43,7 +44,12 @@ export class WorktreeManager {
     log.info("WorktreeManager started", { count: this.worktrees.size });
   }
 
-  async create(input: { worktreeId: string; branch: string; baseRef: string; cwd: string }): Promise<WorktreeLease> {
+  async create(input: {
+    worktreeId: string;
+    branch: string;
+    baseRef: string;
+    cwd: string;
+  }): Promise<WorktreeLease> {
     const path = join(this.opts.baseDir, ".worktrees", input.worktreeId);
     await mkdir(path, { recursive: true });
     const lease: WorktreeLease = {
@@ -77,6 +83,10 @@ export class WorktreeManager {
 
   private async save(): Promise<void> {
     await mkdir(join(this.manifestPath, ".."), { recursive: true });
-    await writeFile(this.manifestPath, JSON.stringify([...this.worktrees.values()], null, 2), "utf8");
+    await writeFile(
+      this.manifestPath,
+      JSON.stringify([...this.worktrees.values()], null, 2),
+      "utf8",
+    );
   }
 }

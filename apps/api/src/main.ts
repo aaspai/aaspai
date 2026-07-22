@@ -11,12 +11,13 @@
  *   AASPAI_API_HOST     (default: 127.0.0.1)
  *   AASPAI_API_PORT     (default: 7420)
  */
-import { writeFile, readFile, unlink, mkdir, open } from "node:fs/promises";
+
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawn } from "node:child_process";
 import { startServer } from "./server.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -64,17 +65,11 @@ async function cmdStart(args: string[]): Promise<void> {
     await mkdir(dirname(LOG_FILE), { recursive: true });
     const logFd = await open(LOG_FILE, "a");
     const tsxLoaderPath = _require.resolve("tsx");
-    const tsxSpecifier = process.platform === "win32"
-      ? pathToFileURL(tsxLoaderPath).href
-      : tsxLoaderPath;
+    const tsxSpecifier =
+      process.platform === "win32" ? pathToFileURL(tsxLoaderPath).href : tsxLoaderPath;
     const child = spawn(
       process.execPath,
-      [
-        "--import",
-        tsxSpecifier,
-        resolve(__dirname, "main.ts"),
-        "start",
-      ],
+      ["--import", tsxSpecifier, resolve(__dirname, "main.ts"), "start"],
       {
         cwd: process.cwd(),
         env: process.env,
@@ -89,7 +84,9 @@ async function cmdStart(args: string[]): Promise<void> {
       throw new Error("failed to spawn background api (no pid)");
     }
     const port = process.env.AASPAI_API_PORT ?? "7420";
-    console.log(`aaspai-api started (pid ${child.pid}, http://127.0.0.1:${port}, logs: ${LOG_FILE})`);
+    console.log(
+      `aaspai-api started (pid ${child.pid}, http://127.0.0.1:${port}, logs: ${LOG_FILE})`,
+    );
     return;
   }
 
@@ -97,7 +94,11 @@ async function cmdStart(args: string[]): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`\nReceived ${signal}, shutting down...`);
     await running.close();
-    try { await unlink(PID_FILE); } catch { /* ignore */ }
+    try {
+      await unlink(PID_FILE);
+    } catch {
+      /* ignore */
+    }
     process.exit(0);
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
@@ -116,7 +117,11 @@ async function cmdStop(): Promise<void> {
   }
   if (!isRunning(pid)) {
     console.log("api pid file is stale; cleaning up");
-    try { await unlink(PID_FILE); } catch { /* ignore */ }
+    try {
+      await unlink(PID_FILE);
+    } catch {
+      /* ignore */
+    }
     return;
   }
   console.log(`stopping api (pid ${pid})...`);
@@ -133,7 +138,11 @@ async function cmdStop(): Promise<void> {
   } catch (err) {
     console.error(`failed to kill pid ${pid}: ${(err as Error).message}`);
   }
-  try { await unlink(PID_FILE); } catch { /* ignore */ }
+  try {
+    await unlink(PID_FILE);
+  } catch {
+    /* ignore */
+  }
   console.log("api stopped");
 }
 
@@ -196,4 +205,3 @@ function findNodeModulesPath(): string {
   }
   return "";
 }
-

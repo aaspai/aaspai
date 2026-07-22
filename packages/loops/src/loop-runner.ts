@@ -11,23 +11,23 @@
  * not on the same process tick).
  */
 import { randomUUID } from "node:crypto";
-import { getDefaultDb } from "@aaspai/db";
-import {
-  wakeups,
-  auditEvents,
-  type WakeupInsert,
-  type AuditEventInsert,
-} from "@aaspai/db";
-import { getLogger } from "@aaspai/observability";
-import { Sessions } from "@aaspai/sessions";
 import type {
+  DecideResult,
   LoopConfigSource,
   LoopPattern,
   WorkItem,
-  DecideResult,
 } from "@aaspai/contracts/phase2";
-import type { ResolvedLoopPattern } from "./pattern.js";
+import {
+  type AuditEventInsert,
+  auditEvents,
+  getDefaultDb,
+  type WakeupInsert,
+  wakeups,
+} from "@aaspai/db";
+import { getLogger } from "@aaspai/observability";
+import type { Sessions } from "@aaspai/sessions";
 import { eq } from "drizzle-orm";
+import type { ResolvedLoopPattern } from "./pattern.js";
 
 const log = getLogger("loops.runner");
 
@@ -61,7 +61,10 @@ export class LoopRunner {
     log.info("loop run start", { loop: resolved.pattern.id, runId });
 
     const state = await this.snapshotState(resolved.pattern);
-    const items = await resolved.discover(state as never, { loopId: resolved.pattern.id, now: new Date() });
+    const items = await resolved.discover(state as never, {
+      loopId: resolved.pattern.id,
+      now: new Date(),
+    });
 
     let fired = 0;
     let reported = 0;
@@ -70,7 +73,10 @@ export class LoopRunner {
     const decisions: Array<{ item: WorkItem; decide: DecideResult }> = [];
 
     for (const item of items) {
-      const decide = await resolved.decide(item, state as never, { loopId: resolved.pattern.id, now: new Date() });
+      const decide = await resolved.decide(item, state as never, {
+        loopId: resolved.pattern.id,
+        now: new Date(),
+      });
       decisions.push({ item, decide });
       if (decide.kind === "act") fired++;
       else if (decide.kind === "report") reported++;
@@ -143,7 +149,11 @@ export class LoopRunner {
     return { paused: _loop.pauseReason !== null && _loop.pauseReason !== undefined };
   }
 
-  private async enqueueWakeup(loop: LoopPattern, item: WorkItem, reason: string): Promise<WakeupInsert | null> {
+  private async enqueueWakeup(
+    loop: LoopPattern,
+    item: WorkItem,
+    reason: string,
+  ): Promise<WakeupInsert | null> {
     const wakeup: WakeupInsert = {
       id: `wake_${randomUUID()}`,
       organizationId: this.opts.organizationId,
@@ -187,7 +197,12 @@ export class LoopRunner {
   /** Make `_loop` (the unused param warning suppressor) cooperate with TS. */
   private readonly __unused: (loop: LoopPattern) => void = (l) => void l;
 
-  private async recordAudit(input: { action: string; targetType: string; targetId: string; metadata: JsonObjectSafe }): Promise<void> {
+  private async recordAudit(input: {
+    action: string;
+    targetType: string;
+    targetId: string;
+    metadata: JsonObjectSafe;
+  }): Promise<void> {
     const now = new Date().toISOString();
     const audit: AuditEventInsert = {
       id: `evt_${randomUUID()}`,

@@ -15,7 +15,11 @@ export class KillSwitch {
 
   pauseLoop(loopId: string, reason: string): void {
     this.pausedLoops.add(loopId);
-    this.notify({ globalPaused: this.globalPaused, pausedLoops: [...this.pausedLoops], lastReason: reason });
+    this.notify({
+      globalPaused: this.globalPaused,
+      pausedLoops: [...this.pausedLoops],
+      lastReason: reason,
+    });
   }
 
   resumeLoop(loopId: string): void {
@@ -52,7 +56,11 @@ export class KillSwitch {
 
   private notify(state: KillSwitchState): void {
     for (const cb of this.callbacks) {
-      try { cb(state); } catch { /* swallow */ }
+      try {
+        cb(state);
+      } catch {
+        /* swallow */
+      }
     }
   }
 }

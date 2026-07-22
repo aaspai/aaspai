@@ -9,9 +9,7 @@ import type { RuntimeProgressPhase, RuntimeProgressUpdate } from "@aaspai/contra
  * progress channel quiet for large transfers while still feeling
  * responsive.
  */
-export interface RuntimeProgressSink {
-  (update: RuntimeProgressUpdate): Promise<void> | void;
-}
+export type RuntimeProgressSink = (update: RuntimeProgressUpdate) => Promise<void> | void;
 
 export interface CreateRuntimeProgressReporterOptions {
   sink: RuntimeProgressSink;
@@ -72,16 +70,19 @@ export function createRuntimeProgressReporter(
       }
       pending = update;
       if (flushTimer === undefined) {
-        flushTimer = setTimeout(() => {
-          flushTimer = undefined;
-          if (pending) {
-            const p = pending;
-            pending = null;
-            lastSentAt = Date.now();
-            lastSentPercent = p.percent ?? 0;
-            void emit(p);
-          }
-        }, Math.max(0, minIntervalMs - elapsed));
+        flushTimer = setTimeout(
+          () => {
+            flushTimer = undefined;
+            if (pending) {
+              const p = pending;
+              pending = null;
+              lastSentAt = Date.now();
+              lastSentPercent = p.percent ?? 0;
+              void emit(p);
+            }
+          },
+          Math.max(0, minIntervalMs - elapsed),
+        );
         flushTimer.unref();
       }
     },

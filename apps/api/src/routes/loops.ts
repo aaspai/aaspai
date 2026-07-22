@@ -1,9 +1,8 @@
-import { Hono } from "hono";
-import { getDefaultDb } from "@aaspai/db";
-import { wakeups as wakeupsTable } from "@aaspai/db";
+import { randomUUID } from "node:crypto";
+import { getDefaultDb, wakeups as wakeupsTable } from "@aaspai/db";
 import { FileLoopConfigSource } from "@aaspai/file-loader";
 import { getLogger } from "@aaspai/observability";
-import { randomUUID } from "node:crypto";
+import type { Hono } from "hono";
 
 const log = getLogger("api.routes.loops");
 
@@ -81,10 +80,7 @@ export function registerLoopRoutes(app: Hono): void {
         requestedAt: new Date().toISOString(),
       } as never);
       log.info("loop fired via api", { loopId: loop.id, wakeupId });
-      return c.json(
-        { data: { wakeupId, loopId: loop.id, status: "queued" } },
-        202,
-      );
+      return c.json({ data: { wakeupId, loopId: loop.id, status: "queued" } }, 202);
     } finally {
       await s.stop();
     }

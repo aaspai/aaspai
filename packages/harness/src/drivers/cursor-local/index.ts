@@ -14,8 +14,7 @@ export const cursorLocalInfo = {
   status: "stub" as const,
 };
 
-const STUB_MESSAGE =
-  "cursor_local is a stub in @aaspai/harness. Wire it up when you need it.";
+const STUB_MESSAGE = "cursor_local is a stub in @aaspai/harness. Wire it up when you need it.";
 
 export const cursorLocal: ServerAdapterModule = {
   info: cursorLocalInfo,

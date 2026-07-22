@@ -4,12 +4,19 @@
  * A `LoopPattern` is just data: trigger + discover + decide. The
  * scheduler consumes it; nothing else needs to know about it.
  */
-import { type Trigger, type LoopPattern, type DecideResult, type WorkItem } from "@aaspai/contracts/phase2";
+import type { DecideResult, LoopPattern, Trigger, WorkItem } from "@aaspai/contracts/phase2";
 
-export type { Trigger, LoopPattern, DecideResult, WorkItem };
+export type { DecideResult, LoopPattern, Trigger, WorkItem };
 
-export type DiscoverFn = (state: unknown, ctx: { loopId: string; now: Date }) => Promise<readonly WorkItem[]>;
-export type DecideFn = (item: WorkItem, state: unknown, ctx: { loopId: string; now: Date }) => Promise<DecideResult>;
+export type DiscoverFn = (
+  state: unknown,
+  ctx: { loopId: string; now: Date },
+) => Promise<readonly WorkItem[]>;
+export type DecideFn = (
+  item: WorkItem,
+  state: unknown,
+  ctx: { loopId: string; now: Date },
+) => Promise<DecideResult>;
 
 export interface ResolvedLoopPattern {
   pattern: LoopPattern;

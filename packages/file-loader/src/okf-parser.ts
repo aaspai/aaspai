@@ -1,6 +1,6 @@
-import { z } from "zod";
-import * as jsYaml from "js-yaml";
 import { okfFrontmatterSchema } from "@aaspai/contracts/phase2";
+import * as jsYaml from "js-yaml";
+import type { z } from "zod";
 
 /**
  * Parse a single OKF / SKILL.md-style file.
@@ -24,7 +24,10 @@ export interface ParsedFile<T = unknown> {
 
 export class OkfParseError extends Error {
   readonly code = "AASPAI_OKF_PARSE_ERROR";
-  constructor(message: string, readonly filePath?: string) {
+  constructor(
+    message: string,
+    readonly filePath?: string,
+  ) {
     super(filePath ? `${filePath}: ${message}` : message);
     this.name = "OkfParseError";
   }
@@ -94,7 +97,10 @@ export function parseOkfFile<T = z.infer<typeof okfFrontmatterSchema>>(
 }
 
 /** Serialize a parsed file back to its markdown form. */
-export function serializeOkfFile(file: { frontmatter: Record<string, unknown>; body: string }): string {
+export function serializeOkfFile(file: {
+  frontmatter: Record<string, unknown>;
+  body: string;
+}): string {
   const yaml = jsYaml.dump(file.frontmatter, { schema: jsYaml.JSON_SCHEMA, lineWidth: 120 });
   return `---\n${yaml}\n---\n\n${file.body}\n`;
 }

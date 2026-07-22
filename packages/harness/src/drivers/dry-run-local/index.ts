@@ -1,6 +1,6 @@
+import { randomBytes } from "node:crypto";
 import type { ServerAdapterModule } from "@aaspai/contracts/harness";
 import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
-import { randomBytes } from "node:crypto";
 
 const SHORT_ID_LEN = 8;
 
@@ -26,9 +26,8 @@ const MAX_PREVIEW_CHARS = 400;
  */
 function synthesizePlan(prompt: string, systemPrompt: string): string {
   const trimmed = prompt.trim();
-  const preview = trimmed.length > MAX_PREVIEW_CHARS
-    ? `${trimmed.slice(0, MAX_PREVIEW_CHARS)}…`
-    : trimmed;
+  const preview =
+    trimmed.length > MAX_PREVIEW_CHARS ? `${trimmed.slice(0, MAX_PREVIEW_CHARS)}…` : trimmed;
 
   const verbs = ["review", "fix", "fixes", "triage", "draft", "scan", "check", "deploy", "merge"];
   const lower = trimmed.toLowerCase();
@@ -72,12 +71,14 @@ export const dryRunLocal: ServerAdapterModule = {
     status: "ready",
   },
   async execute(ctx) {
-    const prompt = typeof ctx.context === "object" && ctx.context !== null && "prompt" in ctx.context
-      ? String((ctx.context as { prompt: unknown }).prompt ?? "")
-      : "";
-    const systemPrompt = typeof ctx.context === "object" && ctx.context !== null && "systemPrompt" in ctx.context
-      ? String((ctx.context as { systemPrompt: unknown }).systemPrompt ?? "")
-      : "";
+    const prompt =
+      typeof ctx.context === "object" && ctx.context !== null && "prompt" in ctx.context
+        ? String((ctx.context as { prompt: unknown }).prompt ?? "")
+        : "";
+    const systemPrompt =
+      typeof ctx.context === "object" && ctx.context !== null && "systemPrompt" in ctx.context
+        ? String((ctx.context as { systemPrompt: unknown }).systemPrompt ?? "")
+        : "";
     const plan = synthesizePlan(prompt, systemPrompt);
 
     const sessionId = shortId("dry");
@@ -86,11 +87,14 @@ export const dryRunLocal: ServerAdapterModule = {
     // UI / session_events table see the same shape they'd see for a
     // real run.
     if (ctx.onLog) {
-      await ctx.onLog("stdout", JSON.stringify({
-        kind: "assistant",
-        ts: new Date().toISOString(),
-        text: plan,
-      }) + "\n");
+      await ctx.onLog(
+        "stdout",
+        JSON.stringify({
+          kind: "assistant",
+          ts: new Date().toISOString(),
+          text: plan,
+        }) + "\n",
+      );
     }
     if (ctx.onMeta) {
       await ctx.onMeta({ adapter: "dry_run_local", model: "dry-run", provider: "aaspai" });

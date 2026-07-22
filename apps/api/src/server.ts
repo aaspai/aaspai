@@ -20,13 +20,18 @@
  * via @aaspai/sessions. This is the same write pattern the CLI uses
  * today — the api is just a different entry point.
  */
+
+import {
+  closeDefaultDb,
+  getDefaultDb,
+  sessions as sessionsTable,
+  wakeups as wakeupsTable,
+} from "@aaspai/db";
+import { getLogger } from "@aaspai/observability";
 import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
-import { getDefaultDb, closeDefaultDb } from "@aaspai/db";
-import { wakeups as wakeupsTable, sessions as sessionsTable } from "@aaspai/db";
-import { getLogger } from "@aaspai/observability";
 import { eq } from "drizzle-orm";
+import { Hono } from "hono";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerLoopRoutes } from "./routes/loops.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
@@ -79,4 +84,4 @@ export async function startServer(opts: ApiOptions = {}): Promise<RunningServer>
   };
 }
 
-export { getDefaultDb, wakeupsTable, sessionsTable, eq };
+export { eq, getDefaultDb, sessionsTable, wakeupsTable };

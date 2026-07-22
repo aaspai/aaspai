@@ -18,12 +18,13 @@
  *   AASPAI_TICK_INTERVAL_MS (default: 60000)
  *   AASPAI_WAKEUP_POLL_INTERVAL_MS (default: 5000)
  */
-import { writeFile, readFile, unlink, mkdir, open } from "node:fs/promises";
+
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawn } from "node:child_process";
 import { WorkerDaemon } from "./daemon.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -75,17 +76,11 @@ async function cmdStart(args: string[]): Promise<void> {
     // workspaces hoist to the repo root, so this works even from the
     // user's CWD. On Windows, --import needs a proper file:// URL.
     const tsxLoaderPath = _require.resolve("tsx");
-    const tsxSpecifier = process.platform === "win32"
-      ? pathToFileURL(tsxLoaderPath).href
-      : tsxLoaderPath;
+    const tsxSpecifier =
+      process.platform === "win32" ? pathToFileURL(tsxLoaderPath).href : tsxLoaderPath;
     const child = spawn(
       process.execPath,
-      [
-        "--import",
-        tsxSpecifier,
-        resolve(__dirname, "main.ts"),
-        "start",
-      ],
+      ["--import", tsxSpecifier, resolve(__dirname, "main.ts"), "start"],
       {
         cwd: process.cwd(),
         env: process.env,
@@ -110,7 +105,11 @@ async function cmdStart(args: string[]): Promise<void> {
   const shutdown = async (signal: string) => {
     console.log(`\nReceived ${signal}, shutting down...`);
     await worker.stop();
-    try { await unlink(PID_FILE); } catch { /* ignore */ }
+    try {
+      await unlink(PID_FILE);
+    } catch {
+      /* ignore */
+    }
     process.exit(0);
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
@@ -132,7 +131,11 @@ async function cmdStop(): Promise<void> {
   }
   if (!isRunning(pid)) {
     console.log("worker pid file is stale; cleaning up");
-    try { await unlink(PID_FILE); } catch { /* ignore */ }
+    try {
+      await unlink(PID_FILE);
+    } catch {
+      /* ignore */
+    }
     return;
   }
   console.log(`stopping worker (pid ${pid})...`);
@@ -149,7 +152,11 @@ async function cmdStop(): Promise<void> {
   } catch (err) {
     console.error(`failed to kill pid ${pid}: ${(err as Error).message}`);
   }
-  try { await unlink(PID_FILE); } catch { /* ignore */ }
+  try {
+    await unlink(PID_FILE);
+  } catch {
+    /* ignore */
+  }
   console.log("worker stopped");
 }
 

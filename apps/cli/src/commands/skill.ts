@@ -1,6 +1,6 @@
+import { SkillRegistry } from "@aaspai/skills";
 import { Command } from "commander";
 import pc from "picocolors";
-import { SkillRegistry } from "@aaspai/skills";
 
 export function skillCommand(): Command {
   const cmd = new Command("skill").description("Skill operations");
@@ -16,7 +16,9 @@ export function skillCommand(): Command {
       const r = registry();
       const skills = r.list();
       if (skills.length === 0) {
-        console.log(pc.yellow("No skills registered. Use `aaspai skill register <path>` to add one."));
+        console.log(
+          pc.yellow("No skills registered. Use `aaspai skill register <path>` to add one."),
+        );
         return;
       }
       console.log(pc.cyan(`Skills (${skills.length})`));

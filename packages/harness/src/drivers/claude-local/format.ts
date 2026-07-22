@@ -8,7 +8,9 @@ import pc from "picocolors";
 export function formatClaudeTranscriptEntry(entry: TranscriptEntry): string {
   switch (entry.kind) {
     case "init":
-      return pc.blue(`[init]${entry.model ? ` model=${entry.model}` : ""}${entry.sessionId ? ` session=${entry.sessionId}` : ""}`);
+      return pc.blue(
+        `[init]${entry.model ? ` model=${entry.model}` : ""}${entry.sessionId ? ` session=${entry.sessionId}` : ""}`,
+      );
     case "assistant":
       return entry.text;
     case "thinking":
@@ -23,7 +25,9 @@ export function formatClaudeTranscriptEntry(entry: TranscriptEntry): string {
       return `${head} ${entry.output ?? ""}`;
     }
     case "result":
-      return pc.blue(`[result]${entry.summary ? ` ${entry.summary}` : ""}${entry.isError ? " (error)" : ""}`);
+      return pc.blue(
+        `[result]${entry.summary ? ` ${entry.summary}` : ""}${entry.isError ? " (error)" : ""}`,
+      );
     case "stderr":
       return pc.red(`[stderr] ${entry.text}`);
     case "system":

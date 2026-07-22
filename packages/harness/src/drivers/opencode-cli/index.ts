@@ -19,10 +19,15 @@
  *   OPENCODE_CLI_DIR (default: process.cwd() — set this if the agent
  *                     should run in a specific worktree)
  */
-import { spawn, execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { HARNESS_PROTOCOL_VERSION, type AdapterExecutionContext, type AdapterExecutionResult, type ServerAdapterModule } from "@aaspai/contracts/harness";
+import { promisify } from "node:util";
+import {
+  type AdapterExecutionContext,
+  type AdapterExecutionResult,
+  HARNESS_PROTOCOL_VERSION,
+  type ServerAdapterModule,
+} from "@aaspai/contracts/harness";
 import { getLogger } from "@aaspai/observability";
 
 const log = getLogger("harness.opencode-cli");
@@ -115,7 +120,10 @@ async function resolveOpencodeBinary(): Promise<string> {
     const exec = promisify(execFile);
     const cmd = process.platform === "win32" ? "where" : "which";
     const { stdout } = await exec(cmd, [exe]);
-    const first = stdout.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);
+    const first = stdout
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .find((s) => s.length > 0);
     if (first) {
       cachedOpencodePath = first;
       return cachedOpencodePath;
@@ -145,15 +153,7 @@ async function runOpencodeCli(
   const cli = await resolveOpencodeBinary();
   const workdir = process.env.OPENCODE_CLI_DIR ?? process.cwd();
 
-  const args = [
-    "run",
-    "--format",
-    "json",
-    "--model",
-    model,
-    "--title",
-    title,
-  ];
+  const args = ["run", "--format", "json", "--model", model, "--title", title];
   // The opencode CLI accepts the prompt either as a positional arg
   // (useful when shell-handling is brittle) or via stdin. We use
   // positional when the binary is a .cmd shim, stdin when it's the
@@ -194,20 +194,32 @@ async function runOpencodeCli(
     const timer = setTimeout(() => {
       timedOut = true;
       log.warn("opencode cli timeout, killing", { cli, timeoutMs: CLI_TIMEOUT_MS });
-      try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* ignore */
+      }
       setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch { /* ignore */ }
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* ignore */
+        }
         // If even SIGKILL doesn't work, resolve with what we have so
         // the session doesn't hang the worker.
-        setTimeout(() => resolve({
-          sessionId: undefined,
-          text: textParts.join(""),
-          inputTokens,
-          outputTokens,
-          cost,
-          exitCode: -1,
-          timedOut: true,
-        }), 1000);
+        setTimeout(
+          () =>
+            resolve({
+              sessionId: undefined,
+              text: textParts.join(""),
+              inputTokens,
+              outputTokens,
+              cost,
+              exitCode: -1,
+              timedOut: true,
+            }),
+          1000,
+        );
       }, 5_000);
     }, CLI_TIMEOUT_MS);
     timer.unref();
@@ -216,9 +228,8 @@ async function runOpencodeCli(
       const s = chunk.toString("utf8");
       stdoutBuf += s;
       // opencode --format json emits one JSON event per line
-      let nl: number;
-      // eslint-disable-next-line no-cond-assign
-      while ((nl = stdoutBuf.indexOf("\n")) >= 0) {
+      let nl = stdoutBuf.indexOf("\n");
+      while (nl >= 0) {
         const line = stdoutBuf.slice(0, nl);
         stdoutBuf = stdoutBuf.slice(nl + 1);
         if (line.trim().length === 0) continue;
@@ -242,26 +253,32 @@ async function runOpencodeCli(
     // positional arg above, which works on all platforms.
     if (child.stdin) {
       child.stdin.on("error", () => {});
-      try { child.stdin.destroy(); } catch { /* ignore */ }
+      try {
+        child.stdin.destroy();
+      } catch {
+        /* ignore */
+      }
     }
 
-
-    function handleEvent(
-      ev: OpenCodeEvent,
-      cb: typeof onLog,
-    ): void {
+    function handleEvent(ev: OpenCodeEvent, cb: typeof onLog): void {
       if (ev.sessionID) sessionId = ev.sessionID;
       if (ev.type === "text" && ev.part?.type === "text" && typeof ev.part.text === "string") {
         textParts.push(ev.part.text);
-        void cb?.("stdout", JSON.stringify({
-          kind: "assistant",
-          ts: new Date().toISOString(),
-          text: ev.part.text,
-        }) + "\n");
+        void cb?.(
+          "stdout",
+          JSON.stringify({
+            kind: "assistant",
+            ts: new Date().toISOString(),
+            text: ev.part.text,
+          }) + "\n",
+        );
       } else if (ev.type === "step_finish" && ev.part?.tokens) {
         const tokens = ev.part.tokens as {
-          total?: number; input?: number; output?: number;
-          reasoning?: number; cache?: { write?: number; read?: number };
+          total?: number;
+          input?: number;
+          output?: number;
+          reasoning?: number;
+          cache?: { write?: number; read?: number };
         };
         if (typeof tokens.input === "number") inputTokens = Math.max(inputTokens, tokens.input);
         if (typeof tokens.output === "number") outputTokens = Math.max(outputTokens, tokens.output);
@@ -274,19 +291,25 @@ async function runOpencodeCli(
           const c = ev.part.cost as number;
           cost = Math.max(cost, c);
         }
-        void cb?.("stdout", JSON.stringify({
-          kind: "result",
-          ts: new Date().toISOString(),
-          summary: textParts.join("").slice(0, 200),
-          tokens,
-          cost,
-        }) + "\n");
+        void cb?.(
+          "stdout",
+          JSON.stringify({
+            kind: "result",
+            ts: new Date().toISOString(),
+            summary: textParts.join("").slice(0, 200),
+            tokens,
+            cost,
+          }) + "\n",
+        );
       } else {
-        void cb?.("stdout", JSON.stringify({
-          kind: "init",
-          ts: new Date().toISOString(),
-          event: ev.type,
-        }) + "\n");
+        void cb?.(
+          "stdout",
+          JSON.stringify({
+            kind: "init",
+            ts: new Date().toISOString(),
+            event: ev.type,
+          }) + "\n",
+        );
       }
     }
 
@@ -301,7 +324,9 @@ async function runOpencodeCli(
         try {
           const ev = JSON.parse(stdoutBuf) as OpenCodeEvent;
           handleEvent(ev, onLog);
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       resolve({
         sessionId,
@@ -352,9 +377,10 @@ export const opencodeCli: ServerAdapterModule = {
   },
   async execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
     const config = resolveConfig(ctx);
-    const prompt = typeof ctx.context === "object" && ctx.context !== null && "prompt" in ctx.context
-      ? String((ctx.context as { prompt: unknown }).prompt ?? "")
-      : "";
+    const prompt =
+      typeof ctx.context === "object" && ctx.context !== null && "prompt" in ctx.context
+        ? String((ctx.context as { prompt: unknown }).prompt ?? "")
+        : "";
 
     if (ctx.onMeta) {
       await ctx.onMeta({
@@ -389,10 +415,16 @@ export const opencodeCli: ServerAdapterModule = {
       model: config.model,
       summary: cliResult.text.slice(0, 500),
       clearSession: false,
-      errorCode: cliResult.timedOut ? "timeout" : (cliResult.exitCode !== 0 ? "opencode_cli_failed" : undefined),
+      errorCode: cliResult.timedOut
+        ? "timeout"
+        : cliResult.exitCode !== 0
+          ? "opencode_cli_failed"
+          : undefined,
       errorFamily: cliResult.timedOut
         ? "transient_upstream"
-        : (cliResult.exitCode !== 0 ? "internal" : undefined),
+        : cliResult.exitCode !== 0
+          ? "internal"
+          : undefined,
     };
   },
   async testEnvironment() {
@@ -404,9 +436,7 @@ export const opencodeCli: ServerAdapterModule = {
       const { stdout } = await exec(cli, ["--version"]);
       return {
         ok: true,
-        checks: [
-          { name: "opencode_cli", level: "info", message: `${cli} ${stdout.trim()}` },
-        ],
+        checks: [{ name: "opencode_cli", level: "info", message: `${cli} ${stdout.trim()}` }],
       };
     } catch (err) {
       return {

@@ -1,11 +1,13 @@
+import { nonNegativeIntegerSchema, positiveIntegerSchema } from "@aaspai/contracts/primitives";
 import { z } from "zod";
-import {
-  positiveIntegerSchema,
-  nonNegativeIntegerSchema,
-} from "@aaspai/contracts/primitives";
 
 const claudeEffortSchema = z.enum(["low", "medium", "high"]);
-const claudePermissionModeSchema = z.enum(["default", "accept-edits", "bypass-permissions", "plan"]);
+const claudePermissionModeSchema = z.enum([
+  "default",
+  "accept-edits",
+  "bypass-permissions",
+  "plan",
+]);
 const claudeEngineSchema = z.enum(["auto", "cli", "acp"]);
 
 export const claudeLocalConfigSchema = z

@@ -1,15 +1,21 @@
 /**
  * Common helpers for the CLI commands.
  */
-import { readFile, writeFile, mkdir, access } from "node:fs/promises";
+
 import { existsSync } from "node:fs";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import pc from "picocolors";
 
 export { pc };
 
 export async function fileExists(path: string): Promise<boolean> {
-  try { await access(path); return true; } catch { return false; }
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function ensureDir(path: string): Promise<void> {
@@ -26,7 +32,10 @@ export async function writeText(path: string, content: string): Promise<void> {
 }
 
 export function table(rows: ReadonlyArray<readonly [string, string]>): string {
-  const widths = rows.reduce((acc, row) => row.map((cell, i) => Math.max(acc[i] ?? 0, cell.length)), Array.from({ length: rows[0]?.length ?? 0 }, () => 0));
+  const widths = rows.reduce(
+    (acc, row) => row.map((cell, i) => Math.max(acc[i] ?? 0, cell.length)),
+    Array.from({ length: rows[0]?.length ?? 0 }, () => 0),
+  );
   return rows.map((row) => row.map((cell, i) => cell.padEnd(widths[i] ?? 0)).join("  ")).join("\n");
 }
 

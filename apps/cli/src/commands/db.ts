@@ -1,8 +1,17 @@
+import {
+  auditEvents,
+  budgetLedger,
+  closeDefaultDb,
+  detectBackend,
+  getDefaultDb,
+  loops,
+  sessionEvents,
+  sessions,
+  wakeups,
+} from "@aaspai/db";
 import { Command } from "commander";
-import pc from "picocolors";
-import { detectBackend, getDefaultDb, closeDefaultDb } from "@aaspai/db";
-import { loops, wakeups, sessions, sessionEvents, budgetLedger, auditEvents } from "@aaspai/db";
 import { sql } from "drizzle-orm";
+import pc from "picocolors";
 
 export function dbCommand(): Command {
   const cmd = new Command("db").description("Database operations");
@@ -29,7 +38,14 @@ export function dbCommand(): Command {
         console.log(`  url:      ${url}`);
         console.log("");
         console.log("  tables:");
-        const labels = ["loops", "wakeups", "sessions", "session_events", "budget_ledger", "audit_events"];
+        const labels = [
+          "loops",
+          "wakeups",
+          "sessions",
+          "session_events",
+          "budget_ledger",
+          "audit_events",
+        ];
         for (let i = 0; i < labels.length; i++) {
           const n = counts[i] ?? 0;
           const label = labels[i] ?? "";
@@ -171,7 +187,13 @@ async function ensureMigrated(): Promise<void> {
 
 async function safeCount(db: unknown, table: unknown): Promise<number> {
   try {
-    const result = await (db as { select: (cols: unknown) => { from: (t: unknown) => { all: () => Promise<Array<{ c: number }>> } } })
+    const result = await (
+      db as {
+        select: (cols: unknown) => {
+          from: (t: unknown) => { all: () => Promise<Array<{ c: number }>> };
+        };
+      }
+    )
       .select({ c: sql<number>`count(*)` })
       .from(table)
       .all();

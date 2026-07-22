@@ -5,8 +5,9 @@
  * minimatch with `dot: true` so denylists correctly match dotfiles
  * (a common subtle bug).
  */
-import { minimatch } from "minimatch";
+
 import type { GateAction, GatePolicy } from "@aaspai/contracts/phase2";
+import { minimatch } from "minimatch";
 
 export type GateCheckInput = {
   action: string;
@@ -15,7 +16,12 @@ export type GateCheckInput = {
 
 export type GateCheckResult =
   | { ok: true; action: GateAction }
-  | { ok: false; reason: "denied_path" | "path_not_allowed" | "action_disallowed" | "max_files"; matchedPath?: string; requiresApproval?: "human" | "operator" | "supervisor" };
+  | {
+      ok: false;
+      reason: "denied_path" | "path_not_allowed" | "action_disallowed" | "max_files";
+      matchedPath?: string;
+      requiresApproval?: "human" | "operator" | "supervisor";
+    };
 
 export class Gate {
   constructor(private readonly policy: GatePolicy) {}

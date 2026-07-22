@@ -10,26 +10,19 @@ import {
 } from "../src/primitives";
 
 describe("contract primitives", () => {
-  it.each([
-    null,
-    true,
-    "text",
-    42,
-    ["nested", 1, false, null],
-    { nested: { values: [1, 2, 3] } },
-  ])("accepts JSON-safe value %#", (value) => {
-    expect(jsonValueSchema.parse(value)).toEqual(value);
-  });
+  it.each([null, true, "text", 42, ["nested", 1, false, null], { nested: { values: [1, 2, 3] } }])(
+    "accepts JSON-safe value %#",
+    (value) => {
+      expect(jsonValueSchema.parse(value)).toEqual(value);
+    },
+  );
 
-  it.each([
-    undefined,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    () => undefined,
-    Symbol("x"),
-  ])("rejects non-JSON value %#", (value) => {
-    expect(jsonValueSchema.safeParse(value).success).toBe(false);
-  });
+  it.each([undefined, Number.NaN, Number.POSITIVE_INFINITY, () => undefined, Symbol("x")])(
+    "rejects non-JSON value %#",
+    (value) => {
+      expect(jsonValueSchema.safeParse(value).success).toBe(false);
+    },
+  );
 
   it("rejects non-plain and excessively deep JSON values", () => {
     const root: Record<string, unknown> = {};

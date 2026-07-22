@@ -200,16 +200,14 @@ export const adapterExecutionContextSchema = z
       )
       .optional(),
     onRuntimeProgress: z
-      .custom<(update: unknown) => Promise<void> | void>(
-        (v) => typeof v === "function",
-        { message: "onRuntimeProgress must be a function" },
-      )
+      .custom<(update: unknown) => Promise<void> | void>((v) => typeof v === "function", {
+        message: "onRuntimeProgress must be a function",
+      })
       .optional(),
     onSpawn: z
-      .custom<(meta: { pid: number }) => Promise<void> | void>(
-        (v) => typeof v === "function",
-        { message: "onSpawn must be a function" },
-      )
+      .custom<(meta: { pid: number }) => Promise<void> | void>((v) => typeof v === "function", {
+        message: "onSpawn must be a function",
+      })
       .optional(),
   })
   .strict();

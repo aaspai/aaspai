@@ -5,14 +5,15 @@
  * lands in Phase 4 (adds a `worker_leader_lease` table + the same
  * `INSERT ... ON CONFLICT DO UPDATE WHERE ...` pattern as suna).
  */
-import cronParser from "cron-parser";
-import { getDefaultDb } from "@aaspai/db";
-import { wakeups as wakeupsTable, type WakeupInsert } from "@aaspai/db/schema/phase2";
-import { getLogger } from "@aaspai/observability";
-import type { Trigger, LoopPattern, Wakeup } from "@aaspai/contracts/phase2";
+
 import { randomUUID } from "node:crypto";
-import type { PatternRegistry } from "./pattern.js";
+import type { LoopPattern, Trigger, Wakeup } from "@aaspai/contracts/phase2";
+import { getDefaultDb } from "@aaspai/db";
+import { type WakeupInsert, wakeups as wakeupsTable } from "@aaspai/db/schema/phase2";
+import { getLogger } from "@aaspai/observability";
+import cronParser from "cron-parser";
 import type { KillSwitch } from "./kill-switch.js";
+import type { PatternRegistry } from "./pattern.js";
 
 const log = getLogger("loops.scheduler");
 

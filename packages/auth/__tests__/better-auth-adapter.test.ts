@@ -1,19 +1,23 @@
-import { describe, expect, it } from "vitest";
 import {
   type BetterAuthApiKeyIdentity,
-  type BetterAuthSessionRecord,
   type BetterAuthSessionApi,
+  type BetterAuthSessionRecord,
   createBetterAuthVerifier,
 } from "@aaspai/auth/better-auth-adapter";
 import { authPrincipalSchema } from "@aaspai/contracts";
 import { describeAuthVerifierContract } from "@aaspai/testing/contracts";
+import { describe, expect, it } from "vitest";
 
 /** A no-network session stub. Configure `getSession` per test. */
-function makeSessionApi(impl: (input: { headers: Headers }) => Promise<unknown>): BetterAuthSessionApi {
+function makeSessionApi(
+  impl: (input: { headers: Headers }) => Promise<unknown>,
+): BetterAuthSessionApi {
   return { getSession: impl };
 }
 
-function apiKeyIdentity(overrides: Partial<BetterAuthApiKeyIdentity> = {}): BetterAuthApiKeyIdentity {
+function apiKeyIdentity(
+  overrides: Partial<BetterAuthApiKeyIdentity> = {},
+): BetterAuthApiKeyIdentity {
   return {
     apiKeyId: "key_abc",
     userId: "user_1",

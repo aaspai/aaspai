@@ -6,12 +6,17 @@ import type {
   UsageSummary,
 } from "@aaspai/contracts/harness";
 import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
-import { runProcess } from "../../shared/run-process.js";
 import { buildAgentEnv } from "../../shared/env.js";
-import { redactHomePath, redactCommandText } from "../../shared/redact.js";
-import { claudeLocalConfigSchema, claudeLocalInfo, parseClaudeLocalConfig, type ClaudeLocalConfig } from "./config.js";
-import { parseClaudeStreamLine } from "./parse.js";
+import { redactCommandText, redactHomePath } from "../../shared/redact.js";
+import { runProcess } from "../../shared/run-process.js";
 import type { ClaudeStreamEvent } from "./config.js";
+import {
+  type ClaudeLocalConfig,
+  claudeLocalConfigSchema,
+  claudeLocalInfo,
+  parseClaudeLocalConfig,
+} from "./config.js";
+import { parseClaudeStreamLine } from "./parse.js";
 
 const REDACTED_TEXT_VALUE = "[REDACTED]";
 
@@ -33,7 +38,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   try {
     config = parseClaudeLocalConfig(ctx.config);
   } catch (err) {
-    return buildErrorResult("config", "Invalid claude_local config", err instanceof Error ? err.message : String(err));
+    return buildErrorResult(
+      "config",
+      "Invalid claude_local config",
+      err instanceof Error ? err.message : String(err),
+    );
   }
   const command = config.command;
   const args = buildClaudeArgs(config, ctx);
@@ -105,8 +114,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     const ok = parsed as ClaudeStreamEvent;
     if (ok.session_id && !sessionId) sessionId = ok.session_id;
     if (ok.usage) {
-      if (typeof ok.usage.input_tokens === "number") collectedUsage.inputTokens = ok.usage.input_tokens;
-      if (typeof ok.usage.output_tokens === "number") collectedUsage.outputTokens = ok.usage.output_tokens;
+      if (typeof ok.usage.input_tokens === "number")
+        collectedUsage.inputTokens = ok.usage.input_tokens;
+      if (typeof ok.usage.output_tokens === "number")
+        collectedUsage.outputTokens = ok.usage.output_tokens;
       if (typeof ok.usage.cache_read_input_tokens === "number") {
         collectedUsage.cachedInputTokens = ok.usage.cache_read_input_tokens;
       }
@@ -175,9 +186,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 }
 
-export async function testEnvironment(
-  ctx: { config: unknown; cwd?: string },
-): Promise<{ ok: boolean; checks: { name: string; level: "info" | "warn" | "error"; message: string }[] }> {
+export async function testEnvironment(ctx: { config: unknown; cwd?: string }): Promise<{
+  ok: boolean;
+  checks: { name: string; level: "info" | "warn" | "error"; message: string }[];
+}> {
   const config = parseClaudeLocalConfig(ctx.config);
   const result = await runProcess({ command: config.command, args: ["--version"], cwd: ctx.cwd });
   const ok = result.exitCode === 0;
@@ -187,16 +199,15 @@ export async function testEnvironment(
       {
         name: "claude_cli",
         level: ok ? "info" : "error",
-        message: ok ? `claude found: ${result.stdout.trim()}` : `claude not found: ${result.stderr.trim() || "binary missing"}`,
+        message: ok
+          ? `claude found: ${result.stdout.trim()}`
+          : `claude not found: ${result.stderr.trim() || "binary missing"}`,
       },
     ],
   };
 }
 
-function buildClaudeArgs(
-  config: ClaudeLocalConfig,
-  ctx: AdapterExecutionContext,
-): string[] {
+function buildClaudeArgs(config: ClaudeLocalConfig, ctx: AdapterExecutionContext): string[] {
   const args: string[] = ["--output-format", "stream-json", "--verbose"];
   if (config.permissionMode) {
     args.push("--permission-mode", config.permissionMode);

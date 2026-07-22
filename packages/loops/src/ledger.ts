@@ -29,12 +29,20 @@ export class CircuitBreaker {
         let runLen = 1;
         for (let i = attempts.length - 2; i >= 0; i--) {
           const a = attempts[i]!;
-          if (a.outcome === "failure" && a.error && signatureSimilarity(sig, a.error.signature) >= 0.85) {
+          if (
+            a.outcome === "failure" &&
+            a.error &&
+            signatureSimilarity(sig, a.error.signature) >= 0.85
+          ) {
             runLen++;
           } else break;
         }
         if (runLen >= stagThreshold) {
-          return { kind: "escalate", reason: "stagnation", summary: `Same error signature repeated ${runLen} times` };
+          return {
+            kind: "escalate",
+            reason: "stagnation",
+            summary: `Same error signature repeated ${runLen} times`,
+          };
         }
       }
     }
@@ -44,17 +52,28 @@ export class CircuitBreaker {
     if (noProg > 0 && attempts.length >= noProg) {
       const lastN = attempts.slice(-noProg);
       if (lastN.every((a) => a.outcome === "failure")) {
-        return { kind: "escalate", reason: "no_progress", summary: `${noProg} consecutive failures` };
+        return {
+          kind: "escalate",
+          reason: "no_progress",
+          summary: `${noProg} consecutive failures`,
+        };
       }
     }
 
     // 3. Max iterations
     if (this.policy.maxIterations > 0 && attempts.length >= this.policy.maxIterations) {
-      return { kind: "escalate", reason: "max_iterations", summary: `Hit max iterations ${this.policy.maxIterations}` };
+      return {
+        kind: "escalate",
+        reason: "max_iterations",
+        summary: `Hit max iterations ${this.policy.maxIterations}`,
+      };
     }
 
     // 4. Budget (per-run from policy)
-    if (this.policy.budgetOverride?.perRun?.tokens && this.policy.budgetOverride.perRun.tokens > 0) {
+    if (
+      this.policy.budgetOverride?.perRun?.tokens &&
+      this.policy.budgetOverride.perRun.tokens > 0
+    ) {
       const cap = this.policy.budgetOverride.perRun.tokens;
       const used = attempts.reduce((s, a) => s + (a.tokensUsed ?? 0), 0);
       if (used >= cap) {

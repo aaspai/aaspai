@@ -15,16 +15,14 @@
  *   - Job queue (Phase 4 — for now we use the wakeups table directly)
  */
 import { randomUUID } from "node:crypto";
-import { getDefaultDb, closeDefaultDb } from "@aaspai/db";
-import { wakeups as wakeupsTable } from "@aaspai/db";
-import { FileAgentConfigSource, FileKnowledgeSource, FileLoopConfigSource } from "@aaspai/file-loader";
-import {
-  KillSwitch,
-  PatternRegistry,
-  Scheduler,
-  STARTER_PATTERNS,
-} from "@aaspai/loops";
 import type { LoopPattern } from "@aaspai/contracts/phase2";
+import { closeDefaultDb, getDefaultDb, wakeups as wakeupsTable } from "@aaspai/db";
+import {
+  FileAgentConfigSource,
+  FileKnowledgeSource,
+  FileLoopConfigSource,
+} from "@aaspai/file-loader";
+import { KillSwitch, PatternRegistry, Scheduler, STARTER_PATTERNS } from "@aaspai/loops";
 import { getLogger } from "@aaspai/observability";
 import { Sessions } from "@aaspai/sessions";
 import { eq } from "drizzle-orm";
@@ -64,7 +62,9 @@ export class WorkerDaemon {
     this.organizationId = opts.organizationId ?? "default";
 
     this.agentSource = new FileAgentConfigSource(process.env.AASPAI_AGENTS_DIR ?? "./agents");
-    this.knowledgeSource = new FileKnowledgeSource(process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge");
+    this.knowledgeSource = new FileKnowledgeSource(
+      process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
+    );
     this.loopSource = new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? "./loops");
     this.sessions = new Sessions({
       agentSource: this.agentSource,
@@ -103,16 +103,12 @@ export class WorkerDaemon {
 
     this.scheduler.start();
     this.tickHandle = setInterval(() => {
-      this.tickScheduler().catch((err) =>
-        log.error("scheduler tick failed", { err: String(err) }),
-      );
+      this.tickScheduler().catch((err) => log.error("scheduler tick failed", { err: String(err) }));
     }, this.tickIntervalMs);
     this.tickHandle.unref();
 
     this.pollHandle = setInterval(() => {
-      this.pollWakeups().catch((err) =>
-        log.error("wakeup poll failed", { err: String(err) }),
-      );
+      this.pollWakeups().catch((err) => log.error("wakeup poll failed", { err: String(err) }));
     }, this.wakeupPollIntervalMs);
     this.pollHandle.unref();
 
@@ -197,11 +193,9 @@ export class WorkerDaemon {
 
     const sessionId = `sess_${randomUUID()}`;
 
-    const wakeupRow = (await handle.db
-      .select()
-      .from(wakeupsTable)
-      .where(eq(wakeupsTable.id, wakeupId))
-      .limit(1))[0];
+    const wakeupRow = (
+      await handle.db.select().from(wakeupsTable).where(eq(wakeupsTable.id, wakeupId)).limit(1)
+    )[0];
 
     if (!wakeupRow) {
       log.warn("wakeup not found after claim", { wakeupId });
@@ -216,8 +210,9 @@ export class WorkerDaemon {
       return;
     }
 
-    const prompt = (payload as { prompt?: string }).prompt
-      ?? `Worker-triggered wakeup for ${wakeupRow.loopId} (${wakeupRow.reason ?? "no reason"})`;
+    const prompt =
+      (payload as { prompt?: string }).prompt ??
+      `Worker-triggered wakeup for ${wakeupRow.loopId} (${wakeupRow.reason ?? "no reason"})`;
 
     // Resolve the agent's adapter from its config. Falls back to the
     // loop's configured adapter, then to dry_run_local as a last resort.
@@ -231,7 +226,9 @@ export class WorkerDaemon {
         const loop = await this.loopSource.get(wakeupRow.loopId);
         const loopAdapter = (loop as unknown as { agentAdapter?: string } | null)?.agentAdapter;
         if (loopAdapter) adapterType = loopAdapter;
-      } catch { /* keep dry_run */ }
+      } catch {
+        /* keep dry_run */
+      }
     }
 
     log.info("running wakeup", { wakeupId, agentId, adapter: adapterType });
@@ -278,6 +275,9 @@ export class WorkerDaemon {
 
 function safeJsonParse(s: string | null): unknown {
   if (!s) return null;
-  try { return JSON.parse(s); } catch { return null; }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 }
-

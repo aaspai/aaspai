@@ -16,12 +16,7 @@ import {
 export const RUNTIME_PROTOCOL_VERSION = 1 as const;
 
 /** All execution target kinds known to the foundation. */
-export const EXECUTION_TARGET_KIND_VALUES = [
-  "local",
-  "docker",
-  "ssh",
-  "sandbox",
-] as const;
+export const EXECUTION_TARGET_KIND_VALUES = ["local", "docker", "ssh", "sandbox"] as const;
 export const executionTargetKindSchema = z.enum(EXECUTION_TARGET_KIND_VALUES);
 export type ExecutionTargetKind = z.infer<typeof executionTargetKindSchema>;
 
@@ -44,8 +39,14 @@ export const runProcessResultSchema = z
     exitCode: z.number().int().nullable(),
     signal: z.string().trim().min(1).max(32).optional(),
     timedOut: z.boolean().default(false),
-    stdout: z.string().max(16 * 1024 * 1024).default(""),
-    stderr: z.string().max(16 * 1024 * 1024).default(""),
+    stdout: z
+      .string()
+      .max(16 * 1024 * 1024)
+      .default(""),
+    stderr: z
+      .string()
+      .max(16 * 1024 * 1024)
+      .default(""),
     startedAt: isoTimestampSchema,
     finishedAt: isoTimestampSchema,
     durationMs: nonNegativeIntegerSchema,
@@ -61,7 +62,10 @@ export const runProcessOptionsSchema = z
     args: z.array(z.string().max(4_096)).max(256).default([]),
     cwd: z.string().trim().min(1).max(8_192).optional(),
     env: z.record(z.string(), z.string()).optional(),
-    stdin: z.string().max(16 * 1024 * 1024).optional(),
+    stdin: z
+      .string()
+      .max(16 * 1024 * 1024)
+      .optional(),
     timeoutMs: positiveIntegerSchema.optional(),
     onLog: z
       .custom<(stream: "stdout" | "stderr", chunk: string) => Promise<void> | void>(
@@ -175,9 +179,9 @@ export type RuntimeTargetInfo = z.infer<typeof runtimeTargetInfoSchema>;
 /** The 6-method client every sandbox provider implements. */
 export const sandboxClientSchema = z
   .object({
-    makeDir: z.custom<
-      (path: string, options?: { recursive?: boolean }) => Promise<void>
-    >((v) => typeof v === "function"),
+    makeDir: z.custom<(path: string, options?: { recursive?: boolean }) => Promise<void>>(
+      (v) => typeof v === "function",
+    ),
     writeFile: z.custom<(path: string, content: string | Uint8Array) => Promise<void>>(
       (v) => typeof v === "function",
     ),

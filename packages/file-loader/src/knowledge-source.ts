@@ -1,6 +1,12 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { knowledgeConceptSchema, type KnowledgeConcept, type KnowledgeSource, type ChangeEvent, type SourceDescriptor } from "@aaspai/contracts/phase2";
+import {
+  type ChangeEvent,
+  type KnowledgeConcept,
+  type KnowledgeSource,
+  knowledgeConceptSchema,
+  type SourceDescriptor,
+} from "@aaspai/contracts/phase2";
 import { getLogger } from "@aaspai/observability";
 import { FileWatcher } from "./chokidar-watcher.js";
 import { parseOkfFile, sha256HexSync } from "./okf-parser.js";
@@ -184,8 +190,10 @@ export class FileKnowledgeSource implements KnowledgeSource {
       timestamp: fm.timestamp as string,
       body: parsed.body,
       confidence: fm.confidence as "low" | "medium" | "high" | undefined,
-      appliesToAgents: (fm.appliesToAgents as string[]) ?? (fm.applies_to as { agents?: string[] })?.agents ?? [],
-      appliesToSkills: (fm.appliesToSkills as string[]) ?? (fm.applies_to as { skills?: string[] })?.skills ?? [],
+      appliesToAgents:
+        (fm.appliesToAgents as string[]) ?? (fm.applies_to as { agents?: string[] })?.agents ?? [],
+      appliesToSkills:
+        (fm.appliesToSkills as string[]) ?? (fm.applies_to as { skills?: string[] })?.skills ?? [],
       related: (fm.related as string[]) ?? [],
       lastUpdatedBy: (fm.lastUpdatedBy as string) ?? (fm.last_updated_by as string),
       lastUpdatedAt: (fm.lastUpdatedAt as string) ?? (fm.last_updated_at as string),

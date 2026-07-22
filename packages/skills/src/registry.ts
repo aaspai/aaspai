@@ -6,11 +6,11 @@
  * files) and the registry is in-memory. Phase 4 adds the DB-backed
  * implementation via the same `SkillSource` port.
  */
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { Skill } from "@aaspai/contracts/phase2";
 import { getLogger } from "@aaspai/observability";
 import { parseSkillFile, writeSkillFile } from "./parsers.js";
-import type { Skill } from "@aaspai/contracts/phase2";
 
 const log = getLogger("skills.registry");
 
@@ -61,7 +61,8 @@ export class SkillRegistry {
       let score = 0;
       if (skill.name.toLowerCase().includes(p)) score += 5;
       if (skill.description.toLowerCase().includes(p)) score += 3;
-      for (const tag of (skill.adapterTypes as string[])) if (tag.toLowerCase().includes(p)) score += 1;
+      for (const tag of skill.adapterTypes as string[])
+        if (tag.toLowerCase().includes(p)) score += 1;
       if (score > 0) scored.push({ score, skill });
     }
     scored.sort((a, b) => b.score - a.score);
@@ -98,7 +99,11 @@ export class SkillRegistry {
       }
     }
 
-    log.info("materialized skills", { adapter: opts.adapterType, written: written.length, errors: errors.length });
+    log.info("materialized skills", {
+      adapter: opts.adapterType,
+      written: written.length,
+      errors: errors.length,
+    });
     return { written, errors };
   }
 }

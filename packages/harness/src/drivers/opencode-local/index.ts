@@ -16,8 +16,14 @@
  *   maxTokens   (number, default 4096)
  *   systemPrompt (string, optional) — prepended to the request
  */
+
+import {
+  type AdapterExecutionContext,
+  type AdapterExecutionResult,
+  HARNESS_PROTOCOL_VERSION,
+  type ServerAdapterModule,
+} from "@aaspai/contracts/harness";
 import { z } from "zod";
-import { HARNESS_PROTOCOL_VERSION, type AdapterExecutionContext, type AdapterExecutionResult, type ServerAdapterModule } from "@aaspai/contracts/harness";
 
 const DEFAULT_BASE_URL = "https://api.opencode.ai/v1";
 const DEFAULT_MODEL = "gpt-4o-mini";
@@ -71,7 +77,12 @@ function resolveConfig(ctx: AdapterExecutionContext): OpenCodeConfig {
   };
   // Allow systemPrompt in the context (Sessions puts it there for the
   // foundation slice)
-  if (!merged.systemPrompt && ctx.context && typeof ctx.context === "object" && "systemPrompt" in ctx.context) {
+  if (
+    !merged.systemPrompt &&
+    ctx.context &&
+    typeof ctx.context === "object" &&
+    "systemPrompt" in ctx.context
+  ) {
     const sp = (ctx.context as { systemPrompt?: unknown }).systemPrompt;
     if (typeof sp === "string" && sp.length > 0) merged.systemPrompt = sp;
   }
@@ -120,9 +131,7 @@ async function callChatCompletions(
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(
-        `opencode API ${res.status} ${res.statusText}: ${text.slice(0, 1_000)}`,
-      );
+      throw new Error(`opencode API ${res.status} ${res.statusText}: ${text.slice(0, 1_000)}`);
     }
     return (await res.json()) as OpenCodeChatResponse;
   } finally {
@@ -151,9 +160,10 @@ export const opencodeLocal: ServerAdapterModule = {
     const apiKey = resolveApiKey(config.apiKey);
     const baseUrl = resolveBaseUrl(config.baseUrl);
 
-    const prompt = typeof ctx.context === "object" && ctx.context !== null && "prompt" in ctx.context
-      ? String((ctx.context as { prompt: unknown }).prompt ?? "")
-      : "";
+    const prompt =
+      typeof ctx.context === "object" && ctx.context !== null && "prompt" in ctx.context
+        ? String((ctx.context as { prompt: unknown }).prompt ?? "")
+        : "";
 
     const messages: OpenCodeMessage[] = [];
     if (config.systemPrompt) {
@@ -170,12 +180,15 @@ export const opencodeLocal: ServerAdapterModule = {
       });
     }
     if (ctx.onLog) {
-      await ctx.onLog("stdout", JSON.stringify({
-        kind: "init",
-        ts: startedAt.toISOString(),
-        model: config.model,
-        baseUrl,
-      }) + "\n");
+      await ctx.onLog(
+        "stdout",
+        JSON.stringify({
+          kind: "init",
+          ts: startedAt.toISOString(),
+          model: config.model,
+          baseUrl,
+        }) + "\n",
+      );
     }
 
     const response = await callChatCompletions(
@@ -191,21 +204,29 @@ export const opencodeLocal: ServerAdapterModule = {
     const text = choice?.message?.content ?? "";
     const finishReason = choice?.finish_reason ?? "stop";
     const usage = response.usage;
-    const inputTokens = usage?.prompt_tokens ?? estimateTokens(prompt) + (config.systemPrompt ? estimateTokens(config.systemPrompt) : 0);
+    const inputTokens =
+      usage?.prompt_tokens ??
+      estimateTokens(prompt) + (config.systemPrompt ? estimateTokens(config.systemPrompt) : 0);
     const outputTokens = usage?.completion_tokens ?? estimateTokens(text);
 
     if (ctx.onLog && text) {
-      await ctx.onLog("stdout", JSON.stringify({
-        kind: "assistant",
-        ts: new Date().toISOString(),
-        text,
-      }) + "\n");
-      await ctx.onLog("stdout", JSON.stringify({
-        kind: "result",
-        ts: new Date().toISOString(),
-        summary: text.slice(0, 200),
-        stopReason: finishReason,
-      }) + "\n");
+      await ctx.onLog(
+        "stdout",
+        JSON.stringify({
+          kind: "assistant",
+          ts: new Date().toISOString(),
+          text,
+        }) + "\n",
+      );
+      await ctx.onLog(
+        "stdout",
+        JSON.stringify({
+          kind: "result",
+          ts: new Date().toISOString(),
+          summary: text.slice(0, 200),
+          stopReason: finishReason,
+        }) + "\n",
+      );
     }
 
     const sessionId = `oc_${response.id ?? cryptoRandomShort()}`;
@@ -232,7 +253,11 @@ export const opencodeLocal: ServerAdapterModule = {
       return {
         ok: false,
         checks: [
-          { name: "opencode_api_key", level: "error", message: "OPENCODE_API_KEY is not set in the environment" },
+          {
+            name: "opencode_api_key",
+            level: "error",
+            message: "OPENCODE_API_KEY is not set in the environment",
+          },
         ],
       };
     }
@@ -240,14 +265,18 @@ export const opencodeLocal: ServerAdapterModule = {
       ok: true,
       checks: [
         { name: "opencode_api_key", level: "info", message: "OPENCODE_API_KEY is set" },
-        { name: "opencode_endpoint", level: "info", message: `endpoint: ${process.env.OPENCODE_BASE_URL ?? DEFAULT_BASE_URL}` },
+        {
+          name: "opencode_endpoint",
+          level: "info",
+          message: `endpoint: ${process.env.OPENCODE_BASE_URL ?? DEFAULT_BASE_URL}`,
+        },
       ],
     };
   },
 };
 
 export const opencodeLocalInfo = opencodeLocal.info;
-export { opencodeConfigSchema, type OpenCodeConfig };
+export { type OpenCodeConfig, opencodeConfigSchema };
 
 function cryptoRandomShort(): string {
   return Math.random().toString(36).slice(2, 10);

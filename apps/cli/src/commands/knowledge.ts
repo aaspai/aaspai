@@ -1,6 +1,6 @@
+import { FileKnowledgeSource } from "@aaspai/file-loader";
 import { Command } from "commander";
 import pc from "picocolors";
-import { FileKnowledgeSource } from "@aaspai/file-loader";
 
 export function knowledgeCommand(): Command {
   const cmd = new Command("knowledge").description("Knowledge (OKF) operations");
@@ -67,7 +67,10 @@ export function knowledgeCommand(): Command {
     .action(async (path: string) => {
       const fs = await import("node:fs/promises");
       const nodePath = await import("node:path");
-      const fullPath = nodePath.join(process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge", `${path}.md`);
+      const fullPath = nodePath.join(
+        process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
+        `${path}.md`,
+      );
       const template = `---
 type: Doc
 title: "${path.split("/").pop()}"

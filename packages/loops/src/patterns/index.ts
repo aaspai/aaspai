@@ -5,10 +5,11 @@
  * discover and decide. The actual session execution is wired via
  * `LoopRunner` in Phase 3.
  */
-import type { DiscoverFn, DecideFn, ResolvedLoopPattern } from "../pattern.js";
+
 import type { LoopPattern, WorkItem } from "@aaspai/contracts/phase2";
-import dailyTriageDiscover from "./daily-triage/discover.js";
+import type { DecideFn, DiscoverFn, ResolvedLoopPattern } from "../pattern.js";
 import dailyTriageDecide from "./daily-triage/decide.js";
+import dailyTriageDiscover from "./daily-triage/discover.js";
 
 function noopDiscover(): DiscoverFn {
   return async () => [] as readonly WorkItem[];
@@ -51,37 +52,79 @@ export const DAILY_TRIAGE: ResolvedLoopPattern = {
 };
 
 export const PR_BABYSITTER: ResolvedLoopPattern = {
-  pattern: { ...STUB_PATTERN, id: "loop/pr-babysitter", title: "PR Babysitter", description: "Herd PRs through review/CI/rebase/merge.", timestamp: new Date().toISOString(), schedule: { kind: "interval", seconds: 900 } },
+  pattern: {
+    ...STUB_PATTERN,
+    id: "loop/pr-babysitter",
+    title: "PR Babysitter",
+    description: "Herd PRs through review/CI/rebase/merge.",
+    timestamp: new Date().toISOString(),
+    schedule: { kind: "interval", seconds: 900 },
+  },
   discover: noopDiscover(),
   decide: reportDecide(),
 };
 
 export const CI_SWEEPER: ResolvedLoopPattern = {
-  pattern: { ...STUB_PATTERN, id: "loop/ci-sweeper", title: "CI Sweeper", description: "React to red CI: classify (flake/regression/infra) → fix.", timestamp: new Date().toISOString(), schedule: { kind: "interval", seconds: 900 } },
+  pattern: {
+    ...STUB_PATTERN,
+    id: "loop/ci-sweeper",
+    title: "CI Sweeper",
+    description: "React to red CI: classify (flake/regression/infra) → fix.",
+    timestamp: new Date().toISOString(),
+    schedule: { kind: "interval", seconds: 900 },
+  },
   discover: noopDiscover(),
   decide: reportDecide(),
 };
 
 export const DEPENDENCY_SWEEPER: ResolvedLoopPattern = {
-  pattern: { ...STUB_PATTERN, id: "loop/dependency-sweeper", title: "Dependency Sweeper", description: "Patch + low-risk CVE bumps.", timestamp: new Date().toISOString(), schedule: { kind: "interval", seconds: 21600 } },
+  pattern: {
+    ...STUB_PATTERN,
+    id: "loop/dependency-sweeper",
+    title: "Dependency Sweeper",
+    description: "Patch + low-risk CVE bumps.",
+    timestamp: new Date().toISOString(),
+    schedule: { kind: "interval", seconds: 21600 },
+  },
   discover: noopDiscover(),
   decide: reportDecide(),
 };
 
 export const CHANGELOG_DRAFTER: ResolvedLoopPattern = {
-  pattern: { ...STUB_PATTERN, id: "loop/changelog-drafter", title: "Changelog Drafter", description: "Scan merged PRs → draft release notes.", timestamp: new Date().toISOString(), schedule: { kind: "interval", seconds: 86400 } },
+  pattern: {
+    ...STUB_PATTERN,
+    id: "loop/changelog-drafter",
+    title: "Changelog Drafter",
+    description: "Scan merged PRs → draft release notes.",
+    timestamp: new Date().toISOString(),
+    schedule: { kind: "interval", seconds: 86400 },
+  },
   discover: noopDiscover(),
   decide: reportDecide(),
 };
 
 export const POST_MERGE_CLEANUP: ResolvedLoopPattern = {
-  pattern: { ...STUB_PATTERN, id: "loop/post-merge-cleanup", title: "Post-Merge Cleanup", description: "After merges, scan for TODOs/dead code/stale flags.", timestamp: new Date().toISOString(), schedule: { kind: "interval", seconds: 21600 } },
+  pattern: {
+    ...STUB_PATTERN,
+    id: "loop/post-merge-cleanup",
+    title: "Post-Merge Cleanup",
+    description: "After merges, scan for TODOs/dead code/stale flags.",
+    timestamp: new Date().toISOString(),
+    schedule: { kind: "interval", seconds: 21600 },
+  },
   discover: noopDiscover(),
   decide: reportDecide(),
 };
 
 export const ISSUE_TRIAGE: ResolvedLoopPattern = {
-  pattern: { ...STUB_PATTERN, id: "loop/issue-triage", title: "Issue Triage", description: "Dedup + label + prioritize incoming issues.", timestamp: new Date().toISOString(), schedule: { kind: "interval", seconds: 7200 } },
+  pattern: {
+    ...STUB_PATTERN,
+    id: "loop/issue-triage",
+    title: "Issue Triage",
+    description: "Dedup + label + prioritize incoming issues.",
+    timestamp: new Date().toISOString(),
+    schedule: { kind: "interval", seconds: 7200 },
+  },
   discover: noopDiscover(),
   decide: reportDecide(),
 };

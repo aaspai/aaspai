@@ -7,16 +7,16 @@
  * Run `aaspai --help` for the full list.
  */
 import { Command } from "commander";
-import { initCommand } from "./commands/init.js";
-import { dbCommand } from "./commands/db.js";
 import { agentCommand } from "./commands/agent.js";
+import { dbCommand } from "./commands/db.js";
+import { initCommand } from "./commands/init.js";
 import { knowledgeCommand } from "./commands/knowledge.js";
 import { loopCommand } from "./commands/loop.js";
 import { sessionCommand } from "./commands/session.js";
 import { skillCommand } from "./commands/skill.js";
-import { toolCommand } from "./commands/tool.js";
-import { stateCommand } from "./commands/state.js";
 import { startCommand } from "./commands/start.js";
+import { stateCommand } from "./commands/state.js";
+import { toolCommand } from "./commands/tool.js";
 
 const program = new Command();
 

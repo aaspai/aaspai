@@ -1,26 +1,26 @@
-import { describe, expect, it } from "vitest";
 import {
-  EXECUTION_TARGET_KIND_VALUES,
-  SANDBOX_PROVIDER_VALUES,
-  RUNTIME_PROTOCOL_VERSION,
-  executionTargetSchema,
-  sandboxSpecSchema,
-  localExecutionTargetSchema,
+  buildSandboxNpmInstallCommand,
   dockerExecutionTargetSchema,
-  sshExecutionTargetSchema,
-  sandboxExecutionTargetSchema,
-  resolveTarget,
+  EXECUTION_TARGET_KIND_VALUES,
+  e2bTarget,
+  executionTargetSchema,
+  LocalSandboxClient,
   listRuntimeTargets,
   listSandboxProviders,
-  RUNTIME_REGISTRY_VERSION,
-  buildSandboxNpmInstallCommand,
+  localExecutionTargetSchema,
+  localTarget,
   preferredShellForSandbox,
+  RUNTIME_PROTOCOL_VERSION,
+  RUNTIME_REGISTRY_VERSION,
+  resolveTarget,
+  SANDBOX_PROVIDER_VALUES,
+  sandboxExecutionTargetSchema,
+  sandboxSpecSchema,
   shellCommandArgs,
   shellQuote,
-  localTarget,
-  e2bTarget,
+  sshExecutionTargetSchema,
 } from "@aaspai/runtime";
-import { LocalSandboxClient } from "@aaspai/runtime";
+import { describe, expect, it } from "vitest";
 
 describe("runtime contract", () => {
   it("exposes a stable protocol version", () => {
@@ -30,7 +30,9 @@ describe("runtime contract", () => {
   it("discriminates every execution target kind", () => {
     const def = executionTargetSchema.def as { discriminator?: string };
     expect(def.discriminator).toBe("kind");
-    expect(new Set(EXECUTION_TARGET_KIND_VALUES)).toEqual(new Set(["local", "docker", "ssh", "sandbox"]));
+    expect(new Set(EXECUTION_TARGET_KIND_VALUES)).toEqual(
+      new Set(["local", "docker", "ssh", "sandbox"]),
+    );
   });
 
   it("round-trips every execution target shape", () => {
@@ -123,13 +125,15 @@ describe("buildSandboxNpmInstallCommand", () => {
   it("emits an npm install script for a valid name", () => {
     const script = buildSandboxNpmInstallCommand("@anthropic-ai/claude-code");
     expect(script).toContain("install -g @anthropic-ai/claude-code");
-    expect(script).toContain('set -eu');
+    expect(script).toContain("set -eu");
   });
 });
 
 describe("LocalSandboxClient", () => {
   it("rejects kinds other than local", () => {
-    expect(() => resolveTarget({ kind: "docker", image: "node:22", network: "none" })).not.toThrow();
+    expect(() =>
+      resolveTarget({ kind: "docker", image: "node:22", network: "none" }),
+    ).not.toThrow();
   });
 
   it("runs a process through the local target", async () => {

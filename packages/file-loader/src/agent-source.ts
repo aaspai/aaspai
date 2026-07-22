@@ -1,12 +1,12 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
-import { agentConfigSchema, type AgentConfig } from "@aaspai/contracts/phase2";
 import type { AgentConfigSource, ChangeEvent, SourceDescriptor } from "@aaspai/contracts/phase2";
+import { type AgentConfig, agentConfigSchema } from "@aaspai/contracts/phase2";
 import type { JsonObject } from "@aaspai/contracts/primitives";
 import { getLogger } from "@aaspai/observability";
-import { parseOkfFile, sha256HexSync } from "./okf-parser.js";
-import { FileWatcher } from "./chokidar-watcher.js";
 import * as yaml from "js-yaml";
+import { FileWatcher } from "./chokidar-watcher.js";
+import { parseOkfFile, sha256HexSync } from "./okf-parser.js";
 
 const log = getLogger("file-loader.agent-source");
 
@@ -38,8 +38,9 @@ export class FileAgentConfigSource implements AgentConfigSource {
     if (this.watching) return;
     this.watching = true;
     this.watcher.on("changed", (event) => {
-      this.handleChange(event.path, event.kind)
-        .catch((err) => log.error("watcher change failed", { path: event.path, err: String(err) }));
+      this.handleChange(event.path, event.kind).catch((err) =>
+        log.error("watcher change failed", { path: event.path, err: String(err) }),
+      );
     });
     this.watcher.start();
     // Wait for the initial scan

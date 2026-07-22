@@ -1,7 +1,7 @@
 import type { TranscriptEntry } from "@aaspai/contracts/harness";
 import type { JsonObject } from "@aaspai/contracts/primitives";
 import { redactHomePath } from "../../shared/redact.js";
-import { claudeStreamEventSchema, type ClaudeStreamEvent } from "./config.js";
+import { type ClaudeStreamEvent, claudeStreamEventSchema } from "./config.js";
 
 /**
  * Parse a single line of Claude Code's `stream-json` output into zero
@@ -32,7 +32,14 @@ function claudeEventToTranscript(event: ClaudeStreamEvent, ts: string): Transcri
     case "system": {
       const sessionId = event.session_id;
       if (event.subtype === "init" || event.subtype === "session_start") {
-        return [{ kind: "init", ts, model: typeof event.message === "string" ? event.message : undefined, sessionId }];
+        return [
+          {
+            kind: "init",
+            ts,
+            model: typeof event.message === "string" ? event.message : undefined,
+            sessionId,
+          },
+        ];
       }
       return [{ kind: "system", ts, text: JSON.stringify(event.message ?? event) }];
     }
