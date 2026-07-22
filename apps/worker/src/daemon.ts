@@ -101,6 +101,8 @@ export class WorkerDaemon {
       loops: (await this.loopSource.list()).length,
     });
 
+    await this.recoverStaleClaims();
+
     this.scheduler.start();
     this.tickHandle = setInterval(() => {
       this.tickScheduler().catch((err) => log.error("scheduler tick failed", { err: String(err) }));
@@ -186,11 +188,27 @@ export class WorkerDaemon {
 
   private async claimAndRun(wakeupId: string): Promise<void> {
     const handle = getDefaultDb();
+
+    // Mark as claimed FIRST, so that if this worker is killed before
+    // the session row is created, the wakeup doesn't get re-claimed
+    // by another worker. The startup-time stale-claim recovery
+    // (recoverStaleClaims) will eventually move it to `failed` if
+    // it sits in `claimed` too long.
     await handle.db
       .update(wakeupsTable)
       .set({ status: "claimed", claimedAt: new Date().toISOString() } as never)
       .where(eq(wakeupsTable.id, wakeupId));
 
+    try {
+      await this.executeWakeup(wakeupId);
+    } catch (err) {
+      log.error("wakeup failed", { wakeupId, err: String(err) });
+      await this.markFailed(wakeupId, String((err as Error).message ?? err));
+    }
+  }
+
+  private async executeWakeup(wakeupId: string): Promise<void> {
+    const handle = getDefaultDb();
     const sessionId = `sess_${randomUUID()}`;
 
     const wakeupRow = (
@@ -270,6 +288,27 @@ export class WorkerDaemon {
         error: reason,
       } as never)
       .where(eq(wakeupsTable.id, wakeupId));
+  }
+
+  private async recoverStaleClaims(): Promise<void> {
+    const handle = getDefaultDb();
+    const staleMs = 5 * 60_000;
+    const cutoff = new Date(Date.now() - staleMs).toISOString();
+    const stale = await handle.db
+      .select()
+      .from(wakeupsTable)
+      .where(eq(wakeupsTable.status, "claimed"));
+
+    let recovered = 0;
+    for (const row of stale) {
+      if (!row.claimedAt) continue;
+      if (row.claimedAt > cutoff) continue;
+      await this.markFailed(row.id, "stale claim: worker died before completing wakeup");
+      recovered++;
+    }
+    if (recovered > 0) {
+      log.warn("recovered stale wakeup claims on startup", { recovered, staleMs });
+    }
   }
 }
 

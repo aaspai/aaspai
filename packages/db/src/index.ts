@@ -2,6 +2,7 @@
 // @aaspai/db so Drizzle remains owned by the persistence package rather than
 // leaking as a direct dependency into process applications.
 export { and, asc, count, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql } from "drizzle-orm";
+export { runMigrations } from "./migrations.js";
 export { type AuditAction, type AuditEventInput, audit, auditAsync } from "./audit-log";
 export type { Database } from "./client";
 export { closeDatabase, db, pingDatabase } from "./client";
