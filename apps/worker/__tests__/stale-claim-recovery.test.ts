@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@aaspai/observability", () => ({
   getLogger: () => ({
@@ -19,7 +19,16 @@ vi.mock("@aaspai/sessions", () => ({
   },
 }));
 
-async function setupDb(): Promise<{ tmpDir: string; wakeupsTable: unknown; handle: { db: { insert: (t: unknown) => { values: (v: unknown) => Promise<unknown> }; select: () => { from: (t: unknown) => { all: () => Promise<unknown[]> } } } } }> {
+async function setupDb(): Promise<{
+  tmpDir: string;
+  wakeupsTable: unknown;
+  handle: {
+    db: {
+      insert: (t: unknown) => { values: (v: unknown) => Promise<unknown> };
+      select: () => { from: (t: unknown) => { all: () => Promise<unknown[]> } };
+    };
+  };
+}> {
   const tmpDir = mkdtempSync(join(tmpdir(), "aaspai-recover-"));
   process.env.AASPAI_DB = `sqlite:${join(tmpDir, "state.db")}`;
   const { getDefaultDb, runMigrations, wakeups } = await import("@aaspai/db");
@@ -32,7 +41,9 @@ async function teardownDb(tmpDir: string): Promise<void> {
   try {
     const { closeDefaultDb } = await import("@aaspai/db");
     await closeDefaultDb();
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
   rmSync(tmpDir, { recursive: true, force: true });
   vi.resetModules();
 }
@@ -85,7 +96,11 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     });
     await (daemon as unknown as { recoverStaleClaims(): Promise<void> }).recoverStaleClaims();
 
-    const all = await (handle.db.select().from(wakeupsTable) as { all: () => Promise<Array<{ reason: string; status: string; error: string | null }>> }).all();
+    const all = await (
+      handle.db.select().from(wakeupsTable) as {
+        all: () => Promise<Array<{ reason: string; status: string; error: string | null }>>;
+      }
+    ).all();
     const stale = all.find((w) => w.reason === "test stale");
     const fresh = all.find((w) => w.reason === "test fresh");
     expect(stale?.status).toBe("failed");
@@ -128,7 +143,13 @@ describe("WorkerDaemon claimAndRun failure path (issue #2)", () => {
     });
     await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
 
-    const rows = await (handle.db.select().from(wakeupsTable) as { all: () => Promise<Array<{ id: string; status: string; error: string | null; sessionId: string | null }>> }).all();
+    const rows = await (
+      handle.db.select().from(wakeupsTable) as {
+        all: () => Promise<
+          Array<{ id: string; status: string; error: string | null; sessionId: string | null }>
+        >;
+      }
+    ).all();
     const row = rows.find((r) => r.id === wakeupId);
     expect(row?.status).toBe("failed");
     expect(row?.error).toMatch(/session exploded/);
@@ -136,4 +157,3 @@ describe("WorkerDaemon claimAndRun failure path (issue #2)", () => {
     await teardownDb(tmpDir);
   });
 });
-

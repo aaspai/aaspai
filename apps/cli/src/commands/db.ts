@@ -11,8 +11,8 @@ import {
   wakeups,
 } from "@aaspai/db";
 import { Command } from "commander";
-import pc from "picocolors";
 import { sql } from "drizzle-orm";
+import pc from "picocolors";
 
 export function dbCommand(): Command {
   const cmd = new Command("db").description("Database operations");
