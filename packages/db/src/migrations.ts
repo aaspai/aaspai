@@ -134,6 +134,7 @@ const SQLITE_STATEMENTS = [
     goal_id TEXT NOT NULL,
     project_id TEXT NOT NULL,
     repository_id TEXT NOT NULL,
+    workflow_run_id TEXT,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'proposed',
@@ -169,12 +170,30 @@ const SQLITE_STATEMENTS = [
     organization_id TEXT NOT NULL,
     goal_id TEXT NOT NULL,
     definition_revision_id TEXT NOT NULL,
+    source_type TEXT,
+    source_id TEXT,
     status TEXT NOT NULL DEFAULT 'queued',
     idempotency_key TEXT NOT NULL,
     started_at TEXT,
     finished_at TEXT,
     created_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS loop_outputs (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    loop_id TEXT NOT NULL,
+    workflow_run_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    severity TEXT,
+    work_item_id TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (workflow_run_id, kind, source_ref)
+  )`,
+  `CREATE INDEX IF NOT EXISTS loop_outputs_loop_time_idx
+    ON loop_outputs (organization_id, loop_id, created_at)`,
   `CREATE TABLE IF NOT EXISTS agent_attempts (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -327,6 +346,18 @@ const SQLITE_STATEMENTS = [
  * can run on every `db migrate` invocation.
  */
 const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'workflow_run_id'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN workflow_run_id TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'source_type'",
+    sql: "ALTER TABLE workflow_runs ADD COLUMN source_type TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'source_id'",
+    sql: "ALTER TABLE workflow_runs ADD COLUMN source_id TEXT",
+  },
   {
     check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'priority'",
     sql: "ALTER TABLE execution_work_items ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",

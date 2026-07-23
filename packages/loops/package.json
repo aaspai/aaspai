@@ -28,9 +28,9 @@
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
     "@aaspai/db": "workspace:*",
+    "@aaspai/execution": "workspace:*",
     "@aaspai/observability": "workspace:*",
     "@aaspai/runtime": "workspace:*",
-    "@aaspai/sessions": "workspace:*",
     "cron-parser": "^4.9.0",
     "minimatch": "^9.0.3"
   },

@@ -56,7 +56,9 @@ export class DependencyScheduler {
   async tick(input: SchedulerTickInput): Promise<SchedulerTickResult> {
     const now = (input.now ?? new Date()).toISOString();
     await this.store.reconcileExpiredLocks(now);
-    const items = await this.store.listWorkItems(input.organizationId, input.goalId);
+    const items = (await this.store.listWorkItems(input.organizationId, input.goalId)).filter(
+      (item) => item.workflowRunId === null || item.workflowRunId === input.workflowRunId,
+    );
     const dependencies = new Map<
       string,
       Awaited<ReturnType<ExecutionStore["listWorkItemDependencies"]>>

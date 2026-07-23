@@ -9,6 +9,7 @@ import type {
   ExecutionWorkItemDependency,
   ExecutionWorkspace,
   Goal,
+  LoopOutput,
   Project,
   Repository,
   ResourceLock,
@@ -24,6 +25,7 @@ import {
   executionWorkItemSchema,
   executionWorkspaceSchema,
   goalSchema,
+  loopOutputSchema,
   resourceLockSchema,
   workflowRunSchema,
 } from "@aaspai/contracts/execution";
@@ -66,6 +68,7 @@ import {
   sessions as harnessSessions,
   inArray,
   isNull,
+  loopOutputs,
   lte,
   projects,
   repositories,
@@ -118,6 +121,7 @@ export interface CreateWorkItemInput {
   goalId: string;
   projectId: string;
   repositoryId: string;
+  workflowRunId?: string | null;
   title: string;
   description?: string;
   definitionRevisionId?: string | null;
@@ -147,8 +151,23 @@ export interface CreateWorkflowRunInput {
   organizationId: string;
   goalId: string;
   definitionRevisionId: string;
+  sourceType?: string | null;
+  sourceId?: string | null;
   idempotencyKey: string;
   status?: WorkflowRun["status"];
+}
+
+export interface CreateLoopOutputInput {
+  id?: string;
+  organizationId: string;
+  loopId: string;
+  workflowRunId: string;
+  kind: LoopOutput["kind"];
+  sourceRef: string;
+  title: string;
+  body: string;
+  severity?: LoopOutput["severity"];
+  workItemId?: string | null;
 }
 
 export interface CreateAttemptInput {
@@ -319,6 +338,7 @@ export class ExecutionStore {
       goalId: input.goalId,
       projectId: input.projectId,
       repositoryId: input.repositoryId,
+      workflowRunId: input.workflowRunId ?? null,
       title: input.title,
       description: input.description ?? "",
       status: input.status ?? "proposed",
@@ -470,6 +490,8 @@ export class ExecutionStore {
       organizationId: input.organizationId,
       goalId: input.goalId,
       definitionRevisionId: input.definitionRevisionId,
+      sourceType: input.sourceType ?? null,
+      sourceId: input.sourceId ?? null,
       status: input.status ?? "queued",
       idempotencyKey: input.idempotencyKey,
       startedAt: null,
@@ -478,6 +500,84 @@ export class ExecutionStore {
     } satisfies typeof workflowRuns.$inferInsert;
     await this.db.insert(workflowRuns).values(row);
     return row;
+  }
+
+  async getWorkflowRunByIdempotency(
+    organizationId: string,
+    idempotencyKey: string,
+  ): Promise<WorkflowRun | null> {
+    const rows = await this.db
+      .select()
+      .from(workflowRuns)
+      .where(
+        and(
+          eq(workflowRuns.organizationId, organizationId),
+          eq(workflowRuns.idempotencyKey, idempotencyKey),
+        ),
+      )
+      .limit(1);
+    return rows[0] ? workflowRunSchema.parse(rows[0]) : null;
+  }
+
+  async createLoopOutput(input: CreateLoopOutputInput): Promise<LoopOutput> {
+    const existing = await this.db
+      .select()
+      .from(loopOutputs)
+      .where(
+        and(
+          eq(loopOutputs.workflowRunId, input.workflowRunId),
+          eq(loopOutputs.kind, input.kind),
+          eq(loopOutputs.sourceRef, input.sourceRef),
+        ),
+      )
+      .limit(1);
+    if (existing[0]) return loopOutputSchema.parse(existing[0]);
+    const row = {
+      id: input.id ?? makeId("loop_output"),
+      organizationId: input.organizationId,
+      loopId: input.loopId,
+      workflowRunId: input.workflowRunId,
+      kind: input.kind,
+      sourceRef: input.sourceRef,
+      title: input.title,
+      body: input.body,
+      severity: input.severity ?? null,
+      workItemId: input.workItemId ?? null,
+      createdAt: now(),
+    } satisfies typeof loopOutputs.$inferInsert;
+    try {
+      await this.db.insert(loopOutputs).values(row);
+    } catch (error) {
+      if (!/unique constraint failed/i.test(String((error as Error)?.message ?? error)))
+        throw error;
+      const raced = await this.db
+        .select()
+        .from(loopOutputs)
+        .where(
+          and(
+            eq(loopOutputs.workflowRunId, input.workflowRunId),
+            eq(loopOutputs.kind, input.kind),
+            eq(loopOutputs.sourceRef, input.sourceRef),
+          ),
+        )
+        .limit(1);
+      if (!raced[0]) throw error;
+      return loopOutputSchema.parse(raced[0]);
+    }
+    return loopOutputSchema.parse(row);
+  }
+
+  async listLoopOutputs(organizationId: string, loopId?: string): Promise<LoopOutput[]> {
+    const rows = await this.db
+      .select()
+      .from(loopOutputs)
+      .where(
+        loopId
+          ? and(eq(loopOutputs.organizationId, organizationId), eq(loopOutputs.loopId, loopId))
+          : eq(loopOutputs.organizationId, organizationId),
+      )
+      .orderBy(desc(loopOutputs.createdAt));
+    return rows.map((row) => loopOutputSchema.parse(row));
   }
 
   async getWorkflowRun(runId: string): Promise<WorkflowRun | null> {
@@ -600,6 +700,8 @@ export class ExecutionStore {
     const slots = await this.acquireSchedulerSlots({
       organizationId: workItem.organizationId,
       projectId: workItem.projectId,
+      repositoryId: workItem.repositoryId,
+      branchName: workItem.branchName,
       attemptId: created.id,
       organizationConcurrency: input.organizationConcurrency ?? 1,
       projectConcurrency: input.projectConcurrency ?? 1,
@@ -808,8 +910,7 @@ export class ExecutionStore {
 
   async startCheckerAttempt(attemptId: string): Promise<AgentAttempt> {
     const current = await this.getAttempt(attemptId);
-    if (!current || current.role !== "checker")
-      throw new Error(`Checker attempt ${attemptId} not found`);
+    if (current?.role !== "checker") throw new Error(`Checker attempt ${attemptId} not found`);
     if (current.status === "queued") await this.transitionAttempt(attemptId, "preparing");
     const preparing = await this.getAttempt(attemptId);
     if (preparing?.status === "preparing") await this.transitionAttempt(attemptId, "running");
@@ -828,7 +929,7 @@ export class ExecutionStore {
     const verification = await this.getVerification(input.verificationId);
     if (!verification) throw new Error(`Verification ${input.verificationId} not found`);
     const checker = await this.getAttempt(input.checkerAttemptId);
-    if (!checker || checker.role !== "checker" || checker.verificationId !== verification.id) {
+    if (checker?.role !== "checker" || checker.verificationId !== verification.id) {
       throw new Error("Checker attempt does not belong to verification");
     }
     const currentWorkItem = await this.getWorkItem(verification.workItemId);
@@ -1175,6 +1276,8 @@ export class ExecutionStore {
   private async acquireSchedulerSlots(input: {
     organizationId: string;
     projectId: string;
+    repositoryId: string;
+    branchName: string | null;
     attemptId: string;
     organizationConcurrency: number;
     projectConcurrency: number;
@@ -1212,6 +1315,20 @@ export class ExecutionStore {
       await this.releaseSchedulerLocks(input.attemptId);
       return null;
     }
+    if (input.branchName) {
+      const branchLock = await this.acquireResourceLock({
+        organizationId: input.organizationId,
+        resourceType: "branch",
+        resourceId: `${input.repositoryId}:${input.branchName}`,
+        ownerAttemptId: input.attemptId,
+        leaseExpiresAt,
+      });
+      if (!branchLock) {
+        await this.releaseSchedulerLocks(input.attemptId);
+        return null;
+      }
+      acquired.push(branchLock);
+    }
     return acquired;
   }
 
@@ -1222,7 +1339,7 @@ export class ExecutionStore {
       .where(
         and(
           eq(resourceLocks.ownerAttemptId, ownerAttemptId),
-          inArray(resourceLocks.resourceType, ["organization_slot", "project_slot"]),
+          inArray(resourceLocks.resourceType, ["organization_slot", "project_slot", "branch"]),
           isNull(resourceLocks.releasedAt),
         ),
       );

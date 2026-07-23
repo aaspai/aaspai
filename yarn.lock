@@ -229,9 +229,9 @@ __metadata:
   dependencies:
     "@aaspai/contracts": "workspace:*"
     "@aaspai/db": "workspace:*"
+    "@aaspai/execution": "workspace:*"
     "@aaspai/observability": "workspace:*"
     "@aaspai/runtime": "workspace:*"
-    "@aaspai/sessions": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@types/minimatch": "npm:^5.1.2"
     "@types/node": "npm:^24.0.0"

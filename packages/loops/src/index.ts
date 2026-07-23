@@ -2,12 +2,18 @@ export { BudgetEnforcer, type BudgetStatus, dailyWindow, monthlyWindow } from ".
 export { Gate, type GateCheckInput, type GateCheckResult } from "./gate.js";
 export { KillSwitch, type KillSwitchState } from "./kill-switch.js";
 export { CircuitBreaker, normalizeError, signatureSimilarity } from "./ledger.js";
-export { LoopRunner, type LoopRunnerOptions, type RunOutcome } from "./loop-runner.js";
+export {
+  type LoopExecutionLineage,
+  LoopRunner,
+  type LoopRunnerOptions,
+  type RunOutcome,
+} from "./loop-runner.js";
 export {
   type DecideFn,
   type DiscoverFn,
   PatternRegistry,
   type ResolvedLoopPattern,
+  type WorkItem,
 } from "./pattern.js";
 export {
   CHANGELOG_DRAFTER,
