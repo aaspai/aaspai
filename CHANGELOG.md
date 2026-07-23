@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Git-backed autonomy change requests** (`packages/git`, `packages/company`) — approved
+  autonomy proposals now produce isolated definition commits, pushed branches, and
+  pull requests through the local Git/GitHub CLI providers, with durable status and
+  organization-scoped API routes.
 - **Company operating extensions** (`packages/company`) — durable departments
   and membership, service-agent lifecycle and stale-heartbeat reconciliation,
   portable company export/import, and authenticated autonomy proposals with

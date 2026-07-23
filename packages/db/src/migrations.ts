@@ -494,6 +494,25 @@ const SQLITE_STATEMENTS = [
     ON autonomy_proposals (organization_id, status)`,
   `CREATE INDEX IF NOT EXISTS autonomy_proposals_target_idx
     ON autonomy_proposals (organization_id, target_type, target_id)`,
+  `CREATE TABLE IF NOT EXISTS autonomy_change_requests (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    proposal_id TEXT NOT NULL UNIQUE,
+    repository_id TEXT NOT NULL,
+    base_commit_sha TEXT NOT NULL,
+    branch_name TEXT NOT NULL,
+    target_path TEXT NOT NULL,
+    commit_sha TEXT,
+    pull_request_number INTEGER,
+    pull_request_url TEXT,
+    status TEXT NOT NULL DEFAULT 'preparing',
+    error TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS autonomy_change_requests_org_status_idx
+    ON autonomy_change_requests (organization_id, status)`,
 ];
 
 /**
