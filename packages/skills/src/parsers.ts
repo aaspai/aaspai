@@ -40,6 +40,9 @@ export async function loadSkillFile(path: string): Promise<ParsedFile<Skill>> {
 
 export async function writeSkillFile(path: string, skill: Skill): Promise<void> {
   const fm: Record<string, unknown> = {
+    type: "Skill",
+    title: skill.name,
+    timestamp: skill.updatedAt,
     key: skill.key,
     version: skill.version,
     name: skill.name,

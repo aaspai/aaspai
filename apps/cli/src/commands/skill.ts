@@ -1,19 +1,19 @@
-import { SkillRegistry } from "@aaspai/skills";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { loadSkillDirectory, loadSkillFile, writeSkillFile } from "@aaspai/skills";
 import { Command } from "commander";
 import pc from "picocolors";
 
 export function skillCommand(): Command {
   const cmd = new Command("skill").description("Skill operations");
 
-  function registry(): SkillRegistry {
-    return new SkillRegistry();
-  }
+  const root = () => process.env.AASPAI_SKILLS_DIR ?? "./skills";
 
   cmd
     .command("list")
     .description("List all registered skills")
-    .action(() => {
-      const r = registry();
+    .action(async () => {
+      const r = await loadSkillDirectory(root());
       const skills = r.list();
       if (skills.length === 0) {
         console.log(
@@ -30,8 +30,8 @@ export function skillCommand(): Command {
   cmd
     .command("show <key>")
     .description("Show skill definition")
-    .action((key: string) => {
-      const s = registry().get(key);
+    .action(async (key: string) => {
+      const s = (await loadSkillDirectory(root())).get(key);
       if (!s) {
         console.log(pc.red(`✗ Skill ${key} not found`));
         process.exit(3);
@@ -46,9 +46,10 @@ export function skillCommand(): Command {
     .command("register <path>")
     .description("Register a SKILL.md file")
     .action(async (path: string) => {
-      const { loadSkillFile } = await import("@aaspai/skills");
       const skill = await loadSkillFile(path);
-      registry().register(skill.frontmatter);
+      const target = join(root(), skill.frontmatter.key);
+      await mkdir(target, { recursive: true });
+      await writeSkillFile(join(target, "SKILL.md"), skill.frontmatter);
       console.log(pc.green(`✓ Registered ${skill.frontmatter.key}@${skill.frontmatter.version}`));
     });
 
