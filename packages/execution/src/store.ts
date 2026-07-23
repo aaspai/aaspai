@@ -11,6 +11,7 @@ import type {
   WorkflowRun,
 } from "@aaspai/contracts/execution";
 import {
+  agentAttemptSchema,
   assertValidAttemptTransition,
   executionWorkspaceSchema,
 } from "@aaspai/contracts/execution";
@@ -311,6 +312,15 @@ export class ExecutionStore {
     }
     await this.db.update(agentAttempts).set(update).where(eq(agentAttempts.id, attemptId));
     return { ...current, ...update };
+  }
+
+  async getAttempt(attemptId: string): Promise<AgentAttempt | null> {
+    const rows = await this.db
+      .select()
+      .from(agentAttempts)
+      .where(eq(agentAttempts.id, attemptId))
+      .limit(1);
+    return rows[0] ? agentAttemptSchema.parse(rows[0]) : null;
   }
 
   async createWorkspace(input: CreateWorkspaceInput) {

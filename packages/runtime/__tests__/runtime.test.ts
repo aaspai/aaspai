@@ -145,6 +145,23 @@ describe("LocalSandboxClient", () => {
     expect(result.stdout).toBe("hi");
   });
 
+  it("cancels a process through the local sandbox client", async () => {
+    const { resolve } = await import("node:path");
+    const controller = new AbortController();
+    const client = new LocalSandboxClient(resolve("..", "..", "workspace"));
+    const promise = client.run({
+      command: process.execPath,
+      args: ["-e", "setTimeout(() => {}, 30000)"],
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 30).unref();
+
+    const result = await promise;
+    expect(result.exitCode).toBeNull();
+    expect(result.timedOut).toBe(false);
+    expect(result.signal).toBeDefined();
+  });
+
   it("LocalSandboxClient lists files in a temp dir", async () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");

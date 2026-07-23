@@ -66,6 +66,11 @@ export const runProcessOptionsSchema = z
       .string()
       .max(16 * 1024 * 1024)
       .optional(),
+    signal: z
+      .custom<AbortSignal>(
+        (value) => value !== null && typeof value === "object" && "aborted" in value,
+      )
+      .optional(),
     timeoutMs: positiveIntegerSchema.optional(),
     onLog: z
       .custom<(stream: "stdout" | "stderr", chunk: string) => Promise<void> | void>(

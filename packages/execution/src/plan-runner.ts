@@ -10,6 +10,7 @@ export interface ExecutePlanInput {
   args?: readonly string[];
   env?: Record<string, string>;
   stdin?: string;
+  signal?: AbortSignal;
 }
 
 export type RuntimeTargetPicker = (target: ExecutionPlan["target"]) => RuntimeTarget;
@@ -38,14 +39,32 @@ export class ExecutionPlanRunner {
         cwd: input.workspace.path,
         env: input.env,
         stdin: input.stdin,
+        signal: input.signal,
         timeoutMs: input.plan.timeoutMs ?? undefined,
       });
-      await this.store.transitionAttempt(input.plan.attemptId, outcomeStatus(result));
+      await this.completeAttempt(input.plan.attemptId, outcomeStatus(result), input.signal);
       return result;
     } catch (error) {
-      await this.store.transitionAttempt(input.plan.attemptId, "failed");
+      if (input.signal?.aborted) {
+        await this.completeAttempt(input.plan.attemptId, "cancelled", input.signal);
+      } else {
+        await this.store.transitionAttempt(input.plan.attemptId, "failed");
+      }
       throw error;
     }
+  }
+
+  private async completeAttempt(
+    attemptId: string,
+    status: AgentAttempt["status"],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (signal?.aborted || status === "cancelled") {
+      await this.store.transitionAttempt(attemptId, "cancelling");
+      await this.store.transitionAttempt(attemptId, "cancelled");
+      return;
+    }
+    await this.store.transitionAttempt(attemptId, status);
   }
 
   private assertWorkspace(input: ExecutePlanInput): void {
