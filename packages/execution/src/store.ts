@@ -910,8 +910,7 @@ export class ExecutionStore {
 
   async startCheckerAttempt(attemptId: string): Promise<AgentAttempt> {
     const current = await this.getAttempt(attemptId);
-    if (current?.role !== "checker")
-      throw new Error(`Checker attempt ${attemptId} not found`);
+    if (current?.role !== "checker") throw new Error(`Checker attempt ${attemptId} not found`);
     if (current.status === "queued") await this.transitionAttempt(attemptId, "preparing");
     const preparing = await this.getAttempt(attemptId);
     if (preparing?.status === "preparing") await this.transitionAttempt(attemptId, "running");
