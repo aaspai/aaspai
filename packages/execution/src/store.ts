@@ -10,7 +10,10 @@ import type {
   SourceSnapshot,
   WorkflowRun,
 } from "@aaspai/contracts/execution";
-import { assertValidAttemptTransition } from "@aaspai/contracts/execution";
+import {
+  assertValidAttemptTransition,
+  executionWorkspaceSchema,
+} from "@aaspai/contracts/execution";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
   agentAttempts,
@@ -325,6 +328,29 @@ export class ExecutionStore {
     } satisfies typeof executionWorkspaces.$inferInsert;
     await this.db.insert(executionWorkspaces).values(row);
     return row;
+  }
+
+  async getWorkspace(workspaceId: string) {
+    const rows = await this.db
+      .select()
+      .from(executionWorkspaces)
+      .where(eq(executionWorkspaces.id, workspaceId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async updateWorkspaceStatus(
+    workspaceId: string,
+    status: ExecutionWorkspace["status"],
+  ): Promise<ExecutionWorkspace> {
+    const releasedAt = status === "released" ? now() : null;
+    await this.db
+      .update(executionWorkspaces)
+      .set({ status, releasedAt })
+      .where(eq(executionWorkspaces.id, workspaceId));
+    const updated = await this.getWorkspace(workspaceId);
+    if (!updated) throw new Error(`Execution workspace ${workspaceId} not found`);
+    return executionWorkspaceSchema.parse(updated);
   }
 
   async createPlan(input: CreatePlanInput) {
