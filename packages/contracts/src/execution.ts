@@ -229,13 +229,7 @@ export const resourceLockSchema = z
   .object({
     id: identifierSchema,
     organizationId: identifierSchema,
-    resourceType: z.enum([
-      "work_item",
-      "branch",
-      "workspace",
-      "organization_slot",
-      "project_slot",
-    ]),
+    resourceType: z.enum(["work_item", "branch", "workspace", "organization_slot", "project_slot"]),
     resourceId: identifierSchema,
     ownerAttemptId: identifierSchema,
     acquiredAt: isoTimestampSchema,
