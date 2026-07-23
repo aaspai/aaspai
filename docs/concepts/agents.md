@@ -105,7 +105,11 @@ mirror the `tools:` block in `AGENT.md`.
 
 ## The default agents
 
-`aaspai init` scaffolds three agents by default:
+`aaspai init` scaffolds four agents by default:
+
+- **`ceo`** - the chief of staff and user-facing coordinator. It turns
+  requests into goals, delegates through sessions, tracks evidence, and owns
+  delivery visibility. It does not write product code.
 
 - **`operator`** — a read-only agent that runs loops, monitors state,
   and triages work. Defaults to `dry_run_local` so it runs without an
@@ -116,9 +120,11 @@ mirror the `tools:` block in `AGENT.md`.
 - **`tester`** — peers with the developer. Runs the test suite on
   demand.
 
-The defaults are designed so `aaspai` can dogfood `aaspai`: the operator
-runs `daily-triage` on a cron, finds work, and either does it itself or
-hands it to the developer.
+The defaults are designed so `aaspai` can dogfood `aaspai`: the CEO owns the
+goal and delegates, the operator runs `daily-triage` on a cron, the developer
+implements, and the tester verifies. Run the CEO through Codex explicitly with
+`aaspai chat ceo --adapter codex_local --model gpt-5-codex` when desired.
+
 
 ## Choosing a harness
 
