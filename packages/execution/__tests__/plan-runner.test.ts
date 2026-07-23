@@ -90,6 +90,44 @@ describe("ExecutionPlanRunner", () => {
       }),
     ).rejects.toThrow("attempt IDs must match");
   });
+
+  it("persists cancellation when the runtime signal is aborted", async () => {
+    const attemptId = "attempt_cancelled";
+    await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_test",
+      workItemId: "work_test",
+      agentId: "agent_test",
+      harness: "dry_run",
+      id: attemptId,
+    });
+    const controller = new AbortController();
+    const result: RunProcessResult = {
+      exitCode: null,
+      signal: "SIGTERM",
+      timedOut: false,
+      stdout: "",
+      stderr: "",
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: 10,
+    };
+    const run = vi.fn(async (_target, options) => {
+      expect(options.signal).toBe(controller.signal);
+      controller.abort();
+      return result;
+    });
+    const runner = new ExecutionPlanRunner(store, () => ({ run }) as unknown as RuntimeTarget);
+
+    await runner.run({
+      plan: planFor(attemptId),
+      workspace: readyWorkspace(attemptId, testDirectory),
+      command: "node",
+      signal: controller.signal,
+    });
+
+    await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "cancelled" });
+  });
 });
 
 function planFor(attemptId: string): ExecutionPlan {

@@ -101,23 +101,40 @@ export class LocalSandboxClient implements SandboxClient {
         cwd: options.cwd ?? this.baseDir,
         env: { ...process.env, ...(options.env ?? {}) },
         stdio: [options.stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
         windowsHide: true,
       });
       const stdoutChunks: string[] = [];
       const stderrChunks: string[] = [];
       let timedOut = false;
       let timeoutHandle: NodeJS.Timeout | undefined;
+      let killHandle: NodeJS.Timeout | undefined;
+      let closed = false;
+      const terminate = (signal: NodeJS.Signals): void => {
+        try {
+          if (process.platform !== "win32" && child.pid !== undefined)
+            process.kill(-child.pid, signal);
+          else child.kill(signal);
+        } catch {
+          // already dead
+        }
+      };
+      const stop = (reason: "timeout" | "aborted"): void => {
+        if (closed) return;
+        timedOut = reason === "timeout";
+        terminate("SIGTERM");
+        killHandle = setTimeout(() => terminate("SIGKILL"), 5_000);
+        killHandle.unref();
+      };
+      const onAbort = (): void => stop("aborted");
       if (options.timeoutMs !== undefined) {
         timeoutHandle = setTimeout(() => {
-          timedOut = true;
-          try {
-            child.kill("SIGTERM");
-          } catch {
-            // already dead
-          }
+          stop("timeout");
         }, options.timeoutMs);
         timeoutHandle.unref();
       }
+      if (options.signal?.aborted) stop("aborted");
+      else options.signal?.addEventListener("abort", onAbort, { once: true });
       if (options.stdin !== undefined && child.stdin) child.stdin.end(options.stdin);
       child.stdout?.on("data", (b: Buffer) => {
         const s = b.toString("utf8");
@@ -130,7 +147,10 @@ export class LocalSandboxClient implements SandboxClient {
         if (options.onLog) Promise.resolve(options.onLog("stderr", s)).catch(() => undefined);
       });
       child.on("close", (code, signal) => {
+        closed = true;
         if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+        if (killHandle !== undefined) clearTimeout(killHandle);
+        options.signal?.removeEventListener("abort", onAbort);
         const finishedAt = new Date();
         resolve({
           exitCode: code,

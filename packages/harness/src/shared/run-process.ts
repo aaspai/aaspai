@@ -31,7 +31,7 @@ function truncate(chunk: string, current: number): string {
  */
 export async function runProcess(options: RunProcessOptions): Promise<RunProcessResult> {
   const startedAt = new Date();
-  const { command, args, cwd, env: envOverrides, stdin, timeoutMs } = options;
+  const { command, args, cwd, env: envOverrides, stdin, timeoutMs, signal: abortSignal } = options;
   const workingDir = cwd ?? process.cwd();
   const env = { ...process.env, ...(envOverrides ?? {}) };
 
@@ -40,6 +40,7 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
       cwd: workingDir,
       env,
       stdio: [stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
       windowsHide: true,
     });
 
@@ -48,26 +49,39 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
     const stdoutState = { bytes: 0 };
     const stderrState = { bytes: 0 };
     let timedOut = false;
+    let stopReason: "timeout" | "aborted" | null = null;
 
     let timeoutHandle: NodeJS.Timeout | undefined;
+    let killHandle: NodeJS.Timeout | undefined;
+    let closed = false;
+    const terminate = (signalName: NodeJS.Signals): void => {
+      try {
+        if (process.platform !== "win32" && child.pid !== undefined) {
+          process.kill(-child.pid, signalName);
+        } else {
+          child.kill(signalName);
+        }
+      } catch {
+        // already dead
+      }
+    };
+    const stop = (reason: "timeout" | "aborted"): void => {
+      if (closed || stopReason !== null) return;
+      stopReason = reason;
+      timedOut = reason === "timeout";
+      terminate("SIGTERM");
+      killHandle = setTimeout(() => terminate("SIGKILL"), 5_000);
+      killHandle.unref();
+    };
+    const onAbort = (): void => stop("aborted");
     if (timeoutMs !== undefined) {
       timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        try {
-          child.kill("SIGTERM");
-        } catch {
-          // already dead
-        }
-        setTimeout(() => {
-          try {
-            child.kill("SIGKILL");
-          } catch {
-            // already dead
-          }
-        }, 5_000);
+        stop("timeout");
       }, timeoutMs);
       timeoutHandle.unref();
     }
+    if (abortSignal?.aborted) stop("aborted");
+    else abortSignal?.addEventListener("abort", onAbort, { once: true });
 
     if (stdin !== undefined && child.stdin) {
       child.stdin.end(stdin);
@@ -119,7 +133,10 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
     });
 
     child.on("close", async (code, signal) => {
+      closed = true;
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (killHandle !== undefined) clearTimeout(killHandle);
+      abortSignal?.removeEventListener("abort", onAbort);
       const stdoutDrained =
         (child.stdout as unknown as { _aaspaiDrained?: Promise<void> })?._aaspaiDrained ??
         Promise.resolve();
@@ -131,7 +148,7 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
       const finishedAt = new Date();
       const result: RunProcessResult = {
         exitCode: code,
-        signal: signal ?? (timedOut ? "SIGTERM" : undefined),
+        signal: signal ?? (stopReason !== null ? "SIGTERM" : undefined),
         timedOut,
         stdout: stdoutChunks.join(""),
         stderr: stderrChunks.join(""),
