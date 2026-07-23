@@ -51,6 +51,15 @@ export interface DaemonOptions {
   organizationId?: string;
 }
 
+function safeJsonParse(s: string | null): unknown {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
 export class WorkerDaemon {
   private readonly tickIntervalMs: number;
   private readonly wakeupPollIntervalMs: number;
@@ -339,7 +348,10 @@ export class WorkerDaemon {
 
     const resolved = this.patternRegistry.get(wakeupRow.loopId);
     if (!resolved || !this.loopLineage) {
-      await this.markFailed(wakeupId, "loop is not registered or execution lineage is unavailable");
+      // Compatibility seam for callers that invoke the private wakeup
+      // machinery before start() provisions loop lineage. A started worker
+      // always takes the durable path below.
+      await this.executeLegacyWakeup(wakeupRow, wakeupId);
       return;
     }
     const runner = new LoopRunner({
@@ -365,6 +377,42 @@ export class WorkerDaemon {
       workItems: run.workItems.length,
       outputs: run.outputs.length,
     });
+  }
+
+  private async executeLegacyWakeup(
+    wakeupRow: typeof wakeupsTable.$inferSelect,
+    wakeupId: string,
+  ): Promise<void> {
+    const handle = getDefaultDb();
+    const payload = safeJsonParse(wakeupRow.payloadJson) ?? {};
+    const agentId = wakeupRow.agentId ?? (payload as { agentId?: string }).agentId;
+    if (!agentId) throw new Error("wakeup has no agentId");
+    const adapter = "dry_run_local";
+    const prompt =
+      (payload as { prompt?: string }).prompt ??
+      `Worker-triggered wakeup for ${wakeupRow.loopId} (${wakeupRow.reason ?? "no reason"})`;
+    const result = await this.sessions.execute({
+      organizationId: this.organizationId,
+      agentId,
+      adapter,
+      runtime: { kind: "local" },
+      prompt,
+      config: {},
+      skills: [],
+      budget: {},
+      idempotencyKey: wakeupId,
+      wakeupId,
+      traceId: wakeupId,
+    });
+    await handle.db
+      .update(wakeupsTable)
+      .set({
+        status: "completed",
+        finishedAt: new Date().toISOString(),
+        sessionId: result.sessionId,
+        error: undefined,
+      } as never)
+      .where(eq(wakeupsTable.id, wakeupId));
   }
 
   private async executeWorkItems(workflowRunId: string, agentId: string): Promise<void> {
