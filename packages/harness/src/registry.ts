@@ -1,4 +1,9 @@
-import type { AdapterInfo, AdapterType, ServerAdapterModule } from "@aaspai/contracts/harness";
+import type {
+  AdapterInfo,
+  AdapterType,
+  ProviderCapabilities,
+  ServerAdapterModule,
+} from "@aaspai/contracts";
 import { claudeLocal } from "./drivers/claude-local/index.js";
 import { codexLocal } from "./drivers/codex-local/index.js";
 import { cursorCloud } from "./drivers/cursor-cloud/index.js";
@@ -30,8 +35,42 @@ const ADAPTERS: Readonly<Record<AdapterType, ServerAdapterModule>> = Object.free
   opencode_cli: opencodeCli,
 });
 
+function capabilitiesFor(info: AdapterInfo): ProviderCapabilities {
+  if (info.status !== "ready") {
+    return {
+      execute: false,
+      streaming: false,
+      cancellation: false,
+      timeout: false,
+      workspaceIsolation: false,
+      restore: false,
+      resume: false,
+      artifacts: false,
+      billing: "unknown",
+    };
+  }
+  return {
+    execute: true,
+    streaming: true,
+    cancellation: true,
+    timeout: true,
+    workspaceIsolation: false,
+    restore: false,
+    resume: false,
+    artifacts: false,
+    billing: info.type === "dry_run_local" ? "free" : "unknown",
+  };
+}
+
 export function listAdapters(): AdapterInfo[] {
-  return Object.values(ADAPTERS).map((m) => m.info);
+  return Object.values(ADAPTERS).map((m) => ({
+    ...m.info,
+    capabilities: capabilitiesFor(m.info),
+  }));
+}
+
+export function getAdapterCapabilities(type: AdapterType): ProviderCapabilities {
+  return capabilitiesFor(getAdapter(type).info);
 }
 
 export function getAdapter(type: AdapterType): ServerAdapterModule {

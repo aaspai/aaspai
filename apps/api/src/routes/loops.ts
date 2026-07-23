@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type { AuthVerifier } from "@aaspai/auth";
 import { getDefaultDb, wakeups as wakeupsTable } from "@aaspai/db";
 import { FileLoopConfigSource } from "@aaspai/file-loader";
 import { getLogger } from "@aaspai/observability";
 import type { Hono } from "hono";
+import { authenticate } from "./auth.js";
 
 const log = getLogger("api.routes.loops");
 
@@ -15,8 +17,10 @@ function source(): FileLoopConfigSource {
   return loopSource;
 }
 
-export function registerLoopRoutes(app: Hono): void {
+export function registerLoopRoutes(app: Hono, options: { authVerifier?: AuthVerifier } = {}): void {
   app.get("/v1/loops", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
     const s = source();
     await s.start();
     try {
@@ -40,6 +44,8 @@ export function registerLoopRoutes(app: Hono): void {
   });
 
   app.get("/v1/loops/:id", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
     const id = c.req.param("id");
     const s = source();
     await s.start();
@@ -55,6 +61,8 @@ export function registerLoopRoutes(app: Hono): void {
   });
 
   app.post("/v1/loops/:id/fire", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
     const id = c.req.param("id");
     const s = source();
     await s.start();
@@ -68,7 +76,7 @@ export function registerLoopRoutes(app: Hono): void {
       const handle = getDefaultDb();
       await handle.db.insert(wakeupsTable).values({
         id: wakeupId,
-        organizationId: "default",
+        organizationId: auth.principal.organizationId,
         loopId: loop.id,
         source: "api",
         triggerDetail: "http",

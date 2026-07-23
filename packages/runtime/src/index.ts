@@ -20,7 +20,12 @@ export { kubernetesTarget } from "./drivers/sandbox/kubernetes/index.js";
 export { modalTarget } from "./drivers/sandbox/modal/index.js";
 export { novitaTarget } from "./drivers/sandbox/novita/index.js";
 export { sshTarget } from "./drivers/ssh/index.js";
-export { listRuntimeTargets, RUNTIME_REGISTRY_VERSION, resolveTarget } from "./registry.js";
+export {
+  getRuntimeTargetCapabilities,
+  listRuntimeTargets,
+  RUNTIME_REGISTRY_VERSION,
+  resolveTarget,
+} from "./registry.js";
 export {
   CALLBACK_BRIDGE_STUB_MESSAGE,
   createCommandManagedSandboxCallbackBridgeQueueClient,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { providerCapabilitiesSchema } from "./capabilities";
 import {
   identifierSchema,
   jsonObjectSchema,
@@ -332,6 +333,7 @@ export const adapterInfoSchema = z
       .default([]),
     agentConfigurationDoc: z.string().max(65_536).default(""),
     status: z.enum(["ready", "stub"]).default("stub"),
+    capabilities: providerCapabilitiesSchema.optional(),
   })
   .strict();
 export type AdapterInfo = z.infer<typeof adapterInfoSchema>;

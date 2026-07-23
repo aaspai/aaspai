@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **M14 control-plane boundary and capability truth** — legacy session and loop
+  APIs now fail closed and scope reads/writes to the authenticated company;
+  harness/runtime registries expose normalized capability metadata through the
+  API and `aaspai provider capabilities`, and unsupported providers fail before
+  dispatch with a stable error code. Added M0 architecture ADRs and the
+  maintained provider capability matrix under `study/`.
 - **Git-backed autonomy change requests** (`packages/git`, `packages/company`) — approved
   autonomy proposals now produce isolated definition commits, pushed branches, and
   pull requests through the local Git/GitHub CLI providers, with durable status and

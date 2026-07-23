@@ -1,6 +1,6 @@
 import { z } from "zod";
+import { providerCapabilitiesSchema } from "./capabilities";
 import {
-  identifierSchema,
   isoTimestampSchema,
   jsonObjectSchema,
   nonNegativeIntegerSchema,
@@ -178,6 +178,7 @@ export const runtimeTargetInfoSchema = z
     provider: z.string().trim().min(1).max(64).optional(),
     label: z.string().trim().min(1).max(128),
     status: z.enum(["ready", "stub"]),
+    capabilities: providerCapabilitiesSchema.optional(),
   })
   .strict();
 export type RuntimeTargetInfo = z.infer<typeof runtimeTargetInfoSchema>;

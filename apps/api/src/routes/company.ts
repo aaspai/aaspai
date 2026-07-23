@@ -4,7 +4,7 @@ import { getDefaultDb } from "@aaspai/db";
 import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 import { LocalGitHubPullRequestProvider, LocalGitRepository } from "@aaspai/git";
 import type { Context, Hono } from "hono";
-import { authenticate } from "./execution.js";
+import { authenticate } from "./auth.js";
 
 export function registerCompanyRoutes(
   app: Hono,
