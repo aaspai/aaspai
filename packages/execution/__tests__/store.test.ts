@@ -187,6 +187,28 @@ describe("ExecutionStore", () => {
     ).resolves.not.toBeNull();
   });
 
+  it("allows only one winner when active lock acquisition races", async () => {
+    const results = await Promise.all([
+      store.acquireResourceLock({
+        organizationId: "org_test",
+        resourceType: "branch",
+        resourceId: "repo:work/race",
+        ownerAttemptId: "attempt_race_one",
+        leaseExpiresAt: "2026-07-24T00:00:00.000Z",
+      }),
+      store.acquireResourceLock({
+        organizationId: "org_test",
+        resourceType: "branch",
+        resourceId: "repo:work/race",
+        ownerAttemptId: "attempt_race_two",
+        leaseExpiresAt: "2026-07-24T00:00:00.000Z",
+      }),
+    ]);
+
+    expect(results.filter((lock) => lock !== null)).toHaveLength(1);
+    expect(results.filter((lock) => lock === null)).toHaveLength(1);
+  });
+
   it("marks stale preparing and running attempts as lost", async () => {
     const attempt = await store.createAttempt({
       organizationId: "org_test",

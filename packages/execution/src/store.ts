@@ -422,19 +422,6 @@ export class ExecutionStore {
   }
 
   async acquireResourceLock(input: AcquireResourceLockInput): Promise<ResourceLock | null> {
-    const active = await this.db
-      .select()
-      .from(resourceLocks)
-      .where(
-        and(
-          eq(resourceLocks.organizationId, input.organizationId),
-          eq(resourceLocks.resourceType, input.resourceType),
-          eq(resourceLocks.resourceId, input.resourceId),
-          isNull(resourceLocks.releasedAt),
-        ),
-      )
-      .limit(1);
-    if (active[0]) return null;
     const row = {
       id: input.id ?? makeId("lock"),
       organizationId: input.organizationId,
@@ -445,7 +432,14 @@ export class ExecutionStore {
       leaseExpiresAt: input.leaseExpiresAt,
       releasedAt: null,
     } satisfies typeof resourceLocks.$inferInsert;
-    await this.db.insert(resourceLocks).values(row);
+    try {
+      // The partial unique index is the authority for active ownership. The
+      // insert, not a preceding read, decides which concurrent caller wins.
+      await this.db.insert(resourceLocks).values(row);
+    } catch (error) {
+      if (isActiveResourceLockConflict(error)) return null;
+      throw error;
+    }
     return resourceLockSchema.parse(row);
   }
 
@@ -621,6 +615,13 @@ export class ExecutionStore {
       .orderBy(asc(artifacts.createdAt));
     return rows as Artifact[];
   }
+}
+
+function isActiveResourceLockConflict(error: unknown): boolean {
+  const message = String((error as Error | null)?.message ?? error);
+  return /unique constraint failed:\s*resource_locks\.(organization_id|resource_type|resource_id)/i.test(
+    message,
+  );
 }
 
 function makeId(prefix: string): string {

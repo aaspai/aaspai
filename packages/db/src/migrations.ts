@@ -196,6 +196,9 @@ const SQLITE_STATEMENTS = [
     lease_expires_at TEXT NOT NULL,
     released_at TEXT
   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS resource_locks_active_uniq
+    ON resource_locks (organization_id, resource_type, resource_id)
+    WHERE released_at IS NULL`,
   `CREATE TABLE IF NOT EXISTS execution_plans (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
