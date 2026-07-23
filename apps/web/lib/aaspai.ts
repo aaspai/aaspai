@@ -561,6 +561,7 @@ export async function getExecutionAttemptDetail(
   const plan = (
     await handle.db.select().from(executionPlans).where(eq(executionPlans.attemptId, id)).limit(1)
   )[0];
+  // Load the linked legacy session so the detail view can expose the full transcript.
   const harnessSession = attempt.harnessSessionId
     ? (
         await handle.db
