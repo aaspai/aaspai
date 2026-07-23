@@ -17,10 +17,20 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type CompanyHealth, type MemoryRecord, memoryRecordSchema } from "@aaspai/contracts";
+import {
+  type AutonomyChangeRequest,
+  type AutonomyProposal,
+  autonomyChangeRequestSchema,
+  autonomyProposalSchema,
+  type CompanyHealth,
+  type MemoryRecord,
+  memoryRecordSchema,
+} from "@aaspai/contracts";
 import {
   agentAttempts,
   artifacts,
+  autonomyChangeRequests,
+  autonomyProposals,
   definitionRevisions,
   executionApprovals,
   executionBudgetReservations,
@@ -597,6 +607,48 @@ export async function listExecutionGoalProgress(): Promise<ExecutionGoalProgress
   return result;
 }
 
+export async function listAutonomyChangeRequests(
+  organizationId?: string,
+): Promise<AutonomyChangeRequest[]> {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) return [];
+  const handle = getDefaultDb();
+  runMigrations(handle);
+  const rows = await handle.db
+    .select()
+    .from(autonomyChangeRequests)
+    .orderBy(desc(autonomyChangeRequests.updatedAt));
+  const scopedOrganizationId =
+    organizationId ?? rows.find((row) => row.organizationId)?.organizationId;
+  return rows.flatMap((row) => {
+    if (scopedOrganizationId && row.organizationId !== scopedOrganizationId) return [];
+    const parsed = autonomyChangeRequestSchema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+export async function listAutonomyProposals(organizationId?: string): Promise<AutonomyProposal[]> {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) return [];
+  const handle = getDefaultDb();
+  runMigrations(handle);
+  const rows = await handle.db
+    .select()
+    .from(autonomyProposals)
+    .orderBy(desc(autonomyProposals.updatedAt));
+  const scopedOrganizationId =
+    organizationId ?? rows.find((row) => row.organizationId)?.organizationId;
+  return rows.flatMap((row) => {
+    if (scopedOrganizationId && row.organizationId !== scopedOrganizationId) return [];
+    const { evidenceJson, ...portable } = row;
+    const parsed = autonomyProposalSchema.safeParse({
+      ...portable,
+      evidence: safeJson(evidenceJson) ?? {},
+    });
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
 export async function listExecutionAttempts(limit = 50): Promise<ExecutionAttemptSummary[]> {
   ensureWorkspaceEnv();
   const rows = await getDefaultDb()
@@ -789,6 +841,7 @@ export interface CompanyWorkItemSummary {
   repositoryTitle: string | null;
   branchName: string | null;
   owner: string | null;
+  attemptId: string | null;
   harness: string | null;
   blockedReason: string | null;
   dependencyIds: string[];
@@ -813,6 +866,7 @@ export interface CompanyApprovalSummary {
   id: string;
   workItemId: string;
   workItemTitle: string | null;
+  attemptId: string | null;
   status: string;
   actorType: string;
   reason: string;
@@ -1033,6 +1087,7 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
       repositoryTitle: repository?.purpose ?? null,
       branchName: item.branchName,
       owner: ownerAttempt?.agentId ?? null,
+      attemptId: ownerAttempt?.id ?? null,
       harness: ownerAttempt?.harness ?? null,
       blockedReason: item.blockedReason,
       dependencyIds: dependencies.map((dependency) => dependency.dependsOnWorkItemId),
@@ -1106,6 +1161,7 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
       id: approval.id,
       workItemId: approval.workItemId,
       workItemTitle: workItemById.get(approval.workItemId)?.title ?? null,
+      attemptId: workItemById.get(approval.workItemId)?.claimedByAttemptId ?? null,
       status: approval.status,
       actorType: approval.actorType,
       reason: approval.reason,
