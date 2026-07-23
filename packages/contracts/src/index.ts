@@ -3,6 +3,7 @@ export * from "./auth";
 export * from "./errors";
 export * from "./event";
 export * from "./execution";
+export * from "./governance";
 export * from "./harness";
 export * from "./identity";
 export * from "./observability";

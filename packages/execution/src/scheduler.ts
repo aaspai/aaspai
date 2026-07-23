@@ -67,7 +67,8 @@ export class DependencyScheduler {
     const blocked: Array<{ workItemId: string; reason: string }> = [];
 
     for (const item of items) {
-      if (isTerminal(item.status) || isActive(item.status)) continue;
+      if (isTerminal(item.status) || isActive(item.status) || isGovernancePending(item.status))
+        continue;
       if (item.deadlineAt && item.deadlineAt <= now) {
         const reason = `deadline passed at ${item.deadlineAt}`;
         await this.store.updateWorkItemStatus(item.id, "blocked", { blockedReason: reason });
@@ -187,7 +188,9 @@ export class DependencyScheduler {
       progress.total === 0 ||
       progress.active > 0 ||
       progress.ready > 0 ||
-      progress.proposed > 0
+      progress.proposed > 0 ||
+      progress.awaitingVerification > 0 ||
+      progress.awaitingApproval > 0
     ) {
       return;
     }
@@ -211,6 +214,10 @@ export class DependencyScheduler {
 
 function isTerminal(status: ExecutionWorkItem["status"]): boolean {
   return ["completed", "failed", "cancelled", "blocked"].includes(status);
+}
+
+function isGovernancePending(status: ExecutionWorkItem["status"]): boolean {
+  return status === "awaiting_verification" || status === "awaiting_approval";
 }
 
 function isActive(status: ExecutionWorkItem["status"]): boolean {

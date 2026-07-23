@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_EXECUTION_GOVERNANCE, executionGovernanceSchema } from "./governance";
 import {
   idempotencyKeySchema,
   identifierSchema,
@@ -83,6 +84,8 @@ export const workItemStatusSchema = z.enum([
   "ready",
   "claimed",
   "in_progress",
+  "awaiting_verification",
+  "awaiting_approval",
   "blocked",
   "completed",
   "failed",
@@ -112,6 +115,7 @@ export const executionWorkItemSchema = z
     maxAttempts: positiveIntegerSchema.default(1),
     retryAfter: isoTimestampSchema.nullable().default(null),
     blockedReason: z.string().max(4_096).nullable().default(null),
+    governance: executionGovernanceSchema.default(DEFAULT_EXECUTION_GOVERNANCE),
     idempotencyKey: idempotencyKeySchema,
     metadata: jsonObjectSchema.default({}),
     createdAt: isoTimestampSchema,
@@ -168,6 +172,9 @@ export const attemptStatusSchema = z.enum([
 ]);
 export type AttemptStatus = z.infer<typeof attemptStatusSchema>;
 
+export const attemptRoleSchema = z.enum(["maker", "checker"]);
+export type AttemptRole = z.infer<typeof attemptRoleSchema>;
+
 export const agentAttemptSchema = z
   .object({
     id: identifierSchema,
@@ -176,6 +183,9 @@ export const agentAttemptSchema = z
     workItemId: identifierSchema,
     agentId: identifierSchema,
     harness: z.string().trim().min(1).max(128),
+    role: attemptRoleSchema.default("maker"),
+    parentAttemptId: identifierSchema.nullable().default(null),
+    verificationId: identifierSchema.nullable().default(null),
     harnessSessionId: identifierSchema.nullable().default(null),
     status: attemptStatusSchema.default("queued"),
     attemptNumber: positiveIntegerSchema.default(1),

@@ -1,5 +1,10 @@
 import { type AuthVerifier, authorizePrincipal } from "@aaspai/auth";
-import type { ApiScope, AuthPrincipal } from "@aaspai/contracts";
+import {
+  type ApiScope,
+  type AuthPrincipal,
+  type ExecutionGovernanceInput,
+  executionGovernanceSchema,
+} from "@aaspai/contracts";
 import { getDefaultDb } from "@aaspai/db";
 import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
 import type { Context, Hono } from "hono";
@@ -30,6 +35,17 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
     }
 
+    let governance: ExecutionGovernanceInput | undefined;
+    if (body.governance !== undefined) {
+      const parsedGovernance = executionGovernanceSchema.safeParse(body.governance);
+      if (!parsedGovernance.success) {
+        return c.json(
+          { error: "invalid_governance", message: "Governance policy is invalid" },
+          400,
+        );
+      }
+      governance = parsedGovernance.data;
+    }
     const store = new ExecutionStore(getDefaultDb().db);
     const workItem = await store.createWorkItem({
       organizationId: auth.principal.organizationId,
@@ -44,6 +60,7 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       branchName: typeof body.branchName === "string" ? body.branchName : null,
       idempotencyKey: body.idempotencyKey as string,
       metadata: isRecord(body.metadata) ? body.metadata : undefined,
+      governance,
     });
     return c.json({ data: await store.getWorkItem(workItem.id) }, 201);
   });
@@ -164,6 +181,146 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       return c.json({ error: "conflict", message: "Work item is already claimed" }, 409);
     return c.json({
       data: { workItemId: c.req.param("id"), attemptId: body.attemptId, status: "claimed" },
+    });
+  });
+
+  app.post("/v1/execution/verifications/:id/checker-attempts", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body.agentId !== "string" || typeof body.harness !== "string") {
+      return c.json({ error: "invalid_request", message: "agentId and harness are required" }, 400);
+    }
+    const store = new ExecutionStore(getDefaultDb().db);
+    const verification = await store.getVerification(c.req.param("id"));
+    if (!verification)
+      return c.json({ error: "not_found", message: "Verification not found" }, 404);
+    if (verification.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+    }
+    try {
+      const attempt = await store.createCheckerAttempt({
+        verificationId: verification.id,
+        agentId: body.agentId,
+        harness: body.harness,
+        timeoutMs: typeof body.timeoutMs === "number" ? body.timeoutMs : undefined,
+      });
+      return c.json({ data: attempt }, 201);
+    } catch (error) {
+      return c.json(
+        {
+          error: "invalid_checker",
+          message: String(error instanceof Error ? error.message : error),
+        },
+        400,
+      );
+    }
+  });
+
+  app.post("/v1/execution/verifications/:id/submit", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const statuses = new Set(["passed", "failed", "concerns"]);
+    if (
+      !body ||
+      typeof body.checkerAttemptId !== "string" ||
+      typeof body.status !== "string" ||
+      !statuses.has(body.status) ||
+      typeof body.summary !== "string"
+    ) {
+      return c.json(
+        { error: "invalid_request", message: "checkerAttemptId, status, and summary are required" },
+        400,
+      );
+    }
+    const store = new ExecutionStore(getDefaultDb().db);
+    const verification = await store.getVerification(c.req.param("id"));
+    if (!verification)
+      return c.json({ error: "not_found", message: "Verification not found" }, 404);
+    if (verification.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+    }
+    try {
+      const result = await store.submitVerification({
+        verificationId: verification.id,
+        checkerAttemptId: body.checkerAttemptId,
+        status: body.status as "passed" | "failed" | "concerns",
+        summary: body.summary,
+        evidenceIds: Array.isArray(body.evidenceIds)
+          ? body.evidenceIds.filter((id): id is string => typeof id === "string")
+          : [],
+      });
+      return c.json({ data: result });
+    } catch (error) {
+      return c.json(
+        {
+          error: "invalid_verification",
+          message: String(error instanceof Error ? error.message : error),
+        },
+        400,
+      );
+    }
+  });
+
+  app.post("/v1/execution/approvals/:id/decision", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const statuses = new Set(["approved", "rejected", "changes_requested"]);
+    if (!body || typeof body.status !== "string" || !statuses.has(body.status)) {
+      return c.json({ error: "invalid_request", message: "status is required" }, 400);
+    }
+    const store = new ExecutionStore(getDefaultDb().db);
+    const pendingApproval = await store.getApproval(c.req.param("id"));
+    if (!pendingApproval) return c.json({ error: "not_found", message: "Approval not found" }, 404);
+    if (pendingApproval.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+    }
+    const actorType =
+      body.actorType === "operator" || body.actorType === "supervisor" ? body.actorType : "human";
+    if (actorType !== "human" && !auth.principal.roles.includes(actorType)) {
+      return c.json(
+        { error: "approval_role_denied", message: "Approval role is not authorized" },
+        403,
+      );
+    }
+    try {
+      const result = await store.decideApproval({
+        approvalId: c.req.param("id"),
+        actorId: auth.principal.userId,
+        actorType,
+        status: body.status as "approved" | "rejected" | "changes_requested",
+        reason: typeof body.reason === "string" ? body.reason : undefined,
+      });
+      return c.json({ data: result });
+    } catch (error) {
+      return c.json(
+        {
+          error: "invalid_approval",
+          message: String(error instanceof Error ? error.message : error),
+        },
+        400,
+      );
+    }
+  });
+
+  app.get("/v1/execution/work-items/:id/governance-events", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const store = new ExecutionStore(getDefaultDb().db);
+    const workItem = await store.getWorkItem(c.req.param("id"));
+    if (!workItem) return c.json({ error: "not_found", message: "Work item not found" }, 404);
+    if (workItem.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+    }
+    return c.json({
+      data: {
+        governance: workItem.governance,
+        verification: await store.getVerificationForWorkItem(workItem.id),
+        approvals: await store.listApprovalsForWorkItem(workItem.id),
+        events: await store.listGovernanceEvents(auth.principal.organizationId, workItem.id),
+      },
     });
   });
 

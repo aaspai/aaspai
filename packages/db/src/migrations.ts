@@ -147,6 +147,7 @@ const SQLITE_STATEMENTS = [
     max_attempts INTEGER NOT NULL DEFAULT 1,
     retry_after TEXT,
     blocked_reason TEXT,
+    governance_json TEXT NOT NULL DEFAULT '{}',
     idempotency_key TEXT NOT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
@@ -182,6 +183,9 @@ const SQLITE_STATEMENTS = [
     agent_id TEXT NOT NULL,
     harness TEXT NOT NULL,
     harness_session_id TEXT,
+    role TEXT NOT NULL DEFAULT 'maker',
+    parent_attempt_id TEXT,
+    verification_id TEXT,
     status TEXT NOT NULL DEFAULT 'queued',
     attempt_number INTEGER NOT NULL DEFAULT 1,
     timeout_ms INTEGER,
@@ -250,6 +254,70 @@ const SQLITE_STATEMENTS = [
     payload_json TEXT NOT NULL,
     seq INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS execution_verifications (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,
+    maker_attempt_id TEXT NOT NULL,
+    checker_attempt_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    summary TEXT NOT NULL DEFAULT '',
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_verifications_work_item_idx
+    ON execution_verifications (work_item_id)`,
+  `CREATE TABLE IF NOT EXISTS execution_approvals (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,
+    verification_id TEXT,
+    status TEXT NOT NULL DEFAULT 'requested',
+    actor_type TEXT NOT NULL,
+    actor_id TEXT,
+    reason TEXT NOT NULL DEFAULT '',
+    requested_at TEXT NOT NULL,
+    expires_at TEXT,
+    decided_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_approvals_work_item_idx
+    ON execution_approvals (work_item_id, status)`,
+  `CREATE TABLE IF NOT EXISTS execution_budget_reservations (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    reserved_tokens INTEGER NOT NULL DEFAULT 0,
+    reserved_cost_usd REAL NOT NULL DEFAULT 0,
+    reserved_runs INTEGER NOT NULL DEFAULT 1,
+    actual_tokens INTEGER NOT NULL DEFAULT 0,
+    actual_cost_usd REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'reserved',
+    created_at TEXT NOT NULL,
+    settled_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_budget_reservations_attempt_idx
+    ON execution_budget_reservations (attempt_id)`,
+  `CREATE INDEX IF NOT EXISTS execution_budget_reservations_scope_idx
+    ON execution_budget_reservations (organization_id, scope, scope_id)`,
+  `CREATE TABLE IF NOT EXISTS execution_governance_events (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    work_item_id TEXT,
+    attempt_id TEXT,
+    action TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    occurred_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_governance_events_org_time_idx
+    ON execution_governance_events (organization_id, occurred_at)`,
+  `CREATE INDEX IF NOT EXISTS execution_governance_events_work_item_idx
+    ON execution_governance_events (work_item_id)`,
 ];
 
 /**
@@ -280,8 +348,24 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
     sql: "ALTER TABLE execution_work_items ADD COLUMN blocked_reason TEXT",
   },
   {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'governance_json'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN governance_json TEXT NOT NULL DEFAULT '{}'",
+  },
+  {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'harness_session_id'",
     sql: "ALTER TABLE agent_attempts ADD COLUMN harness_session_id TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'role'",
+    sql: "ALTER TABLE agent_attempts ADD COLUMN role TEXT NOT NULL DEFAULT 'maker'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'parent_attempt_id'",
+    sql: "ALTER TABLE agent_attempts ADD COLUMN parent_attempt_id TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'verification_id'",
+    sql: "ALTER TABLE agent_attempts ADD COLUMN verification_id TEXT",
   },
   // session_events.seq was added after the initial scaffold. Older
   // DBs need it added; we back-fill with the row id so the order
