@@ -16,7 +16,9 @@ __metadata:
     "@aaspai/execution": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
     "@aaspai/git": "workspace:*"
+    "@aaspai/harness": "workspace:*"
     "@aaspai/observability": "workspace:*"
+    "@aaspai/runtime": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@hono/node-server": "npm:^1.19.9"
     "@types/node": "npm:^24.0.0"
@@ -62,6 +64,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@aaspai/cli@workspace:apps/cli"
   dependencies:
+    "@aaspai/harness": "workspace:*"
+    "@aaspai/runtime": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@types/node": "npm:^24.0.0"
     better-sqlite3: "npm:^12.11.1"
