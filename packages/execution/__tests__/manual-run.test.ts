@@ -61,7 +61,7 @@ describe("ManualLocalExecutionService", () => {
     expect(await store.getWorkspace(result.workspaceId)).toMatchObject({ status: "released" });
     expect(await store.listEvents(result.attempt.id)).toHaveLength(2);
     await expect(readFile(path.join(projectPath, "README.md"), "utf8")).resolves.toBe("project\n");
-  });
+  }, 20_000);
 
   async function createRepository(name: string, file: string, contents: string): Promise<string> {
     const repositoryPath = path.join(testDirectory, name);

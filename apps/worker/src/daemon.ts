@@ -17,6 +17,7 @@
 import { randomUUID } from "node:crypto";
 import type { LoopPattern } from "@aaspai/contracts/phase2";
 import { closeDefaultDb, getDefaultDb, wakeups as wakeupsTable } from "@aaspai/db";
+import { ExecutionStore } from "@aaspai/execution";
 import {
   FileAgentConfigSource,
   FileKnowledgeSource,
@@ -376,6 +377,8 @@ export class WorkerDaemon {
     const handle = getDefaultDb();
     const staleMs = 5 * 60_000;
     const cutoff = new Date(Date.now() - staleMs).toISOString();
+    const lostAttempts = await new ExecutionStore(handle.db).reconcileLostAttempts(cutoff);
+    if (lostAttempts > 0) log.warn("reconciled lost execution attempts", { lostAttempts, staleMs });
     const stale = await handle.db
       .select()
       .from(wakeupsTable)
