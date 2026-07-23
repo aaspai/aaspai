@@ -4,6 +4,8 @@ import type { ExecutionStore } from "./store.js";
 export interface SchedulerOptions {
   maxOrganizationConcurrency?: number;
   maxProjectConcurrency?: number;
+  maxRepositoryConcurrency?: number;
+  maxAgentConcurrency?: number;
   retryDelayMs?: number;
 }
 
@@ -42,6 +44,8 @@ export interface SchedulerTickResult {
 export class DependencyScheduler {
   private readonly maxOrganizationConcurrency: number;
   private readonly maxProjectConcurrency: number;
+  private readonly maxRepositoryConcurrency: number;
+  private readonly maxAgentConcurrency: number;
   private readonly retryDelayMs: number;
 
   constructor(
@@ -50,6 +54,8 @@ export class DependencyScheduler {
   ) {
     this.maxOrganizationConcurrency = Math.max(1, options.maxOrganizationConcurrency ?? 2);
     this.maxProjectConcurrency = Math.max(1, options.maxProjectConcurrency ?? 1);
+    this.maxRepositoryConcurrency = Math.max(1, options.maxRepositoryConcurrency ?? 1);
+    this.maxAgentConcurrency = Math.max(1, options.maxAgentConcurrency ?? 1);
     this.retryDelayMs = Math.max(0, options.retryDelayMs ?? 1_000);
   }
 
@@ -103,9 +109,17 @@ export class DependencyScheduler {
     const activeAttempts = await this.listActiveAttempts(items);
     let organizationActive = activeAttempts.length;
     const projectActive = new Map<string, number>();
+    const repositoryActive = new Map<string, number>();
+    const agentActive = new Map<string, number>();
     for (const active of activeAttempts) {
       const item = items.find((candidate) => candidate.id === active.workItemId);
-      if (item) projectActive.set(item.projectId, (projectActive.get(item.projectId) ?? 0) + 1);
+      if (item) {
+        projectActive.set(item.projectId, (projectActive.get(item.projectId) ?? 0) + 1);
+        for (const repositoryId of item.repositoryIds ?? [item.repositoryId]) {
+          repositoryActive.set(repositoryId, (repositoryActive.get(repositoryId) ?? 0) + 1);
+        }
+        agentActive.set(active.agentId, (agentActive.get(active.agentId) ?? 0) + 1);
+      }
     }
 
     const dispatched: SchedulerTickResult["dispatched"] = [];
@@ -118,6 +132,15 @@ export class DependencyScheduler {
       if (current.retryAfter && current.retryAfter > now) continue;
       const projectCount = projectActive.get(current.projectId) ?? 0;
       if (projectCount >= this.maxProjectConcurrency) continue;
+      const repositoryIds = current.repositoryIds ?? [current.repositoryId];
+      if (
+        repositoryIds.some(
+          (repositoryId) =>
+            (repositoryActive.get(repositoryId) ?? 0) >= this.maxRepositoryConcurrency,
+        )
+      )
+        continue;
+      if ((agentActive.get(input.agentId) ?? 0) >= this.maxAgentConcurrency) continue;
       const result = await this.store.dispatchWorkItem({
         workflowRunId: input.workflowRunId,
         workItemId: current.id,
@@ -125,11 +148,17 @@ export class DependencyScheduler {
         harness: input.harness,
         organizationConcurrency: this.maxOrganizationConcurrency,
         projectConcurrency: this.maxProjectConcurrency,
+        repositoryConcurrency: this.maxRepositoryConcurrency,
+        agentConcurrency: this.maxAgentConcurrency,
       });
       if (!result) continue;
       dispatched.push({ workItem: current, ...result });
       organizationActive++;
       projectActive.set(current.projectId, projectCount + 1);
+      for (const repositoryId of repositoryIds) {
+        repositoryActive.set(repositoryId, (repositoryActive.get(repositoryId) ?? 0) + 1);
+      }
+      agentActive.set(input.agentId, (agentActive.get(input.agentId) ?? 0) + 1);
     }
 
     if (dispatched.length > 0) {

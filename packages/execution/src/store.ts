@@ -122,6 +122,7 @@ export interface CreateWorkItemInput {
   goalId: string;
   projectId: string;
   repositoryId: string;
+  repositoryIds?: string[];
   workflowRunId?: string | null;
   title: string;
   description?: string;
@@ -145,6 +146,8 @@ export interface DispatchWorkItemInput {
   timeoutMs?: number | null;
   organizationConcurrency?: number;
   projectConcurrency?: number;
+  repositoryConcurrency?: number;
+  agentConcurrency?: number;
 }
 
 export interface CreateWorkflowRunInput {
@@ -333,12 +336,19 @@ export class ExecutionStore {
       .limit(1);
     if (existing[0]) return existing[0];
 
+    const repositoryIds = [...new Set(input.repositoryIds ?? [input.repositoryId])];
+    if (!repositoryIds.includes(input.repositoryId)) repositoryIds.unshift(input.repositoryId);
+    if (repositoryIds.length > 32) {
+      throw new Error("A WorkItem may reference at most 32 repositories");
+    }
+
     const row = {
       id: input.id ?? makeId("work"),
       organizationId: input.organizationId,
       goalId: input.goalId,
       projectId: input.projectId,
       repositoryId: input.repositoryId,
+      repositoryIdsJson: JSON.stringify(repositoryIds),
       workflowRunId: input.workflowRunId ?? null,
       title: input.title,
       description: input.description ?? "",
@@ -701,11 +711,14 @@ export class ExecutionStore {
     const slots = await this.acquireSchedulerSlots({
       organizationId: workItem.organizationId,
       projectId: workItem.projectId,
-      repositoryId: workItem.repositoryId,
+      repositoryIds: workItem.repositoryIds ?? [workItem.repositoryId],
+      agentId: input.agentId,
       branchName: workItem.branchName,
       attemptId: created.id,
       organizationConcurrency: input.organizationConcurrency ?? 1,
       projectConcurrency: input.projectConcurrency ?? 1,
+      repositoryConcurrency: input.repositoryConcurrency ?? 1,
+      agentConcurrency: input.agentConcurrency ?? 1,
     });
     if (!slots) {
       await this.db.delete(agentAttempts).where(eq(agentAttempts.id, created.id));
@@ -1277,11 +1290,14 @@ export class ExecutionStore {
   private async acquireSchedulerSlots(input: {
     organizationId: string;
     projectId: string;
-    repositoryId: string;
+    repositoryIds: string[];
+    agentId: string;
     branchName: string | null;
     attemptId: string;
     organizationConcurrency: number;
     projectConcurrency: number;
+    repositoryConcurrency: number;
+    agentConcurrency: number;
   }): Promise<ResourceLock[] | null> {
     const leaseExpiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
     const acquired: ResourceLock[] = [];
@@ -1316,19 +1332,35 @@ export class ExecutionStore {
       await this.releaseSchedulerLocks(input.attemptId);
       return null;
     }
-    if (input.branchName) {
-      const branchLock = await this.acquireResourceLock({
-        organizationId: input.organizationId,
-        resourceType: "branch",
-        resourceId: `${input.repositoryId}:${input.branchName}`,
-        ownerAttemptId: input.attemptId,
-        leaseExpiresAt,
-      });
-      if (!branchLock) {
+    for (const repositoryId of input.repositoryIds) {
+      if (
+        !(await acquire(
+          "repository_slot",
+          `repository:${repositoryId}`,
+          input.repositoryConcurrency,
+        ))
+      ) {
         await this.releaseSchedulerLocks(input.attemptId);
         return null;
       }
-      acquired.push(branchLock);
+      if (input.branchName) {
+        const branchLock = await this.acquireResourceLock({
+          organizationId: input.organizationId,
+          resourceType: "branch",
+          resourceId: `${repositoryId}:${input.branchName}`,
+          ownerAttemptId: input.attemptId,
+          leaseExpiresAt,
+        });
+        if (!branchLock) {
+          await this.releaseSchedulerLocks(input.attemptId);
+          return null;
+        }
+        acquired.push(branchLock);
+      }
+    }
+    if (!(await acquire("agent_slot", `agent:${input.agentId}`, input.agentConcurrency))) {
+      await this.releaseSchedulerLocks(input.attemptId);
+      return null;
     }
     return acquired;
   }
@@ -1340,7 +1372,13 @@ export class ExecutionStore {
       .where(
         and(
           eq(resourceLocks.ownerAttemptId, ownerAttemptId),
-          inArray(resourceLocks.resourceType, ["organization_slot", "project_slot", "branch"]),
+          inArray(resourceLocks.resourceType, [
+            "organization_slot",
+            "project_slot",
+            "repository_slot",
+            "agent_slot",
+            "branch",
+          ]),
           isNull(resourceLocks.releasedAt),
         ),
       );
@@ -1982,10 +2020,17 @@ function parseWorkItem(row: typeof executionWorkItems.$inferSelect): ExecutionWo
     claimedAt: _claimedAt,
     metadataJson,
     governanceJson,
+    repositoryIdsJson,
     ...workItem
   } = row;
+  const parsedRepositoryIds = JSON.parse(repositoryIdsJson) as unknown;
+  const repositoryIds =
+    Array.isArray(parsedRepositoryIds) && parsedRepositoryIds.length > 0
+      ? parsedRepositoryIds
+      : [workItem.repositoryId];
   return executionWorkItemSchema.parse({
     ...workItem,
+    repositoryIds,
     metadata: JSON.parse(metadataJson),
     governance: executionGovernanceSchema.parse(JSON.parse(governanceJson)),
   });

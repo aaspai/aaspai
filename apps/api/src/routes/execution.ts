@@ -52,6 +52,9 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       goalId: body.goalId as string,
       projectId: body.projectId as string,
       repositoryId: body.repositoryId as string,
+      repositoryIds: Array.isArray(body.repositoryIds)
+        ? body.repositoryIds.filter((value): value is string => typeof value === "string")
+        : undefined,
       title: body.title as string,
       description: typeof body.description === "string" ? body.description : undefined,
       definitionRevisionId:
@@ -159,7 +162,13 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
     }
     const maxDispatch = typeof body.maxDispatch === "number" ? body.maxDispatch : undefined;
-    const result = await new DependencyScheduler(store).tick({
+    const scheduler = new DependencyScheduler(store, {
+      maxOrganizationConcurrency: boundedConcurrency(body.maxOrganizationConcurrency, 2),
+      maxProjectConcurrency: boundedConcurrency(body.maxProjectConcurrency, 1),
+      maxRepositoryConcurrency: boundedConcurrency(body.maxRepositoryConcurrency, 1),
+      maxAgentConcurrency: boundedConcurrency(body.maxAgentConcurrency, 1),
+    });
+    const result = await scheduler.tick({
       organizationId: auth.principal.organizationId,
       goalId: workflowRun.goalId,
       workflowRunId: workflowRun.id,
@@ -415,6 +424,12 @@ export async function authenticate(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function boundedConcurrency(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(32, Math.max(1, Math.floor(value)))
+    : fallback;
 }
 
 function publicHarnessSession(session: Awaited<ReturnType<ExecutionStore["getHarnessSession"]>>) {

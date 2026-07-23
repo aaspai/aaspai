@@ -100,6 +100,8 @@ export const executionWorkItemSchema = z
     goalId: identifierSchema,
     projectId: identifierSchema,
     repositoryId: identifierSchema,
+    /** All repositories touched by this work item. repositoryId is the primary repository. */
+    repositoryIds: z.array(identifierSchema).min(1).max(32).optional(),
     workflowRunId: identifierSchema.nullable().default(null),
     title: z.string().trim().min(1).max(512),
     description: z.string().max(16_384).default(""),
@@ -262,7 +264,15 @@ export const resourceLockSchema = z
   .object({
     id: identifierSchema,
     organizationId: identifierSchema,
-    resourceType: z.enum(["work_item", "branch", "workspace", "organization_slot", "project_slot"]),
+    resourceType: z.enum([
+      "work_item",
+      "branch",
+      "workspace",
+      "organization_slot",
+      "project_slot",
+      "repository_slot",
+      "agent_slot",
+    ]),
     resourceId: identifierSchema,
     ownerAttemptId: identifierSchema,
     acquiredAt: isoTimestampSchema,

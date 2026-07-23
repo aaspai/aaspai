@@ -13,6 +13,19 @@ export interface PrepareLocalWorkspaceInput {
   baseCommitSha: string;
   workspaceRoot: string;
   branchName?: string;
+  workspaceSegment?: string;
+}
+
+export interface PrepareLocalWorkspacesInput {
+  organizationId: string;
+  attemptId: string;
+  workspaceRoot: string;
+  branchName?: string;
+  repositories: Array<{
+    repositoryId: string;
+    repositoryPath: string;
+    baseCommitSha: string;
+  }>;
 }
 
 export type RepositoryPathResolver = (repositoryId: string) => string | Promise<string>;
@@ -33,7 +46,11 @@ export class LocalExecutionWorkspaceManager {
 
   async prepare(input: PrepareLocalWorkspaceInput): Promise<ExecutionWorkspace> {
     const branchName = validateBranchName(input.branchName ?? `work/${input.attemptId}`);
-    const workspacePath = this.pathFor(input.workspaceRoot, input.attemptId);
+    const workspacePath = this.pathFor(
+      input.workspaceRoot,
+      input.attemptId,
+      input.workspaceSegment,
+    );
     await mkdir(input.workspaceRoot, { recursive: true });
 
     const workspace = await this.store.createWorkspace({
@@ -77,6 +94,38 @@ export class LocalExecutionWorkspaceManager {
     }
   }
 
+  /** Prepare one isolated Git worktree per repository and roll back partial success. */
+  async prepareMany(input: PrepareLocalWorkspacesInput): Promise<ExecutionWorkspace[]> {
+    if (input.repositories.length === 0) throw new Error("At least one repository is required");
+    const prepared: ExecutionWorkspace[] = [];
+    try {
+      for (const [index, repository] of input.repositories.entries()) {
+        prepared.push(
+          await this.prepare({
+            organizationId: input.organizationId,
+            attemptId: input.attemptId,
+            repositoryId: repository.repositoryId,
+            repositoryPath: repository.repositoryPath,
+            baseCommitSha: repository.baseCommitSha,
+            workspaceRoot: input.workspaceRoot,
+            branchName: input.branchName,
+            workspaceSegment: `repository-${index}`,
+          }),
+        );
+      }
+      return prepared;
+    } catch (error) {
+      for (const workspace of prepared.reverse()) {
+        try {
+          await this.release(workspace.id);
+        } catch {
+          // Preserve the original preparation error. Reconciliation can repair a failed release.
+        }
+      }
+      throw error;
+    }
+  }
+
   async release(workspaceId: string): Promise<ExecutionWorkspace> {
     const workspace = await this.store.getWorkspace(workspaceId);
     if (!workspace) throw new Error(`Execution workspace ${workspaceId} not found`);
@@ -99,9 +148,14 @@ export class LocalExecutionWorkspaceManager {
     }
   }
 
-  private pathFor(root: string, attemptId: string): string {
+  private pathFor(root: string, attemptId: string, workspaceSegment?: string): string {
     const absoluteRoot = resolve(root);
-    const candidate = resolve(absoluteRoot, "execution", attemptId);
+    const candidate = resolve(
+      absoluteRoot,
+      "execution",
+      attemptId,
+      ...(workspaceSegment ? [workspaceSegment] : []),
+    );
     const child = relative(absoluteRoot, candidate);
     if (!child || child.startsWith("..")) {
       throw new Error("Execution workspace root must contain the attempt worktree");
