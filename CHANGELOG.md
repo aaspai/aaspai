@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Company operating extensions** (`packages/company`) — durable departments
+  and membership, service-agent lifecycle and stale-heartbeat reconciliation,
+  portable company export/import, and authenticated autonomy proposals with
+  explicit approval.
 - **`opencode_cli` adapter** (`packages/harness`) — spawns the `opencode`
   CLI (installed via `npm i -g opencode-ai`) and parses its `--format
   json` event stream. Auth via `~/.local/share/opencode/auth.json`.

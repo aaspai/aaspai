@@ -33,6 +33,7 @@ import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { registerCompanyRoutes } from "./routes/company.js";
 import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerLoopRoutes } from "./routes/loops.js";
@@ -63,6 +64,7 @@ export function createApiApp(options: Pick<ApiOptions, "authVerifier"> = {}): Ho
   registerLoopRoutes(app);
   registerSessionRoutes(app);
   registerExecutionRoutes(app, { authVerifier: options.authVerifier });
+  registerCompanyRoutes(app, { authVerifier: options.authVerifier });
   return app;
 }
 
