@@ -98,6 +98,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     cwd,
     env,
     stdin,
+    signal: ctx.signal,
     timeoutMs,
     onLog,
   });

@@ -454,6 +454,7 @@ export interface ExecutionAttemptSummary {
   harness: string;
   workflowRunId: string;
   workItemId: string;
+  harnessSessionId: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
@@ -473,6 +474,7 @@ export async function listExecutionAttempts(limit = 50): Promise<ExecutionAttemp
     harness: row.harness,
     workflowRunId: row.workflowRunId,
     workItemId: row.workItemId,
+    harnessSessionId: row.harnessSessionId,
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
@@ -492,6 +494,7 @@ export interface ExecutionAttemptDetail {
   revision: Record<string, unknown> | null;
   workspace: Record<string, unknown> | null;
   plan: Record<string, unknown> | null;
+  harnessSession: Record<string, unknown> | null;
   events: Array<{
     id: number;
     seq: number;
@@ -558,6 +561,13 @@ export async function getExecutionAttemptDetail(
   const plan = (
     await handle.db.select().from(executionPlans).where(eq(executionPlans.attemptId, id)).limit(1)
   )[0];
+  const harnessSession = attempt.harnessSessionId
+    ? (await handle.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, attempt.harnessSessionId))
+        .limit(1))[0]
+    : undefined;
   const eventRows = await handle.db
     .select()
     .from(executionEvents)
@@ -578,6 +588,7 @@ export async function getExecutionAttemptDetail(
       harness: attempt.harness,
       workflowRunId: attempt.workflowRunId,
       workItemId: attempt.workItemId,
+      harnessSessionId: attempt.harnessSessionId,
       attemptNumber: attempt.attemptNumber,
       createdAt: attempt.createdAt,
       startedAt: attempt.startedAt,
@@ -598,6 +609,7 @@ export async function getExecutionAttemptDetail(
           runtimeConfig: safeJson(plan.runtimeConfigJson) ?? {},
         }
       : null,
+    harnessSession: harnessSession ?? null,
     events: eventRows.map((event) => ({
       id: event.id,
       seq: event.seq,

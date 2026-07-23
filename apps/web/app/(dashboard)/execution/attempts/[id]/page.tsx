@@ -96,6 +96,20 @@ export default async function ExecutionAttemptPage({
             />
             <Field label="Source snapshot" value={json(detail.plan?.sourceSnapshot ?? {})} code />
             <Field label="Workspace" value={json(detail.workspace ?? {})} code />
+            <Field label="Harness session" value={json(detail.harnessSession ?? {})} code />
+            {typeof detail.harnessSession?.id === "string" ? (
+              <div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                  Session explorer
+                </div>
+                <Link
+                  className="mt-1 inline-block text-sm text-primary underline underline-offset-4"
+                  href={`/sessions/${encodeURIComponent(detail.harnessSession.id)}`}
+                >
+                  Open complete harness transcript
+                </Link>
+              </div>
+            ) : null}
           </div>
         </CardContent>
       </Card>
