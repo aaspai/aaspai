@@ -17,7 +17,22 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { getDefaultDb, sessionEvents, sessions, wakeups } from "@aaspai/db";
+import {
+  agentAttempts,
+  artifacts,
+  definitionRevisions,
+  executionEvents,
+  executionPlans,
+  executionWorkItems,
+  executionWorkspaces,
+  getDefaultDb,
+  goals,
+  projects,
+  repositories,
+  sessionEvents,
+  sessions,
+  wakeups,
+} from "@aaspai/db";
 import { FileAgentConfigSource } from "@aaspai/file-loader";
 import { asc, desc, eq } from "drizzle-orm";
 
@@ -429,5 +444,167 @@ export async function getSessionDetail(id: string): Promise<SessionDetail | null
     wakeupId: s.wakeupId,
     transcript,
     wakeup,
+  };
+}
+
+export interface ExecutionAttemptSummary {
+  id: string;
+  status: string;
+  agentId: string;
+  harness: string;
+  workflowRunId: string;
+  workItemId: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export async function listExecutionAttempts(limit = 50): Promise<ExecutionAttemptSummary[]> {
+  ensureWorkspaceEnv();
+  const rows = await getDefaultDb()
+    .db.select()
+    .from(agentAttempts)
+    .orderBy(desc(agentAttempts.createdAt))
+    .limit(Math.min(Math.max(limit, 1), 100));
+  return rows.map((row) => ({
+    id: row.id,
+    status: row.status,
+    agentId: row.agentId,
+    harness: row.harness,
+    workflowRunId: row.workflowRunId,
+    workItemId: row.workItemId,
+    createdAt: row.createdAt,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
+  }));
+}
+
+export interface ExecutionAttemptDetail {
+  attempt: ExecutionAttemptSummary & {
+    organizationId: string;
+    attemptNumber: number;
+    error: string | null;
+  };
+  workItem: Record<string, unknown> | null;
+  project: Record<string, unknown> | null;
+  goal: Record<string, unknown> | null;
+  repository: Record<string, unknown> | null;
+  revision: Record<string, unknown> | null;
+  workspace: Record<string, unknown> | null;
+  plan: Record<string, unknown> | null;
+  events: Array<{
+    id: number;
+    seq: number;
+    ts: string;
+    type: string;
+    payload: Record<string, unknown>;
+  }>;
+  artifacts: Record<string, unknown>[];
+}
+
+export async function getExecutionAttemptDetail(
+  id: string,
+): Promise<ExecutionAttemptDetail | null> {
+  ensureWorkspaceEnv();
+  const handle = getDefaultDb();
+  const attemptRows = await handle.db
+    .select()
+    .from(agentAttempts)
+    .where(eq(agentAttempts.id, id))
+    .limit(1);
+  const attempt = attemptRows[0];
+  if (!attempt) return null;
+
+  const workItem = (
+    await handle.db
+      .select()
+      .from(executionWorkItems)
+      .where(eq(executionWorkItems.id, attempt.workItemId))
+      .limit(1)
+  )[0];
+  const project = workItem
+    ? (
+        await handle.db.select().from(projects).where(eq(projects.id, workItem.projectId)).limit(1)
+      )[0]
+    : undefined;
+  const goal = project
+    ? (await handle.db.select().from(goals).where(eq(goals.id, project.goalId)).limit(1))[0]
+    : undefined;
+  const repository = workItem
+    ? (
+        await handle.db
+          .select()
+          .from(repositories)
+          .where(eq(repositories.id, workItem.repositoryId))
+          .limit(1)
+      )[0]
+    : undefined;
+  const revision = workItem?.definitionRevisionId
+    ? (
+        await handle.db
+          .select()
+          .from(definitionRevisions)
+          .where(eq(definitionRevisions.id, workItem.definitionRevisionId))
+          .limit(1)
+      )[0]
+    : undefined;
+  const workspace = (
+    await handle.db
+      .select()
+      .from(executionWorkspaces)
+      .where(eq(executionWorkspaces.attemptId, id))
+      .limit(1)
+  )[0];
+  const plan = (
+    await handle.db.select().from(executionPlans).where(eq(executionPlans.attemptId, id)).limit(1)
+  )[0];
+  const eventRows = await handle.db
+    .select()
+    .from(executionEvents)
+    .where(eq(executionEvents.attemptId, id))
+    .orderBy(asc(executionEvents.seq));
+  const artifactRows = await handle.db
+    .select()
+    .from(artifacts)
+    .where(eq(artifacts.attemptId, id))
+    .orderBy(asc(artifacts.createdAt));
+
+  return {
+    attempt: {
+      id: attempt.id,
+      organizationId: attempt.organizationId,
+      status: attempt.status,
+      agentId: attempt.agentId,
+      harness: attempt.harness,
+      workflowRunId: attempt.workflowRunId,
+      workItemId: attempt.workItemId,
+      attemptNumber: attempt.attemptNumber,
+      createdAt: attempt.createdAt,
+      startedAt: attempt.startedAt,
+      finishedAt: attempt.finishedAt,
+      error: attempt.error,
+    },
+    workItem: workItem ? { ...workItem, metadata: safeJson(workItem.metadataJson) ?? {} } : null,
+    project: project ?? null,
+    goal: goal ?? null,
+    repository: repository ?? null,
+    revision: revision ?? null,
+    workspace: workspace ?? null,
+    plan: plan
+      ? {
+          ...plan,
+          sourceSnapshot: safeJson(plan.sourceSnapshotJson) ?? {},
+          target: safeJson(plan.targetJson) ?? {},
+          runtimeConfig: safeJson(plan.runtimeConfigJson) ?? {},
+        }
+      : null,
+    events: eventRows.map((event) => ({
+      id: event.id,
+      seq: event.seq,
+      ts: event.ts,
+      type: event.type,
+      payload: safeJson(event.payloadJson) ?? {},
+    })),
+    artifacts: artifactRows,
   };
 }

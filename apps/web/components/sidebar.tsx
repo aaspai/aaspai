@@ -1,6 +1,15 @@
 "use client";
 
-import { Bot, Database, Home, ListTree, MessagesSquare, ScrollText, Settings } from "lucide-react";
+import {
+  Bot,
+  Database,
+  Home,
+  ListTree,
+  MessagesSquare,
+  ScrollText,
+  Settings,
+  Workflow,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -9,6 +18,7 @@ const nav = [
   { href: "/", label: "Dashboard", icon: Home },
   { href: "/agents", label: "Agents", icon: ListTree },
   { href: "/sessions", label: "Sessions", icon: ScrollText },
+  { href: "/execution", label: "Execution", icon: Workflow },
   { href: "/state", label: "State", icon: Database },
 ];
 
