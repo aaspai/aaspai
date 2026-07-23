@@ -1,12 +1,18 @@
 import type { AuthVerifier } from "@aaspai/auth";
 import { CompanyOperationsService } from "@aaspai/company";
 import { getDefaultDb } from "@aaspai/db";
+import type { GitRepository, PullRequestProvider } from "@aaspai/git";
+import { LocalGitHubPullRequestProvider, LocalGitRepository } from "@aaspai/git";
 import type { Context, Hono } from "hono";
 import { authenticate } from "./execution.js";
 
 export function registerCompanyRoutes(
   app: Hono,
-  options: { authVerifier?: AuthVerifier } = {},
+  options: {
+    authVerifier?: AuthVerifier;
+    git?: GitRepository;
+    pullRequests?: PullRequestProvider;
+  } = {},
 ): void {
   app.get("/v1/company/operations", async (c) => {
     const auth = await authenticate(c, options.authVerifier, "read");
@@ -177,6 +183,48 @@ export function registerCompanyRoutes(
         typeof body.reason === "string" ? body.reason : "",
       );
       return c.json({ data: proposal });
+    } catch (error) {
+      return companyError(c, error);
+    }
+  });
+
+  app.get("/v1/company/autonomy-change-requests", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const requests = await new CompanyOperationsService(
+      getDefaultDb().db,
+    ).listAutonomyChangeRequests(auth.principal.organizationId);
+    return c.json({ data: requests });
+  });
+
+  app.post("/v1/company/autonomy-proposals/:id/change-request", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body.repositoryId !== "string" ||
+      typeof body.workspaceRoot !== "string" ||
+      !body.workspaceRoot.trim()
+    ) {
+      return c.json(
+        { error: "invalid_request", message: "repositoryId and workspaceRoot are required" },
+        400,
+      );
+    }
+    try {
+      const service = new CompanyOperationsService(getDefaultDb().db, {
+        git: options.git ?? new LocalGitRepository(),
+        pullRequests: options.pullRequests ?? new LocalGitHubPullRequestProvider(),
+      });
+      const request = await service.createAutonomyChangeRequest({
+        organizationId: auth.principal.organizationId,
+        proposalId: c.req.param("id"),
+        repositoryId: body.repositoryId,
+        workspaceRoot: body.workspaceRoot,
+        createdBy: auth.principal.userId,
+      });
+      return c.json({ data: request }, 201);
     } catch (error) {
       return companyError(c, error);
     }

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GitCommandRunner } from "../src/contract";
 import { validateBranchName } from "../src/contract";
-import { LocalGitRepository } from "../src/local/git-cli";
+import {
+  LocalGitHubPullRequestProvider,
+  LocalGitRepository,
+  type PullRequestCommandRunner,
+} from "../src/local";
 
 function runner(outputs: Record<string, string>): GitCommandRunner {
   return {
@@ -68,5 +72,45 @@ describe("local Git capability", () => {
       ["worktree", "add", "--detach", "F:/workspace/definitions/rev", "abcdef1"],
       { cwd: "F:/definitions" },
     );
+  });
+
+  it("creates GitHub pull requests through the CLI provider", async () => {
+    const fake: PullRequestCommandRunner = {
+      run: vi.fn(async () => ({
+        stdout: "https://github.com/org/repo/pull/12\n",
+        stderr: "",
+      })),
+    };
+    const provider = new LocalGitHubPullRequestProvider(fake);
+
+    await expect(
+      provider.create({
+        repository: "git@github.com:org/repo.git",
+        head: "autonomy/proposal",
+        base: "main",
+        title: "Governance change",
+        body: "Approved change",
+      }),
+    ).resolves.toEqual({
+      number: 12,
+      url: "https://github.com/org/repo/pull/12",
+      state: "open",
+      head: "autonomy/proposal",
+      base: "main",
+    });
+    expect(fake.run).toHaveBeenCalledWith([
+      "pr",
+      "create",
+      "--repo",
+      "org/repo",
+      "--head",
+      "autonomy/proposal",
+      "--base",
+      "main",
+      "--title",
+      "Governance change",
+      "--body",
+      "Approved change",
+    ]);
   });
 });

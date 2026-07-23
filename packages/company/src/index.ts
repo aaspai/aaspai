@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
+  type AutonomyChangeRequest,
   type AutonomyLevel,
   type AutonomyProposal,
+  autonomyChangeRequestSchema,
   autonomyProposalSchema,
   type CompanyExportBundle,
   type CompanyOperationsOverview,
@@ -16,13 +20,16 @@ import {
 } from "@aaspai/contracts";
 import {
   and,
+  autonomyChangeRequests,
   autonomyProposals,
   departmentMembers,
   departments,
   eq,
+  repositories,
   type SqliteDb,
   serviceAgents,
 } from "@aaspai/db";
+import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 
 export interface CreateDepartmentInput {
   organizationId: string;
@@ -49,10 +56,26 @@ export interface CreateAutonomyProposalInput {
   proposedBy: string;
 }
 
+export interface CreateAutonomyChangeRequestInput {
+  organizationId: string;
+  proposalId: string;
+  repositoryId: string;
+  workspaceRoot: string;
+  createdBy: string;
+}
+
+export interface CompanyGitOptions {
+  git: GitRepository;
+  pullRequests: PullRequestProvider;
+}
+
 export class CompanyOperationsError extends Error {}
 
 export class CompanyOperationsService {
-  constructor(private readonly db: SqliteDb) {}
+  constructor(
+    private readonly db: SqliteDb,
+    private readonly gitOptions?: CompanyGitOptions,
+  ) {}
 
   async getOverview(organizationId: string): Promise<CompanyOperationsOverview> {
     const [departmentRows, memberRows, serviceRows, proposalRows] = await Promise.all([
@@ -346,6 +369,178 @@ export class CompanyOperationsService {
     });
   }
 
+  async listAutonomyChangeRequests(organizationId: string): Promise<AutonomyChangeRequest[]> {
+    const rows = await this.db
+      .select()
+      .from(autonomyChangeRequests)
+      .where(eq(autonomyChangeRequests.organizationId, organizationId));
+    return rows.map(toAutonomyChangeRequest);
+  }
+
+  async createAutonomyChangeRequest(
+    input: CreateAutonomyChangeRequestInput,
+  ): Promise<AutonomyChangeRequest> {
+    if (!this.gitOptions) {
+      throw new CompanyOperationsError("Git change-request providers are not configured");
+    }
+    const existing = await this.db
+      .select()
+      .from(autonomyChangeRequests)
+      .where(
+        and(
+          eq(autonomyChangeRequests.organizationId, input.organizationId),
+          eq(autonomyChangeRequests.proposalId, input.proposalId),
+        ),
+      )
+      .limit(1);
+    if (existing[0]) {
+      const request = toAutonomyChangeRequest(existing[0]);
+      if (request.status === "published") return request;
+      throw new CompanyOperationsError(
+        `autonomy change request already exists with status ${request.status}`,
+      );
+    }
+
+    const proposalRows = await this.db
+      .select()
+      .from(autonomyProposals)
+      .where(
+        and(
+          eq(autonomyProposals.organizationId, input.organizationId),
+          eq(autonomyProposals.id, input.proposalId),
+        ),
+      )
+      .limit(1);
+    const proposal = proposalRows[0] ? toProposal(proposalRows[0]) : null;
+    if (!proposal) throw new CompanyOperationsError("autonomy proposal not found");
+    if (proposal.status !== "approved") {
+      throw new CompanyOperationsError(
+        "only approved autonomy proposals can create a change request",
+      );
+    }
+
+    const repositoryRows = await this.db
+      .select()
+      .from(repositories)
+      .where(
+        and(
+          eq(repositories.organizationId, input.organizationId),
+          eq(repositories.id, input.repositoryId),
+        ),
+      )
+      .limit(1);
+    const repository = repositoryRows[0];
+    if (!repository) throw new CompanyOperationsError("definition repository not found");
+
+    const targetPath = definitionTargetPath(proposal);
+    const repositoryInfo = await this.gitOptions.git.inspect(repository.localPath);
+    const repositoryStatus = await this.gitOptions.git.status(repository.localPath);
+    if (repositoryStatus.dirty) {
+      throw new CompanyOperationsError(
+        "definition repository must be clean before creating a change request",
+      );
+    }
+    const baseCommitSha = await this.gitOptions.git.resolveCommit(
+      repository.localPath,
+      repository.defaultBranch,
+    );
+    if (isWithin(repositoryInfo.root, resolve(input.workspaceRoot))) {
+      throw new CompanyOperationsError(
+        "change-request workspace must be outside the definition repository",
+      );
+    }
+
+    const branchName = `autonomy/${proposal.id}`;
+    const request = autonomyChangeRequestSchema.parse({
+      id: makeId("autonomy-change"),
+      organizationId: input.organizationId,
+      proposalId: proposal.id,
+      repositoryId: repository.id,
+      baseCommitSha,
+      branchName,
+      targetPath,
+      commitSha: null,
+      pullRequestNumber: null,
+      pullRequestUrl: null,
+      status: "preparing",
+      error: null,
+      createdBy: input.createdBy,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+    await this.db
+      .insert(autonomyChangeRequests)
+      .values(toAutonomyChangeRequestInsert(request))
+      .run();
+
+    const workspacePath = resolve(input.workspaceRoot, "autonomy", safePathSegment(proposal.id));
+    let worktreeCreated = false;
+    try {
+      await mkdir(resolve(input.workspaceRoot, "autonomy"), { recursive: true });
+      await this.gitOptions.git.createWorktree(
+        repository.localPath,
+        workspacePath,
+        branchName,
+        baseCommitSha,
+      );
+      worktreeCreated = true;
+      const targetFile = resolve(workspacePath, targetPath);
+      if (!isWithin(workspacePath, targetFile))
+        throw new CompanyOperationsError("definition target escaped the worktree");
+      const content = await readFile(targetFile, "utf8");
+      const updatedContent = updateAutonomyLevel(content, proposal.fromLevel, proposal.toLevel);
+      await writeFile(targetFile, updatedContent, "utf8");
+      const commitSha = await this.gitOptions.git.commit(
+        workspacePath,
+        `governance: apply ${proposal.id}`,
+      );
+      if (!commitSha) throw new CompanyOperationsError("autonomy change did not produce a commit");
+      await this.gitOptions.git.push(workspacePath, "origin", branchName);
+      const pullRequest = await this.gitOptions.pullRequests.create({
+        repository: repository.remoteUrl ?? repository.id,
+        head: branchName,
+        base: repository.defaultBranch,
+        title: `Governance: change ${proposal.targetType} autonomy to ${proposal.toLevel}`,
+        body: [
+          `Approved autonomy proposal: ${proposal.id}`,
+          `Target: ${proposal.targetId}`,
+          `Change: ${proposal.fromLevel} → ${proposal.toLevel}`,
+          `Definition file: ${targetPath}`,
+          "",
+          proposal.rationale,
+        ].join("\n"),
+      });
+      const updated = {
+        ...request,
+        commitSha,
+        pullRequestNumber: pullRequest.number,
+        pullRequestUrl: pullRequest.url,
+        status: "published" as const,
+        updatedAt: now(),
+      };
+      await this.db
+        .update(autonomyChangeRequests)
+        .set(toAutonomyChangeRequestUpdate(updated))
+        .where(eq(autonomyChangeRequests.id, request.id))
+        .run();
+      return updated;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.db
+        .update(autonomyChangeRequests)
+        .set({ status: "failed", error: message, updatedAt: now() })
+        .where(eq(autonomyChangeRequests.id, request.id))
+        .run();
+      throw new CompanyOperationsError(`autonomy change request failed: ${message}`);
+    } finally {
+      if (worktreeCreated) {
+        await this.gitOptions.git
+          .removeWorktree(repository.localPath, workspacePath)
+          .catch(() => undefined);
+      }
+    }
+  }
+
   async exportCompany(organizationId: string): Promise<CompanyExportBundle> {
     const overview = await this.getOverview(organizationId);
     return companyExportBundleSchema.parse({
@@ -553,6 +748,9 @@ const toProposal = (row: typeof autonomyProposals.$inferSelect): AutonomyProposa
   const { evidenceJson, ...portable } = row;
   return autonomyProposalSchema.parse({ ...portable, evidence: parseJson(evidenceJson) });
 };
+const toAutonomyChangeRequest = (
+  row: typeof autonomyChangeRequests.$inferSelect,
+): AutonomyChangeRequest => autonomyChangeRequestSchema.parse(row);
 const toDepartmentInsert = (row: Department) => ({ ...row });
 const toMemberInsert = (row: DepartmentMember) => ({ ...row });
 const toServiceAgentInsert = (row: ServiceAgent) => ({
@@ -585,3 +783,65 @@ const toProposalInsert = (row: AutonomyProposal) => ({
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
+const toAutonomyChangeRequestInsert = (row: AutonomyChangeRequest) => ({
+  id: row.id,
+  organizationId: row.organizationId,
+  proposalId: row.proposalId,
+  repositoryId: row.repositoryId,
+  baseCommitSha: row.baseCommitSha,
+  branchName: row.branchName,
+  targetPath: row.targetPath,
+  commitSha: row.commitSha,
+  pullRequestNumber: row.pullRequestNumber,
+  pullRequestUrl: row.pullRequestUrl,
+  status: row.status,
+  error: row.error,
+  createdBy: row.createdBy,
+  createdAt: row.createdAt,
+  updatedAt: row.updatedAt,
+});
+const toAutonomyChangeRequestUpdate = (row: AutonomyChangeRequest) => ({
+  commitSha: row.commitSha,
+  pullRequestNumber: row.pullRequestNumber,
+  pullRequestUrl: row.pullRequestUrl,
+  status: row.status,
+  error: row.error,
+  updatedAt: row.updatedAt,
+});
+
+function definitionTargetPath(proposal: AutonomyProposal): string {
+  const [kind, slug] = proposal.targetId.split("/");
+  if (!slug || slug.includes("..") || slug.includes("\\") || slug.includes("/")) {
+    throw new CompanyOperationsError("autonomy proposal target is not a safe definition id");
+  }
+  if (proposal.targetType === "agent" && kind === "agent") return `agents/${slug}/AGENT.md`;
+  if (proposal.targetType === "loop" && kind === "loop") return `loops/${slug}/LOOP.md`;
+  throw new CompanyOperationsError("autonomy proposal target does not match its definition type");
+}
+
+function updateAutonomyLevel(
+  content: string,
+  fromLevel: AutonomyLevel,
+  toLevel: AutonomyLevel,
+): string {
+  const match = content.match(/^(\s*autonomyLevel:\s*)(L[0-3])(\s*)$/m);
+  if (!match) throw new CompanyOperationsError("definition file has no autonomyLevel field");
+  if (match[2] !== fromLevel) {
+    throw new CompanyOperationsError(
+      `definition autonomy level is ${match[2]}, expected ${fromLevel}`,
+    );
+  }
+  return content.replace(match[0], `${match[1]}${toLevel}${match[3]}`);
+}
+
+function safePathSegment(value: string): string {
+  const segment = value.replace(/[^a-zA-Z0-9._-]/g, "-");
+  if (!segment || segment === "." || segment === "..")
+    throw new CompanyOperationsError("unsafe workspace segment");
+  return segment;
+}
+
+function isWithin(root: string, target: string): boolean {
+  const child = relative(resolve(root), resolve(target));
+  return child === "" || (!child.startsWith(`..${sep}`) && child !== ".." && !isAbsolute(child));
+}

@@ -86,6 +86,34 @@ export const autonomyProposalSchema = z
   .strict();
 export type AutonomyProposal = z.infer<typeof autonomyProposalSchema>;
 
+export const autonomyChangeRequestStatusSchema = z.enum(["preparing", "published", "failed"]);
+export type AutonomyChangeRequestStatus = z.infer<typeof autonomyChangeRequestStatusSchema>;
+
+export const autonomyChangeRequestSchema = z
+  .object({
+    id: identifierSchema,
+    organizationId: identifierSchema,
+    proposalId: identifierSchema,
+    repositoryId: identifierSchema,
+    baseCommitSha: z.string().regex(/^[0-9a-f]{7,64}$/i),
+    branchName: z.string().trim().min(1).max(256),
+    targetPath: z.string().trim().min(1).max(8_192),
+    commitSha: z
+      .string()
+      .regex(/^[0-9a-f]{7,64}$/i)
+      .nullable()
+      .default(null),
+    pullRequestNumber: nonNegativeIntegerSchema.nullable().default(null),
+    pullRequestUrl: z.string().url().nullable().default(null),
+    status: autonomyChangeRequestStatusSchema,
+    error: z.string().max(8_192).nullable().default(null),
+    createdBy: identifierSchema,
+    createdAt: isoTimestampSchema,
+    updatedAt: isoTimestampSchema,
+  })
+  .strict();
+export type AutonomyChangeRequest = z.infer<typeof autonomyChangeRequestSchema>;
+
 const portableDepartmentSchema = departmentSchema.omit({ organizationId: true });
 const portableMemberSchema = departmentMemberSchema.omit({ organizationId: true });
 const portableServiceAgentSchema = serviceAgentSchema.omit({ organizationId: true });

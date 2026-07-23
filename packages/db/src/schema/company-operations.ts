@@ -87,7 +87,33 @@ export const autonomyProposals = sqliteTable(
   }),
 );
 
+export const autonomyChangeRequests = sqliteTable(
+  "autonomy_change_requests",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    proposalId: text("proposal_id").notNull(),
+    repositoryId: text("repository_id").notNull(),
+    baseCommitSha: text("base_commit_sha").notNull(),
+    branchName: text("branch_name").notNull(),
+    targetPath: text("target_path").notNull(),
+    commitSha: text("commit_sha"),
+    pullRequestNumber: integer("pull_request_number"),
+    pullRequestUrl: text("pull_request_url"),
+    status: text("status").notNull().default("preparing"),
+    error: text("error"),
+    createdBy: text("created_by").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => ({
+    proposalUniq: uniqueIndex("autonomy_change_requests_proposal_uniq").on(t.proposalId),
+    orgStatusIdx: index("autonomy_change_requests_org_status_idx").on(t.organizationId, t.status),
+  }),
+);
+
 export type DepartmentRow = typeof departments.$inferSelect;
 export type DepartmentMemberRow = typeof departmentMembers.$inferSelect;
 export type ServiceAgentRow = typeof serviceAgents.$inferSelect;
 export type AutonomyProposalRow = typeof autonomyProposals.$inferSelect;
+export type AutonomyChangeRequestRow = typeof autonomyChangeRequests.$inferSelect;

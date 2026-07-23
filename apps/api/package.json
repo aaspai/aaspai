@@ -13,7 +13,7 @@
     "start": "tsx ./src/main.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests --no-file-parallelism",
     "clean": "rimraf dist"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
     "@aaspai/db": "workspace:*",
     "@aaspai/execution": "workspace:*",
     "@aaspai/file-loader": "workspace:*",
+    "@aaspai/git": "workspace:*",
     "@aaspai/observability": "workspace:*",
     "@hono/node-server": "^1.19.9",
     "drizzle-orm": "^0.45.1",

@@ -28,6 +28,7 @@ import {
   sessions as sessionsTable,
   wakeups as wakeupsTable,
 } from "@aaspai/db";
+import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 import { getLogger } from "@aaspai/observability";
 import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
@@ -46,9 +47,13 @@ export interface ApiOptions {
   port?: number;
   /** Auth verifier supplied by the composition root. Execution routes fail closed when absent. */
   authVerifier?: AuthVerifier;
+  git?: GitRepository;
+  pullRequestProvider?: PullRequestProvider;
 }
 
-export function createApiApp(options: Pick<ApiOptions, "authVerifier"> = {}): Hono {
+export function createApiApp(
+  options: Pick<ApiOptions, "authVerifier" | "git" | "pullRequestProvider"> = {},
+): Hono {
   const app = new Hono();
   app.use("*", async (c, next) => {
     const t0 = Date.now();
@@ -64,7 +69,11 @@ export function createApiApp(options: Pick<ApiOptions, "authVerifier"> = {}): Ho
   registerLoopRoutes(app);
   registerSessionRoutes(app);
   registerExecutionRoutes(app, { authVerifier: options.authVerifier });
-  registerCompanyRoutes(app, { authVerifier: options.authVerifier });
+  registerCompanyRoutes(app, {
+    authVerifier: options.authVerifier,
+    git: options.git,
+    pullRequests: options.pullRequestProvider,
+  });
   return app;
 }
 
@@ -76,7 +85,11 @@ export interface RunningServer {
 export async function startServer(opts: ApiOptions = {}): Promise<RunningServer> {
   const host = opts.host ?? process.env.AASPAI_API_HOST ?? "127.0.0.1";
   const port = opts.port ?? Number(process.env.AASPAI_API_PORT ?? 7420);
-  const app = createApiApp({ authVerifier: opts.authVerifier });
+  const app = createApiApp({
+    authVerifier: opts.authVerifier,
+    git: opts.git,
+    pullRequestProvider: opts.pullRequestProvider,
+  });
   const server = serve({ fetch: app.fetch, hostname: host, port }) as ServerType;
   const url = `http://${host}:${port}`;
   log.info("api listening", { url });
