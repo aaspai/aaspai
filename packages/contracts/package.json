@@ -15,6 +15,7 @@
     "./governance": "./src/governance.ts",
     "./harness": "./src/harness.ts",
     "./identity": "./src/identity.ts",
+    "./knowledge": "./src/knowledge.ts",
     "./memory": "./src/memory.ts",
     "./observability": "./src/observability.ts",
     "./phase2": "./src/phase2.ts",

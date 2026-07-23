@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BookOpen,
   Bot,
   Brain,
   Database,
@@ -21,6 +22,7 @@ const nav = [
   { href: "/sessions", label: "Sessions", icon: ScrollText },
   { href: "/execution", label: "Execution", icon: Workflow },
   { href: "/memory", label: "Memory", icon: Brain },
+  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/state", label: "State", icon: Database },
 ];
 

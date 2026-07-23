@@ -365,6 +365,73 @@ const SQLITE_STATEMENTS = [
     ON memory_records (organization_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS memory_records_source_hash_idx
     ON memory_records (organization_id, content_hash)`,
+  `CREATE TABLE IF NOT EXISTS temporal_facts (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    predicate TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    value_type TEXT NOT NULL,
+    valid_from TEXT,
+    valid_to TEXT,
+    confidence INTEGER NOT NULL DEFAULT 500,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    source_memory_ids_json TEXT NOT NULL,
+    provenance_json TEXT NOT NULL,
+    supersedes_id TEXT,
+    invalidated_at TEXT,
+    last_verified_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS temporal_facts_org_subject_predicate_idx
+    ON temporal_facts (organization_id, subject, predicate)`,
+  `CREATE INDEX IF NOT EXISTS temporal_facts_org_status_idx
+    ON temporal_facts (organization_id, status)`,
+  `CREATE INDEX IF NOT EXISTS temporal_facts_supersedes_idx
+    ON temporal_facts (supersedes_id)`,
+  `CREATE TABLE IF NOT EXISTS knowledge_proposals (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    content TEXT NOT NULL,
+    target_path TEXT NOT NULL,
+    knowledge_type TEXT NOT NULL,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    source_memory_ids_json TEXT NOT NULL,
+    fact_ids_json TEXT NOT NULL DEFAULT '[]',
+    provenance_json TEXT NOT NULL,
+    impact_summary TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    reviewed_by TEXT,
+    review_reason TEXT,
+    reviewed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS knowledge_proposals_org_status_idx
+    ON knowledge_proposals (organization_id, status)`,
+  `CREATE INDEX IF NOT EXISTS knowledge_proposals_target_path_idx
+    ON knowledge_proposals (organization_id, target_path)`,
+  `CREATE TABLE IF NOT EXISTS knowledge_change_requests (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    proposal_id TEXT NOT NULL UNIQUE,
+    target_path TEXT NOT NULL,
+    base_commit_sha TEXT,
+    content TEXT NOT NULL,
+    impact_summary TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    decided_by TEXT,
+    decision_reason TEXT,
+    decided_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS knowledge_change_requests_org_status_idx
+    ON knowledge_change_requests (organization_id, status)`,
 ];
 
 /**
