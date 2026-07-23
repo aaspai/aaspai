@@ -19,6 +19,7 @@
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
     "@aaspai/db": "workspace:*",
+    "@aaspai/execution": "workspace:*",
     "@aaspai/file-loader": "workspace:*",
     "@aaspai/observability": "workspace:*",
     "@hono/node-server": "^1.19.9",

@@ -16,6 +16,7 @@ import {
   agentAttemptSchema,
   assertValidAttemptTransition,
   executionEventSchema,
+  executionWorkItemSchema,
   executionWorkspaceSchema,
 } from "@aaspai/contracts/execution";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
@@ -252,6 +253,23 @@ export class ExecutionStore {
     return row;
   }
 
+  async getWorkItem(workItemId: string): Promise<ExecutionWorkItem | null> {
+    const rows = await this.db
+      .select()
+      .from(executionWorkItems)
+      .where(eq(executionWorkItems.id, workItemId))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return null;
+    const {
+      claimedByAttemptId: _claimedByAttemptId,
+      claimedAt: _claimedAt,
+      metadataJson,
+      ...workItem
+    } = row;
+    return executionWorkItemSchema.parse({ ...workItem, metadata: JSON.parse(metadataJson) });
+  }
+
   async createWorkflowRun(input: CreateWorkflowRunInput) {
     const existing = await this.db
       .select()
@@ -341,6 +359,24 @@ export class ExecutionStore {
       .where(eq(agentAttempts.id, attemptId))
       .limit(1);
     return rows[0] ? agentAttemptSchema.parse(rows[0]) : null;
+  }
+
+  async cancelAttempt(attemptId: string): Promise<AgentAttempt> {
+    const current = await this.getAttempt(attemptId);
+    if (!current) throw new Error(`Agent attempt ${attemptId} not found`);
+    if (["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(current.status)) {
+      return current;
+    }
+    if (current.status === "queued") await this.transitionAttempt(attemptId, "cancelled");
+    else if (current.status === "preparing" || current.status === "running") {
+      await this.transitionAttempt(attemptId, "cancelling");
+      await this.transitionAttempt(attemptId, "cancelled");
+    } else if (current.status === "cancelling") {
+      await this.transitionAttempt(attemptId, "cancelled");
+    }
+    const cancelled = await this.getAttempt(attemptId);
+    if (!cancelled) throw new Error(`Agent attempt ${attemptId} disappeared during cancellation`);
+    return cancelled;
   }
 
   async createWorkspace(input: CreateWorkspaceInput) {

@@ -66,6 +66,10 @@ describe("ExecutionStore", () => {
       title: "Duplicate request",
       idempotencyKey: "work:first-slice",
     });
+    await expect(store.getWorkItem(workItem.id)).resolves.toMatchObject({
+      id: workItem.id,
+      metadata: { priority: "high" },
+    });
     const run = await store.createWorkflowRun({
       organizationId,
       goalId: goal.id,

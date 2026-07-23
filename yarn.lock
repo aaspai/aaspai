@@ -11,6 +11,7 @@ __metadata:
   dependencies:
     "@aaspai/contracts": "workspace:*"
     "@aaspai/db": "workspace:*"
+    "@aaspai/execution": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
     "@aaspai/observability": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
@@ -129,7 +130,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@aaspai/execution@workspace:packages/execution":
+"@aaspai/execution@workspace:*, @aaspai/execution@workspace:packages/execution":
   version: 0.0.0-use.local
   resolution: "@aaspai/execution@workspace:packages/execution"
   dependencies:
