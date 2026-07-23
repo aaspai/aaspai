@@ -45,6 +45,17 @@ export class LocalExecutionWorkspaceManager {
       baseCommitSha: input.baseCommitSha,
       status: "creating",
     });
+    const lock = await this.store.acquireResourceLock({
+      organizationId: input.organizationId,
+      resourceType: "branch",
+      resourceId: `${input.repositoryId}:${branchName}`,
+      ownerAttemptId: input.attemptId,
+      leaseExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
+    if (!lock) {
+      await this.store.updateWorkspaceStatus(workspace.id, "failed");
+      throw new Error(`Execution branch is already locked: ${branchName}`);
+    }
 
     try {
       await this.git.createWorktree(
@@ -55,6 +66,7 @@ export class LocalExecutionWorkspaceManager {
       );
       return await this.store.updateWorkspaceStatus(workspace.id, "ready");
     } catch (error) {
+      await this.store.releaseResourceLock(lock.id);
       await this.store.updateWorkspaceStatus(workspace.id, "failed");
       throw error;
     }
@@ -69,6 +81,12 @@ export class LocalExecutionWorkspaceManager {
     try {
       const repositoryPath = await this.repositoryPathFor(workspace.repositoryId);
       await this.git.removeWorktree(repositoryPath, workspace.path);
+      const lock = await this.store.findResourceLock(
+        workspace.organizationId,
+        "branch",
+        `${workspace.repositoryId}:${workspace.branchName}`,
+      );
+      if (lock) await this.store.releaseResourceLock(lock.id);
       return await this.store.updateWorkspaceStatus(workspaceId, "released");
     } catch (error) {
       await this.store.updateWorkspaceStatus(workspaceId, "failed");

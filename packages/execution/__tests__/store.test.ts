@@ -156,4 +156,34 @@ describe("ExecutionStore", () => {
       "Invalid agent attempt transition",
     );
   });
+
+  it("prevents duplicate active resource ownership and reconciles expired locks", async () => {
+    const first = await store.acquireResourceLock({
+      organizationId: "org_test",
+      resourceType: "branch",
+      resourceId: "repo:work/one",
+      ownerAttemptId: "attempt_one",
+      leaseExpiresAt: "2026-07-23T00:00:00.000Z",
+    });
+    expect(first).not.toBeNull();
+    await expect(
+      store.acquireResourceLock({
+        organizationId: "org_test",
+        resourceType: "branch",
+        resourceId: "repo:work/one",
+        ownerAttemptId: "attempt_two",
+        leaseExpiresAt: "2026-07-24T00:00:00.000Z",
+      }),
+    ).resolves.toBeNull();
+    await expect(store.reconcileExpiredLocks("2026-07-23T01:00:00.000Z")).resolves.toBe(1);
+    await expect(
+      store.acquireResourceLock({
+        organizationId: "org_test",
+        resourceType: "branch",
+        resourceId: "repo:work/one",
+        ownerAttemptId: "attempt_two",
+        leaseExpiresAt: "2026-07-24T00:00:00.000Z",
+      }),
+    ).resolves.not.toBeNull();
+  });
 });
