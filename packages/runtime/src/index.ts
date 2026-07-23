@@ -1,5 +1,16 @@
 export * from "@aaspai/contracts/runtime";
-export { dockerTarget } from "./drivers/docker/index.js";
+export {
+  createDockerEnvironmentProvider,
+  createDockerTarget,
+  type DockerCommandRunner,
+  type DockerEnvironmentLease,
+  type DockerEnvironmentProvider,
+  type DockerEnvironmentProviderOptions,
+  type DockerLifecycleEvent,
+  type DockerLifecyclePhase,
+  DockerRuntimeError,
+  dockerTarget,
+} from "./drivers/docker/index.js";
 export { localTarget } from "./drivers/local/index.js";
 export { cloudflareTarget } from "./drivers/sandbox/cloudflare/index.js";
 export { daytonaTarget } from "./drivers/sandbox/daytona/index.js";

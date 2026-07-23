@@ -100,6 +100,7 @@ export const dockerExecutionTargetSchema = z
     kind: z.literal("docker"),
     image: z.string().trim().min(1).max(512),
     cwd: z.string().trim().min(1).max(8_192).optional(),
+    remoteCwd: z.string().trim().min(1).max(8_192).optional(),
     network: z.enum(["none", "bridge", "host"]).default("bridge"),
     memoryMb: positiveIntegerSchema.optional(),
     cpuShares: positiveIntegerSchema.optional(),
