@@ -146,20 +146,28 @@ describe("LocalSandboxClient", () => {
   });
 
   it("cancels a process through the local sandbox client", async () => {
+    const { mkdir, mkdtemp, rm } = await import("node:fs/promises");
     const { resolve } = await import("node:path");
+    const workspaceRoot = resolve("..", "..", "workspace", "m1");
+    await mkdir(workspaceRoot, { recursive: true });
+    const testDirectory = await mkdtemp(`${workspaceRoot}/runtime-cancel-`);
     const controller = new AbortController();
-    const client = new LocalSandboxClient(resolve("..", "..", "workspace"));
-    const promise = client.run({
-      command: process.execPath,
-      args: ["-e", "setTimeout(() => {}, 30000)"],
-      signal: controller.signal,
-    });
-    setTimeout(() => controller.abort(), 30).unref();
+    try {
+      const client = new LocalSandboxClient(testDirectory);
+      const promise = client.run({
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 30000)"],
+        signal: controller.signal,
+      });
+      setTimeout(() => controller.abort(), 30).unref();
 
-    const result = await promise;
-    expect(result.exitCode).toBeNull();
-    expect(result.timedOut).toBe(false);
-    expect(result.signal).toBeDefined();
+      const result = await promise;
+      expect(result.exitCode).toBeNull();
+      expect(result.timedOut).toBe(false);
+      expect(result.signal).toBeDefined();
+    } finally {
+      await rm(testDirectory, { recursive: true, force: true });
+    }
   });
 
   it("LocalSandboxClient lists files in a temp dir", async () => {
