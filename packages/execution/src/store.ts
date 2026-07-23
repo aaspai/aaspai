@@ -16,8 +16,10 @@ import {
   agentAttemptSchema,
   assertValidAttemptTransition,
   executionEventSchema,
+  executionPlanSchema,
   executionWorkItemSchema,
   executionWorkspaceSchema,
+  workflowRunSchema,
 } from "@aaspai/contracts/execution";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
@@ -297,6 +299,15 @@ export class ExecutionStore {
     return row;
   }
 
+  async getWorkflowRun(runId: string): Promise<WorkflowRun | null> {
+    const rows = await this.db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, runId))
+      .limit(1);
+    return rows[0] ? workflowRunSchema.parse(rows[0]) : null;
+  }
+
   async createAttempt(input: CreateAttemptInput) {
     const row = {
       id: input.id ?? makeId("attempt"),
@@ -435,7 +446,18 @@ export class ExecutionStore {
       createdAt: now(),
     } satisfies typeof executionPlans.$inferInsert;
     await this.db.insert(executionPlans).values(row);
-    return row;
+    const {
+      sourceSnapshotJson: _sourceSnapshotJson,
+      targetJson: _targetJson,
+      runtimeConfigJson: _runtimeConfigJson,
+      ...plan
+    } = row;
+    return executionPlanSchema.parse({
+      ...plan,
+      sourceSnapshot: input.sourceSnapshot,
+      target: input.target,
+      runtimeConfig: input.runtimeConfig ?? {},
+    });
   }
 
   async appendEvent(input: AppendEventInput): Promise<ExecutionEvent> {
