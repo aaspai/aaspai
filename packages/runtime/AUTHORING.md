@@ -53,3 +53,16 @@ Every sandbox driver implements the `SandboxClient` interface (6 methods:
 `makeDir`, `writeFile`, `readFile`, `listFiles`, `remove`, `run`) and
 the lease lifecycle (`acquire`, `resume`, `release`, `destroy`). See
 `packages/runtime/src/shared/sandbox-client.ts`.
+
+## Docker provider
+
+Docker is the first lifecycle-complete isolated provider. Each execution gets
+a disposable container with the assigned local workspace mounted at
+`/workspace`; the container never becomes the source of truth for git state.
+The driver provisions, readiness-checks, executes with streamed logs, and
+retries removal during cleanup. `recover(containerId)` is available to an
+orphan reconciler and reports `running`, `exited`, or `missing`.
+
+The provider deliberately does not implement cloud scheduling, snapshots, or
+remote git. Those are separate capabilities and are not silently implied by
+the Docker contract.

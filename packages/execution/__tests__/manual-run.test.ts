@@ -59,7 +59,7 @@ describe("ManualLocalExecutionService", () => {
     expect(output.definitions).toContain(path.join("workspace-root", "definitions"));
     expect(result.attempt.status).toBe("succeeded");
     expect(await store.getWorkspace(result.workspaceId)).toMatchObject({ status: "released" });
-    expect(await store.listEvents(result.attempt.id)).toHaveLength(2);
+    expect(await store.listEvents(result.attempt.id)).toHaveLength(3);
     await expect(readFile(path.join(projectPath, "README.md"), "utf8")).resolves.toBe("project\n");
   }, 20_000);
 

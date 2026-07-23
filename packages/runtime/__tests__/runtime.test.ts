@@ -1,5 +1,6 @@
 import {
   buildSandboxNpmInstallCommand,
+  createDockerTarget,
   dockerExecutionTargetSchema,
   EXECUTION_TARGET_KIND_VALUES,
   e2bTarget,
@@ -196,3 +197,105 @@ describe("e2b skeleton", () => {
     ).rejects.toThrow(/e2b sandbox driver is a skeleton/);
   });
 });
+
+describe("Docker environment provider", () => {
+  it("runs a plan in a disposable container and streams output", async () => {
+    const { mkdir, mkdtemp, rm } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const workspaceRoot = join(process.cwd(), "workspace", "m8");
+    await mkdir(workspaceRoot, { recursive: true });
+    const workspace = await mkdtemp(join(workspaceRoot, "docker-provider-"));
+    const calls: string[][] = [];
+    const output: string[] = [];
+    const commandRunner = {
+      async run(options: {
+        args: string[];
+        onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void> | void;
+      }) {
+        calls.push(options.args);
+        switch (options.args[0]) {
+          case "create":
+            return result({ stdout: "container_123\n" });
+          case "inspect":
+            return result({ stdout: "running\n" });
+          case "exec":
+            await options.onLog?.("stdout", "inside\n");
+            return result({ stdout: "inside\n" });
+          case "start":
+          case "rm":
+            return result({});
+          default:
+            throw new Error(`unexpected docker operation: ${options.args[0]}`);
+        }
+      },
+    };
+    try {
+      const target = createDockerTarget({ commandRunner, cleanupRetries: 1 });
+      const runResult = await target.run(
+        {
+          kind: "docker",
+          image: "node:22",
+          network: "none",
+          cwd: workspace,
+        },
+        {
+          command: "node",
+          args: ["-e", "console.log('inside')"],
+          onLog: async (_stream, chunk) => {
+            output.push(chunk);
+          },
+        },
+      );
+
+      expect(runResult.exitCode).toBe(0);
+      expect(output).toEqual(["inside\n"]);
+      expect(calls.map((args) => args[0])).toEqual(["create", "start", "inspect", "exec", "rm"]);
+      expect(calls[0]).toContain(`type=bind,source=${workspace},target=/workspace`);
+      expect(calls[3]).toEqual([
+        "exec",
+        "--workdir",
+        "/workspace",
+        "container_123",
+        "node",
+        "-e",
+        "console.log('inside')",
+      ]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a missing container during recovery", async () => {
+    const provider = (
+      await import("../src/drivers/docker/index.js")
+    ).createDockerEnvironmentProvider({
+      cleanupRetries: 1,
+      commandRunner: {
+        async run() {
+          return result({ exitCode: 1, stderr: "No such container" });
+        },
+      },
+    });
+    await expect(provider.recover("missing_container")).resolves.toBe("missing");
+  });
+});
+
+function result(
+  overrides: Partial<{
+    exitCode: number | null;
+    stdout: string;
+    stderr: string;
+  }> = {},
+) {
+  const now = new Date().toISOString();
+  return {
+    exitCode: 0,
+    timedOut: false,
+    stdout: "",
+    stderr: "",
+    startedAt: now,
+    finishedAt: now,
+    durationMs: 0,
+    ...overrides,
+  };
+}

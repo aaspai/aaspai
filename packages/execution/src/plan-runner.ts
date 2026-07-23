@@ -33,6 +33,14 @@ export class ExecutionPlanRunner {
         ...input.plan.target,
         cwd: input.workspace.path,
       } as ExecutionPlan["target"];
+      await target.prepareWorkspace?.(targetInput, {
+        localDir: input.workspace.path,
+        remoteDir:
+          input.plan.target.kind === "docker"
+            ? (input.plan.target.remoteCwd ?? "/workspace")
+            : input.workspace.path,
+      });
+      let executionEventSeq = 1;
       await this.store.appendEvent({
         organizationId: input.plan.organizationId,
         attemptId: input.plan.attemptId,
@@ -42,17 +50,37 @@ export class ExecutionPlanRunner {
           args: [...(input.args ?? [])],
           cwd: input.workspace.path,
         },
-        seq: 1,
+        seq: executionEventSeq,
       });
-      const result = await target.run(targetInput, {
-        command: input.command,
-        args: [...(input.args ?? [])],
-        cwd: input.workspace.path,
-        env: input.env,
-        stdin: input.stdin,
-        signal: input.signal,
-        timeoutMs: input.plan.timeoutMs ?? undefined,
-      });
+      let result: RunProcessResult;
+      try {
+        result = await target.run(targetInput, {
+          command: input.command,
+          args: [...(input.args ?? [])],
+          cwd: input.workspace.path,
+          env: input.env,
+          stdin: input.stdin,
+          signal: input.signal,
+          timeoutMs: input.plan.timeoutMs ?? undefined,
+          onLog: async (stream, chunk) => {
+            await this.store.appendEvent({
+              organizationId: input.plan.organizationId,
+              attemptId: input.plan.attemptId,
+              type: "process.output",
+              payload: { stream, chunk },
+              seq: ++executionEventSeq,
+            });
+          },
+        });
+      } finally {
+        await target.restoreWorkspace?.(targetInput, {
+          localDir: input.workspace.path,
+          remoteDir:
+            input.plan.target.kind === "docker"
+              ? (input.plan.target.remoteCwd ?? "/workspace")
+              : input.workspace.path,
+        });
+      }
       await this.store.appendEvent({
         organizationId: input.plan.organizationId,
         attemptId: input.plan.attemptId,
@@ -63,7 +91,7 @@ export class ExecutionPlanRunner {
           timedOut: result.timedOut,
           durationMs: result.durationMs,
         },
-        seq: 2,
+        seq: ++executionEventSeq,
       });
       await this.completeAttempt(input.plan.attemptId, outcomeStatus(result), input.signal);
       return result;
@@ -96,11 +124,6 @@ export class ExecutionPlanRunner {
     }
     if (input.workspace.status !== "ready") {
       throw new Error(`Execution workspace is not ready: ${input.workspace.status}`);
-    }
-    if (input.plan.target.kind !== "local") {
-      throw new Error(
-        `Execution plan target is not supported by the local runner: ${input.plan.target.kind}`,
-      );
     }
   }
 }
