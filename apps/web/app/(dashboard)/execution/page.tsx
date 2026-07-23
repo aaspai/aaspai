@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { isAaspaiWorkspace, listExecutionAttempts } from "@/lib/aaspai";
+import { isAaspaiWorkspace, listExecutionAttempts, listExecutionGoalProgress } from "@/lib/aaspai";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +17,7 @@ export default async function ExecutionPage() {
     );
   }
   const attempts = await listExecutionAttempts();
+  const goals = await listExecutionGoalProgress();
   return (
     <div className="space-y-6">
       <header>
@@ -25,6 +26,41 @@ export default async function ExecutionPage() {
           Attempts, workspaces, events, and artifacts.
         </p>
       </header>
+      {goals.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Goal progress</CardTitle>
+            <CardDescription>
+              Evidence-backed progress from WorkItem state; blocked work stays visible.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {goals.map((goal) => (
+              <div key={goal.id} className="space-y-2">
+                <div className="flex items-center justify-between gap-4 text-sm">
+                  <span className="font-medium">{goal.title}</span>
+                  <span className="text-muted-foreground">
+                    {goal.percent}% · {goal.completed}/{goal.total} completed
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all"
+                    style={{ width: `${goal.percent}%` }}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                  <span>{goal.active} active</span>
+                  <span>{goal.proposed} waiting</span>
+                  <span>{goal.ready} ready</span>
+                  <span>{goal.blocked} blocked</span>
+                  <span>{goal.failed} failed</span>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Agent attempts</CardTitle>

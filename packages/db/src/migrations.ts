@@ -142,11 +142,27 @@ const SQLITE_STATEMENTS = [
     branch_name TEXT,
     claimed_by_attempt_id TEXT,
     claimed_at TEXT,
+    priority INTEGER NOT NULL DEFAULT 0,
+    deadline_at TEXT,
+    max_attempts INTEGER NOT NULL DEFAULT 1,
+    retry_after TEXT,
+    blocked_reason TEXT,
     idempotency_key TEXT NOT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS execution_work_item_dependencies (
+    organization_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL,
+    depends_on_work_item_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (work_item_id, depends_on_work_item_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_work_item_dependencies_work_idx
+    ON execution_work_item_dependencies (work_item_id)`,
+  `CREATE INDEX IF NOT EXISTS execution_work_item_dependencies_dependency_idx
+    ON execution_work_item_dependencies (depends_on_work_item_id)`,
   `CREATE TABLE IF NOT EXISTS workflow_runs (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -243,6 +259,26 @@ const SQLITE_STATEMENTS = [
  * can run on every `db migrate` invocation.
  */
 const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'priority'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'deadline_at'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN deadline_at TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'max_attempts'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 1",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'retry_after'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN retry_after TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'blocked_reason'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN blocked_reason TEXT",
+  },
   {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'harness_session_id'",
     sql: "ALTER TABLE agent_attempts ADD COLUMN harness_session_id TEXT",

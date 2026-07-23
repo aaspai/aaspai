@@ -460,6 +460,51 @@ export interface ExecutionAttemptSummary {
   finishedAt: string | null;
 }
 
+export interface ExecutionGoalProgress {
+  id: string;
+  title: string;
+  total: number;
+  completed: number;
+  active: number;
+  proposed: number;
+  ready: number;
+  blocked: number;
+  failed: number;
+  percent: number;
+}
+
+export async function listExecutionGoalProgress(): Promise<ExecutionGoalProgress[]> {
+  ensureWorkspaceEnv();
+  const handle = getDefaultDb();
+  const goalRows = await handle.db.select().from(goals).orderBy(desc(goals.updatedAt));
+  const result: ExecutionGoalProgress[] = [];
+  for (const goal of goalRows) {
+    const items = await handle.db
+      .select({ status: executionWorkItems.status })
+      .from(executionWorkItems)
+      .where(eq(executionWorkItems.goalId, goal.id));
+    const completed = items.filter((item) => item.status === "completed").length;
+    const active = items.filter((item) => ["claimed", "in_progress"].includes(item.status)).length;
+    const proposed = items.filter((item) => item.status === "proposed").length;
+    const ready = items.filter((item) => item.status === "ready").length;
+    const blocked = items.filter((item) => item.status === "blocked").length;
+    const failed = items.filter((item) => item.status === "failed").length;
+    result.push({
+      id: goal.id,
+      title: goal.title,
+      total: items.length,
+      completed,
+      active,
+      proposed,
+      ready,
+      blocked,
+      failed,
+      percent: items.length === 0 ? 0 : Math.round((completed / items.length) * 100),
+    });
+  }
+  return result;
+}
+
 export async function listExecutionAttempts(limit = 50): Promise<ExecutionAttemptSummary[]> {
   ensureWorkspaceEnv();
   const rows = await getDefaultDb()
