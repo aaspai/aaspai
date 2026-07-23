@@ -69,7 +69,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const onLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
     if (stream === "stderr") {
-      collectedErrors.push(redactHomePath(chunk));
+      const redacted = redactHomePath(chunk);
+      collectedErrors.push(redacted);
+      await ctx.onLog(stream, redacted);
     } else {
       for (const line of chunk.split(/\r?\n/)) {
         if (line.length === 0) continue;
