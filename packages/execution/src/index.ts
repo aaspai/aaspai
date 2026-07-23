@@ -1,3 +1,4 @@
+export * from "./harness-runner.js";
 export * from "./manual-run.js";
 export * from "./plan-runner.js";
 export * from "./store.js";

@@ -20,6 +20,7 @@
  *                     should run in a specific worktree)
  */
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,7 +36,6 @@ import { getLogger } from "@aaspai/observability";
 const log = getLogger("harness.opencode-cli");
 
 const CLI_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
-const STREAM_POLL_MS = 50;
 
 const opencodeCliConfigSchema = {
   model: "opencode-go/mimo-v2.5",
@@ -63,11 +63,20 @@ function estimateTokens(s: string): number {
   return Math.max(1, Math.ceil(s.length / 4));
 }
 
-function resolveConfig(ctx: AdapterExecutionContext): { model: string; title: string } {
+function resolveConfig(ctx: AdapterExecutionContext): {
+  model: string;
+  title: string;
+  command?: string;
+  commandArgs: string[];
+} {
   const cfg = (ctx.config as Record<string, unknown>) ?? {};
   return {
     model: (cfg.model as string) ?? opencodeCliConfigSchema.model,
     title: (cfg.title as string) ?? opencodeCliConfigSchema.title,
+    command: typeof cfg.command === "string" ? cfg.command : undefined,
+    commandArgs: Array.isArray(cfg.commandArgs)
+      ? cfg.commandArgs.filter((value): value is string => typeof value === "string")
+      : [],
   };
 }
 
@@ -78,7 +87,10 @@ function resolveConfig(ctx: AdapterExecutionContext): { model: string; title: st
  * npm scripts use.
  */
 let cachedOpencodePath: string | null = null;
-async function resolveOpencodeBinary(): Promise<string> {
+async function resolveOpencodeBinary(executableOverride?: string): Promise<string> {
+  if (executableOverride) {
+    return executableOverride;
+  }
   if (cachedOpencodePath && existsSync(cachedOpencodePath)) return cachedOpencodePath;
 
   // On Windows, the npm-installed "opencode" is a Git Bash shim that
@@ -111,7 +123,7 @@ async function resolveOpencodeBinary(): Promise<string> {
     }
   }
 
-  const exe = process.env.OPENCODE_CLI ?? "opencode";
+  const exe = executableOverride ?? process.env.OPENCODE_CLI ?? "opencode";
   if (existsSync(exe)) {
     cachedOpencodePath = exe;
     return cachedOpencodePath;
@@ -142,6 +154,10 @@ async function runOpencodeCli(
   prompt: string,
   model: string,
   title: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+  command: string | undefined,
+  commandArgs: readonly string[],
   onLog: ((stream: "stdout" | "stderr", chunk: string) => Promise<void> | void) | undefined,
 ): Promise<{
   sessionId?: string;
@@ -151,11 +167,12 @@ async function runOpencodeCli(
   cost: number;
   exitCode: number;
   timedOut: boolean;
+  errorMessage?: string;
 }> {
-  const cli = await resolveOpencodeBinary();
-  const workdir = process.env.OPENCODE_CLI_DIR ?? process.cwd();
+  const cli = await resolveOpencodeBinary(command);
+  const workdir = cwd || process.env.OPENCODE_CLI_DIR || process.cwd();
 
-  const args = ["run", "--format", "json", "--model", model, "--title", title];
+  const args = [...commandArgs, "run", "--format", "json", "--model", model, "--title", title];
   // The opencode CLI accepts the prompt either as a positional arg
   // (useful when shell-handling is brittle) or via stdin. We use
   // positional when the binary is a .cmd shim, stdin when it's the
@@ -173,7 +190,7 @@ async function runOpencodeCli(
     const child = spawn(cli, args, {
       cwd: workdir,
       env: { ...process.env },
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
 
@@ -182,7 +199,6 @@ async function runOpencodeCli(
     // the process if not handled.
     child.stdout?.on("error", () => {});
     child.stderr?.on("error", () => {});
-    child.stdin?.on("error", () => {});
 
     let stdoutBuf = "";
     let stderrBuf = "";
@@ -192,6 +208,21 @@ async function runOpencodeCli(
     let outputTokens = 0;
     let cost = 0;
     let timedOut = false;
+    let closed = false;
+    let pendingLogWrites: Promise<void> = Promise.resolve();
+    const emitLog = (stream: "stdout" | "stderr", chunk: string): void => {
+      pendingLogWrites = pendingLogWrites.then(async () => {
+        await onLog?.(stream, chunk);
+      });
+    };
+    const abort = (): void => {
+      if (closed) return;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        /* already dead */
+      }
+    };
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -219,54 +250,47 @@ async function runOpencodeCli(
               cost,
               exitCode: -1,
               timedOut: true,
+              errorMessage: stderrBuf.trim().slice(0, 2_048) || undefined,
             }),
           1000,
         );
       }, 5_000);
     }, CLI_TIMEOUT_MS);
     timer.unref();
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
 
     child.stdout?.on("data", (chunk: Buffer) => {
       const s = chunk.toString("utf8");
       stdoutBuf += s;
       // opencode --format json emits one JSON event per line
-      const nl = stdoutBuf.indexOf("\n");
+      let nl = stdoutBuf.indexOf("\n");
       while (nl >= 0) {
         const line = stdoutBuf.slice(0, nl);
         stdoutBuf = stdoutBuf.slice(nl + 1);
         if (line.trim().length === 0) continue;
         try {
           const ev = JSON.parse(line) as OpenCodeEvent;
-          handleEvent(ev, onLog);
+          handleEvent(ev);
         } catch {
           // Not JSON — emit as a raw line
-          void onLog?.("stdout", line);
+          emitLog("stdout", line);
         }
+        nl = stdoutBuf.indexOf("\n");
       }
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
       const s = chunk.toString("utf8");
       stderrBuf += s;
-      void onLog?.("stderr", s);
+      emitLog("stderr", s);
     });
 
-    // Stdin is intentionally NOT used. The prompt was passed as a
-    // positional arg above, which works on all platforms.
-    if (child.stdin) {
-      child.stdin.on("error", () => {});
-      try {
-        child.stdin.destroy();
-      } catch {
-        /* ignore */
-      }
-    }
-
-    function handleEvent(ev: OpenCodeEvent, cb: typeof onLog): void {
+    function handleEvent(ev: OpenCodeEvent): void {
       if (ev.sessionID) sessionId = ev.sessionID;
       if (ev.type === "text" && ev.part?.type === "text" && typeof ev.part.text === "string") {
         textParts.push(ev.part.text);
-        void cb?.(
+        emitLog(
           "stdout",
           JSON.stringify({
             kind: "assistant",
@@ -293,7 +317,7 @@ async function runOpencodeCli(
           const c = ev.part.cost as number;
           cost = Math.max(cost, c);
         }
-        void cb?.(
+        emitLog(
           "stdout",
           JSON.stringify({
             kind: "result",
@@ -304,7 +328,7 @@ async function runOpencodeCli(
           }) + "\n",
         );
       } else {
-        void cb?.(
+        emitLog(
           "stdout",
           JSON.stringify({
             kind: "init",
@@ -320,16 +344,19 @@ async function runOpencodeCli(
       reject(err);
     });
 
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
+      closed = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       if (stdoutBuf.trim().length > 0) {
         try {
           const ev = JSON.parse(stdoutBuf) as OpenCodeEvent;
-          handleEvent(ev, onLog);
+          handleEvent(ev);
         } catch {
           /* ignore */
         }
       }
+      await pendingLogWrites;
       resolve({
         sessionId,
         text: textParts.join(""),
@@ -338,10 +365,9 @@ async function runOpencodeCli(
         cost,
         exitCode: code ?? 0,
         timedOut,
+        errorMessage: stderrBuf.trim().slice(0, 2_048) || undefined,
       });
     });
-
-    child.stdin?.end(prompt);
   });
 }
 
@@ -370,9 +396,10 @@ const LOCK_PATH = process.env.AASPAI_OPENCODE_LOCK_PATH ?? join(tmpdir(), "aaspa
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_WAIT_MS = 10_000;
 let lockChain: Promise<void> = Promise.resolve();
+const PROCESS_LOCK_NONCE = randomUUID();
 
 async function acquireLock(): Promise<() => void> {
-  const myId = `${process.pid}@${hostname()}`;
+  const myId = `${process.pid}@${hostname()}@${PROCESS_LOCK_NONCE}`;
   const startedAt = Date.now();
   // Queue our turn behind any other process waiting on the same
   // per-process promise chain.
@@ -397,7 +424,11 @@ async function acquireLock(): Promise<() => void> {
         const m = /^(\d+)@/.exec(holder);
         if (m) {
           const holderPid = Number(m[1]);
-          if (holderPid !== process.pid && !isPidRunning(holderPid)) {
+          const sameProcessWithDifferentOwner = holderPid === process.pid && holder !== myId;
+          if (
+            sameProcessWithDifferentOwner ||
+            (holderPid !== process.pid && !isPidRunning(holderPid))
+          ) {
             // Stale lock — steal it.
             try {
               unlinkSync(LOCK_PATH);
@@ -456,7 +487,7 @@ export const opencodeCli: ServerAdapterModule = {
       { id: "opencode-go/qwen3.7-max", label: "Qwen 3.7 Max" },
     ],
     agentConfigurationDoc:
-      "Spawns the opencode CLI (npm i -g opencode-ai). Auth via ~/.local/share/opencode/auth.json. Use `opencode models` to list available models.",
+      "Spawns the opencode CLI (npm i -g opencode-ai). Auth via ~/.local/share/opencode/auth.json. Use `opencode models` to list available models. Optional command and commandArgs fields support managed wrappers and deterministic runners.",
     status: "ready",
   },
   async execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
@@ -482,7 +513,16 @@ export const opencodeCli: ServerAdapterModule = {
     let cliResult: Awaited<ReturnType<typeof runOpencodeCli>>;
     try {
       cliResult = await serialize(() =>
-        runOpencodeCli(prompt, config.model, config.title, ctx.onLog),
+        runOpencodeCli(
+          prompt,
+          config.model,
+          config.title,
+          ctx.context.cwd,
+          ctx.signal,
+          config.command,
+          config.commandArgs,
+          ctx.onLog,
+        ),
       );
     } finally {
       await release();
@@ -496,6 +536,7 @@ export const opencodeCli: ServerAdapterModule = {
       sessionParams: { model: config.model, cli: "opencode" },
       exitCode: cliResult.exitCode,
       timedOut: cliResult.timedOut,
+      errorMessage: cliResult.errorMessage,
       usage: {
         inputTokens: cliResult.inputTokens || estimateTokens(prompt),
         outputTokens: cliResult.outputTokens || estimateTokens(cliResult.text),

@@ -141,6 +141,7 @@ export const agentAttempts = sqliteTable(
       .references(() => executionWorkItems.id),
     agentId: text("agent_id").notNull(),
     harness: text("harness").notNull(),
+    harnessSessionId: text("harness_session_id"),
     status: text("status").notNull().default("queued"),
     attemptNumber: integer("attempt_number").notNull().default(1),
     timeoutMs: integer("timeout_ms"),

@@ -21,6 +21,7 @@
     "@aaspai/db": "workspace:*",
     "@aaspai/file-loader": "workspace:*",
     "@aaspai/git": "workspace:*",
+    "@aaspai/harness": "workspace:*",
     "@aaspai/runtime": "workspace:*"
   },
   "devDependencies": {

@@ -190,6 +190,11 @@ export const adapterExecutionContextSchema = z
           .optional(),
       })
       .strict(),
+    signal: z
+      .custom<AbortSignal>((v) => typeof v === "object" && v !== null, {
+        message: "signal must be an AbortSignal",
+      })
+      .optional(),
     onLog: z.custom<(stream: "stdout" | "stderr", chunk: string) => Promise<void> | void>(
       (v) => typeof v === "function",
       { message: "onLog must be a function" },

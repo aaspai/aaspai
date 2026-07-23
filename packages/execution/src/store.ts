@@ -23,6 +23,7 @@ import {
   resourceLockSchema,
   workflowRunSchema,
 } from "@aaspai/contracts/execution";
+import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
   agentAttempts,
@@ -36,6 +37,8 @@ import {
   executionWorkItems,
   executionWorkspaces,
   goals,
+  sessionEvents as harnessSessionEvents,
+  sessions as harnessSessions,
   inArray,
   isNull,
   lte,
@@ -119,6 +122,16 @@ export interface CreateAttemptInput {
   attemptNumber?: number;
   timeoutMs?: number | null;
   status?: AgentAttempt["status"];
+}
+
+export interface CreateHarnessSessionInput {
+  id?: string;
+  organizationId: string;
+  agentId: string;
+  adapter: string;
+  prompt: string;
+  runtime?: Record<string, unknown>;
+  config?: Record<string, unknown>;
 }
 
 export interface CreateWorkspaceInput {
@@ -330,6 +343,7 @@ export class ExecutionStore {
       workItemId: input.workItemId,
       agentId: input.agentId,
       harness: input.harness,
+      harnessSessionId: null,
       status: input.status ?? "queued",
       attemptNumber: input.attemptNumber ?? 1,
       timeoutMs: input.timeoutMs ?? null,
@@ -341,6 +355,113 @@ export class ExecutionStore {
     } satisfies typeof agentAttempts.$inferInsert;
     await this.db.insert(agentAttempts).values(row);
     return row;
+  }
+
+  async createHarnessSession(input: CreateHarnessSessionInput) {
+    const id = input.id ?? makeId("sess");
+    const row = {
+      id,
+      organizationId: input.organizationId,
+      wakeupId: "manual",
+      agentId: input.agentId,
+      adapter: input.adapter,
+      runtimeJson: JSON.stringify(input.runtime ?? {}),
+      prompt: input.prompt,
+      configJson: JSON.stringify(input.config ?? {}),
+      status: "running",
+      sessionId: null,
+      sessionParamsJson: null,
+      sessionDisplayId: id.slice(0, 12),
+      resultJson: null,
+      usageJson: null,
+      costUsd: null,
+      errorFamily: null,
+      errorCode: null,
+      errorMessage: null,
+      pendingQuestionJson: null,
+      startedAt: now(),
+      finishedAt: null,
+      durationMs: null,
+      parentSessionId: null,
+    } satisfies typeof harnessSessions.$inferInsert;
+    await this.db.insert(harnessSessions).values(row as never);
+    return row;
+  }
+
+  async linkHarnessSession(attemptId: string, harnessSessionId: string): Promise<AgentAttempt> {
+    await this.db
+      .update(agentAttempts)
+      .set({ harnessSessionId })
+      .where(eq(agentAttempts.id, attemptId));
+    const attempt = await this.getAttempt(attemptId);
+    if (!attempt) throw new Error(`Agent attempt ${attemptId} not found`);
+    return attempt;
+  }
+
+  async getHarnessSession(harnessSessionId: string) {
+    const rows = await this.db
+      .select()
+      .from(harnessSessions)
+      .where(eq(harnessSessions.id, harnessSessionId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async appendHarnessSessionEvent(input: {
+    sessionId: string;
+    ts?: string;
+    kind: string;
+    payload: Record<string, unknown>;
+    seq: number;
+  }): Promise<void> {
+    await this.db.insert(harnessSessionEvents).values({
+      sessionId: input.sessionId,
+      ts: input.ts ?? now(),
+      kind: input.kind,
+      payloadJson: JSON.stringify(input.payload),
+      seq: input.seq,
+    });
+  }
+
+  async completeHarnessSession(
+    sessionId: string,
+    result: AdapterExecutionResult,
+    status: "succeeded" | "failed" | "cancelled" | "timed_out",
+  ): Promise<void> {
+    const finishedAt = now();
+    const current = await this.getHarnessSession(sessionId);
+    const startedAtMs = current?.startedAt ? Date.parse(current.startedAt) : Date.now();
+    const normalized = {
+      sessionId: result.sessionId ?? sessionId,
+      sessionParams: result.sessionParams,
+      sessionDisplayId: result.sessionDisplayId,
+      status,
+      exitCode: result.exitCode,
+      usage: result.usage,
+      costUsd: result.costUsd,
+      errorFamily: result.errorFamily,
+      errorCode: result.errorCode,
+      summary: result.summary,
+      logRef: sessionId,
+    };
+    await this.db
+      .update(harnessSessions)
+      .set({
+        status,
+        finishedAt,
+        durationMs: Math.max(0, Date.parse(finishedAt) - startedAtMs),
+        sessionId: result.sessionId ?? null,
+        sessionParamsJson: result.sessionParams ? JSON.stringify(result.sessionParams) : null,
+        sessionDisplayId: result.sessionDisplayId ?? null,
+        resultJson: JSON.stringify(normalized),
+        usageJson: result.usage ? JSON.stringify(result.usage) : null,
+        costUsd: result.costUsd ?? null,
+        errorFamily: result.errorFamily ?? null,
+        errorCode: result.errorCode ?? null,
+        errorMessage:
+          status === "succeeded" ? null : (result.errorMessage ?? result.summary ?? null),
+      } as never)
+      .where(eq(harnessSessions.id, sessionId));
   }
 
   async claimWorkItem(workItemId: string, attemptId: string): Promise<boolean> {

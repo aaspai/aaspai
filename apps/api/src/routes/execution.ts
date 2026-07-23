@@ -93,6 +93,9 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     return c.json({
       data: {
         attempt,
+        harnessSession: attempt.harnessSessionId
+          ? publicHarnessSession(await store.getHarnessSession(attempt.harnessSessionId))
+          : null,
         events: await store.listEvents(attempt.id),
         artifacts: await store.listArtifacts(attempt.id),
       },
@@ -162,4 +165,26 @@ async function authenticate(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function publicHarnessSession(session: Awaited<ReturnType<ExecutionStore["getHarnessSession"]>>) {
+  if (!session) return null;
+  return {
+    id: session.id,
+    organizationId: session.organizationId,
+    agentId: session.agentId,
+    adapter: session.adapter,
+    status: session.status,
+    sessionId: session.sessionId,
+    sessionDisplayId: session.sessionDisplayId,
+    resultJson: session.resultJson,
+    usageJson: session.usageJson,
+    costUsd: session.costUsd,
+    errorFamily: session.errorFamily,
+    errorCode: session.errorCode,
+    errorMessage: session.errorMessage,
+    startedAt: session.startedAt,
+    finishedAt: session.finishedAt,
+    durationMs: session.durationMs,
+  };
 }

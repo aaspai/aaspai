@@ -139,6 +139,7 @@ __metadata:
     "@aaspai/db": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
     "@aaspai/git": "workspace:*"
+    "@aaspai/harness": "workspace:*"
     "@aaspai/runtime": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@types/node": "npm:^24.0.0"

@@ -161,6 +161,7 @@ export const agentAttemptSchema = z
     workItemId: identifierSchema,
     agentId: identifierSchema,
     harness: z.string().trim().min(1).max(128),
+    harnessSessionId: identifierSchema.nullable().default(null),
     status: attemptStatusSchema.default("queued"),
     attemptNumber: positiveIntegerSchema.default(1),
     timeoutMs: positiveIntegerSchema.nullable().default(null),

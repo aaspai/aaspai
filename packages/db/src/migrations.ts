@@ -165,6 +165,7 @@ const SQLITE_STATEMENTS = [
     work_item_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     harness TEXT NOT NULL,
+    harness_session_id TEXT,
     status TEXT NOT NULL DEFAULT 'queued',
     attempt_number INTEGER NOT NULL DEFAULT 1,
     timeout_ms INTEGER,
@@ -242,6 +243,10 @@ const SQLITE_STATEMENTS = [
  * can run on every `db migrate` invocation.
  */
 const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
+  {
+    check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'harness_session_id'",
+    sql: "ALTER TABLE agent_attempts ADD COLUMN harness_session_id TEXT",
+  },
   // session_events.seq was added after the initial scaffold. Older
   // DBs need it added; we back-fill with the row id so the order
   // is preserved.
