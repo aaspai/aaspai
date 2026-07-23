@@ -10,10 +10,10 @@
  *   GET  /v1/sessions/:id/events     — SSE stream of session events
  *
  * What's NOT here (deferred):
- *   - Auth (Phase 4: Bearer tokens via @aaspai/auth)
+ *   - Better Auth composition (the verifier is injected by the composition root)
  *   - Webhooks
  *   - MCP / OpenAPI
- *   - Multi-tenant scoping
+ *   - Auth on legacy loop/session routes
  *
  * Architecture: the api does NOT execute sessions. It enqueues a
  * wakeup row in the DB. The worker picks it up and runs the session
@@ -21,6 +21,7 @@
  * today — the api is just a different entry point.
  */
 
+import type { AuthVerifier } from "@aaspai/auth";
 import {
   closeDefaultDb,
   getDefaultDb,
@@ -42,9 +43,11 @@ const log = getLogger("api.server");
 export interface ApiOptions {
   host?: string;
   port?: number;
+  /** Auth verifier supplied by the composition root. Execution routes fail closed when absent. */
+  authVerifier?: AuthVerifier;
 }
 
-export function createApiApp(): Hono {
+export function createApiApp(options: Pick<ApiOptions, "authVerifier"> = {}): Hono {
   const app = new Hono();
   app.use("*", async (c, next) => {
     const t0 = Date.now();
@@ -59,7 +62,7 @@ export function createApiApp(): Hono {
   registerHealthRoutes(app);
   registerLoopRoutes(app);
   registerSessionRoutes(app);
-  registerExecutionRoutes(app);
+  registerExecutionRoutes(app, { authVerifier: options.authVerifier });
   return app;
 }
 
@@ -71,7 +74,7 @@ export interface RunningServer {
 export async function startServer(opts: ApiOptions = {}): Promise<RunningServer> {
   const host = opts.host ?? process.env.AASPAI_API_HOST ?? "127.0.0.1";
   const port = opts.port ?? Number(process.env.AASPAI_API_PORT ?? 7420);
-  const app = createApiApp();
+  const app = createApiApp({ authVerifier: opts.authVerifier });
   const server = serve({ fetch: app.fetch, hostname: host, port }) as ServerType;
   const url = `http://${host}:${port}`;
   log.info("api listening", { url });
