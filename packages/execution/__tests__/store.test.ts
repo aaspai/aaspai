@@ -186,4 +186,22 @@ describe("ExecutionStore", () => {
       }),
     ).resolves.not.toBeNull();
   });
+
+  it("marks stale preparing and running attempts as lost", async () => {
+    const attempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_lost",
+      workItemId: "work_lost",
+      agentId: "agent_test",
+      harness: "dry_run",
+      id: "attempt_lost",
+    });
+    await store.transitionAttempt(attempt.id, "preparing");
+    await store.transitionAttempt(attempt.id, "running");
+
+    await expect(
+      store.reconcileLostAttempts(new Date(Date.now() + 60_000).toISOString()),
+    ).resolves.toBe(1);
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "lost" });
+  });
 });

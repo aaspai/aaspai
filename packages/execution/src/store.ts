@@ -386,6 +386,23 @@ export class ExecutionStore {
     return rows[0] ? agentAttemptSchema.parse(rows[0]) : null;
   }
 
+  async reconcileLostAttempts(cutoff: string): Promise<number> {
+    const candidates = await this.db
+      .select()
+      .from(agentAttempts)
+      .where(inArray(agentAttempts.status, ["preparing", "running"]));
+    const stale = candidates.filter(
+      (attempt) => (attempt.startedAt ?? attempt.createdAt) <= cutoff,
+    );
+    for (const attempt of stale) {
+      await this.db
+        .update(agentAttempts)
+        .set({ status: "lost", finishedAt: now() })
+        .where(eq(agentAttempts.id, attempt.id));
+    }
+    return stale.length;
+  }
+
   async cancelAttempt(attemptId: string): Promise<AgentAttempt> {
     const current = await this.getAttempt(attemptId);
     if (!current) throw new Error(`Agent attempt ${attemptId} not found`);

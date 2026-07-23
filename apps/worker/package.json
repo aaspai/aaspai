@@ -19,6 +19,7 @@
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
     "@aaspai/db": "workspace:*",
+    "@aaspai/execution": "workspace:*",
     "@aaspai/file-loader": "workspace:*",
     "@aaspai/loops": "workspace:*",
     "@aaspai/observability": "workspace:*",
