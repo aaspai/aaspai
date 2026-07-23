@@ -93,6 +93,10 @@ export class LocalGitRepository implements GitRepository {
     });
   }
 
+  async createDetachedWorktree(path: string, worktreePath: string, commit: string): Promise<void> {
+    await this.runner.run(["worktree", "add", "--detach", worktreePath, commit], { cwd: path });
+  }
+
   async removeWorktree(path: string, worktreePath: string): Promise<void> {
     await this.runner.run(["worktree", "remove", "--force", worktreePath], { cwd: path });
   }

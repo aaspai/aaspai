@@ -13,7 +13,8 @@
     "./knowledge-source": "./src/knowledge-source.ts",
     "./loop-source": "./src/loop-source.ts",
     "./composite": "./src/composite.ts",
-    "./chokidar-watcher": "./src/chokidar-watcher.ts"
+    "./chokidar-watcher": "./src/chokidar-watcher.ts",
+    "./pinned-workspace": "./src/pinned-workspace.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -23,6 +24,7 @@
   },
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
+    "@aaspai/git": "workspace:*",
     "@aaspai/observability": "workspace:*",
     "chokidar": "^4.0.3",
     "js-yaml": "^4.1.0"

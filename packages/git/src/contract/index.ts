@@ -54,6 +54,7 @@ export interface GitRepository {
     branchName: string,
     baseCommit: string,
   ): Promise<void>;
+  createDetachedWorktree(path: string, worktreePath: string, commit: string): Promise<void>;
   removeWorktree(path: string, worktreePath: string): Promise<void>;
   commit(path: string, message: string): Promise<string | null>;
   diff(path: string): Promise<string>;

@@ -16,3 +16,8 @@ export {
   serializeOkfFile,
   sha256HexSync,
 } from "./okf-parser.js";
+export {
+  GitPinnedDefinitionWorkspace,
+  type OpenPinnedDefinitionWorkspaceInput,
+  type PinnedDefinitionWorkspace,
+} from "./pinned-workspace.js";

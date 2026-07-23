@@ -57,4 +57,16 @@ describe("local Git capability", () => {
       { cwd: "F:/repo" },
     );
   });
+
+  it("creates a detached worktree for a pinned revision", async () => {
+    const fake = runner({});
+    const git = new LocalGitRepository(fake);
+
+    await git.createDetachedWorktree("F:/definitions", "F:/workspace/definitions/rev", "abcdef1");
+
+    expect(fake.run).toHaveBeenCalledWith(
+      ["worktree", "add", "--detach", "F:/workspace/definitions/rev", "abcdef1"],
+      { cwd: "F:/definitions" },
+    );
+  });
 });
