@@ -5,6 +5,7 @@ import type {
   AttemptStatus,
   ExecutionEvent,
   ExecutionWorkItem,
+  ExecutionWorkItemDependency,
   ExecutionWorkspace,
   Goal,
   Project,
@@ -18,8 +19,10 @@ import {
   assertValidAttemptTransition,
   executionEventSchema,
   executionPlanSchema,
+  executionWorkItemDependencySchema,
   executionWorkItemSchema,
   executionWorkspaceSchema,
+  goalSchema,
   resourceLockSchema,
   workflowRunSchema,
 } from "@aaspai/contracts/execution";
@@ -31,9 +34,11 @@ import {
   artifacts,
   asc,
   definitionRevisions,
+  desc,
   eq,
   executionEvents,
   executionPlans,
+  executionWorkItemDependencies,
   executionWorkItems,
   executionWorkspaces,
   goals,
@@ -98,9 +103,20 @@ export interface CreateWorkItemInput {
   definitionRevisionId?: string | null;
   sourceCommitSha?: string | null;
   branchName?: string | null;
+  priority?: number;
+  deadlineAt?: string | null;
+  maxAttempts?: number;
   idempotencyKey: string;
   metadata?: Record<string, unknown>;
   status?: ExecutionWorkItem["status"];
+}
+
+export interface DispatchWorkItemInput {
+  workflowRunId: string;
+  workItemId: string;
+  agentId: string;
+  harness: string;
+  timeoutMs?: number | null;
 }
 
 export interface CreateWorkflowRunInput {
@@ -214,6 +230,11 @@ export class ExecutionStore {
     return row;
   }
 
+  async getGoal(goalId: string): Promise<Goal | null> {
+    const rows = await this.db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
+    return rows[0] ? goalSchema.parse(rows[0]) : null;
+  }
+
   async createRepository(input: CreateRepositoryInput) {
     const row = {
       id: input.id ?? makeId("repo"),
@@ -273,6 +294,11 @@ export class ExecutionStore {
       branchName: input.branchName ?? null,
       claimedByAttemptId: null,
       claimedAt: null,
+      priority: input.priority ?? 0,
+      deadlineAt: input.deadlineAt ?? null,
+      maxAttempts: input.maxAttempts ?? 1,
+      retryAfter: null,
+      blockedReason: null,
       idempotencyKey: input.idempotencyKey,
       metadataJson: JSON.stringify(input.metadata ?? {}),
       createdAt: now(),
@@ -280,6 +306,106 @@ export class ExecutionStore {
     } satisfies typeof executionWorkItems.$inferInsert;
     await this.db.insert(executionWorkItems).values(row);
     return row;
+  }
+
+  async addWorkItemDependency(
+    organizationId: string,
+    workItemId: string,
+    dependsOnWorkItemId: string,
+  ): Promise<ExecutionWorkItemDependency> {
+    if (workItemId === dependsOnWorkItemId) {
+      throw new Error("A work item cannot depend on itself");
+    }
+    const items = await this.listWorkItems(organizationId);
+    const child = items.find((item) => item.id === workItemId);
+    const dependency = items.find((item) => item.id === dependsOnWorkItemId);
+    if (!child || !dependency) throw new Error("Dependency work item not found");
+    if (child.goalId !== dependency.goalId) {
+      throw new Error("Dependency must stay within the same goal");
+    }
+    const edges = await this.listWorkItemDependenciesForOrganization(organizationId);
+    const graph = new Map<string, string[]>();
+    for (const edge of edges) {
+      const next = graph.get(edge.workItemId) ?? [];
+      next.push(edge.dependsOnWorkItemId);
+      graph.set(edge.workItemId, next);
+    }
+    const pending = [dependsOnWorkItemId];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const current = pending.shift();
+      if (!current || visited.has(current)) continue;
+      if (current === workItemId) throw new Error("Dependency would create a cycle");
+      visited.add(current);
+      pending.push(...(graph.get(current) ?? []));
+    }
+
+    const row = {
+      organizationId,
+      workItemId,
+      dependsOnWorkItemId,
+      createdAt: now(),
+    } satisfies typeof executionWorkItemDependencies.$inferInsert;
+    try {
+      await this.db.insert(executionWorkItemDependencies).values(row);
+    } catch (error) {
+      if (!/unique constraint failed/i.test(String((error as Error)?.message ?? error)))
+        throw error;
+    }
+    return executionWorkItemDependencySchema.parse(row);
+  }
+
+  async listWorkItemDependencies(workItemId: string): Promise<ExecutionWorkItemDependency[]> {
+    const rows = await this.db
+      .select()
+      .from(executionWorkItemDependencies)
+      .where(eq(executionWorkItemDependencies.workItemId, workItemId));
+    return rows.map((row) => executionWorkItemDependencySchema.parse(row));
+  }
+
+  private async listWorkItemDependenciesForOrganization(
+    organizationId: string,
+  ): Promise<ExecutionWorkItemDependency[]> {
+    const rows = await this.db
+      .select()
+      .from(executionWorkItemDependencies)
+      .where(eq(executionWorkItemDependencies.organizationId, organizationId));
+    return rows.map((row) => executionWorkItemDependencySchema.parse(row));
+  }
+
+  async listWorkItems(organizationId: string, goalId?: string): Promise<ExecutionWorkItem[]> {
+    const rows = await this.db
+      .select()
+      .from(executionWorkItems)
+      .where(
+        goalId
+          ? and(
+              eq(executionWorkItems.organizationId, organizationId),
+              eq(executionWorkItems.goalId, goalId),
+            )
+          : eq(executionWorkItems.organizationId, organizationId),
+      )
+      .orderBy(desc(executionWorkItems.priority), asc(executionWorkItems.createdAt));
+    return rows.map((row) => parseWorkItem(row));
+  }
+
+  async updateWorkItemStatus(
+    workItemId: string,
+    status: ExecutionWorkItem["status"],
+    options: { blockedReason?: string | null; retryAfter?: string | null } = {},
+  ): Promise<ExecutionWorkItem> {
+    await this.db
+      .update(executionWorkItems)
+      .set({
+        status,
+        blockedReason: options.blockedReason ?? null,
+        retryAfter: options.retryAfter ?? null,
+        updatedAt: now(),
+      })
+      .where(eq(executionWorkItems.id, workItemId));
+    const updated = await this.getWorkItem(workItemId);
+    if (!updated) throw new Error(`Work item ${workItemId} not found`);
+    return updated;
   }
 
   async getWorkItem(workItemId: string): Promise<ExecutionWorkItem | null> {
@@ -290,13 +416,7 @@ export class ExecutionStore {
       .limit(1);
     const row = rows[0];
     if (!row) return null;
-    const {
-      claimedByAttemptId: _claimedByAttemptId,
-      claimedAt: _claimedAt,
-      metadataJson,
-      ...workItem
-    } = row;
-    return executionWorkItemSchema.parse({ ...workItem, metadata: JSON.parse(metadataJson) });
+    return parseWorkItem(row);
   }
 
   async createWorkflowRun(input: CreateWorkflowRunInput) {
@@ -335,6 +455,26 @@ export class ExecutionStore {
     return rows[0] ? workflowRunSchema.parse(rows[0]) : null;
   }
 
+  async updateWorkflowRunStatus(
+    runId: string,
+    status: WorkflowRun["status"],
+  ): Promise<WorkflowRun> {
+    const finishedAt = ["succeeded", "failed", "cancelled", "timed_out"].includes(status)
+      ? now()
+      : null;
+    await this.db
+      .update(workflowRuns)
+      .set({
+        status,
+        startedAt: status === "running" ? now() : undefined,
+        finishedAt,
+      })
+      .where(eq(workflowRuns.id, runId));
+    const updated = await this.getWorkflowRun(runId);
+    if (!updated) throw new Error(`Workflow run ${runId} not found`);
+    return updated;
+  }
+
   async createAttempt(input: CreateAttemptInput) {
     const row = {
       id: input.id ?? makeId("attempt"),
@@ -355,6 +495,178 @@ export class ExecutionStore {
     } satisfies typeof agentAttempts.$inferInsert;
     await this.db.insert(agentAttempts).values(row);
     return row;
+  }
+
+  async listAttemptsForWorkItem(workItemId: string): Promise<AgentAttempt[]> {
+    const rows = await this.db
+      .select()
+      .from(agentAttempts)
+      .where(eq(agentAttempts.workItemId, workItemId))
+      .orderBy(asc(agentAttempts.attemptNumber));
+    return rows.map((row) => agentAttemptSchema.parse(row));
+  }
+
+  /**
+   * Claims a ready work item and creates its attempt with a database-backed
+   * unique attempt number. A duplicate scheduler tick returns the existing
+   * active attempt instead of creating another unit of work.
+   */
+  async dispatchWorkItem(input: DispatchWorkItemInput): Promise<{
+    attempt: AgentAttempt;
+    created: boolean;
+  } | null> {
+    const workItem = await this.getWorkItem(input.workItemId);
+    if (!workItem || !["proposed", "ready"].includes(workItem.status)) return null;
+    if (workItem.retryAfter && workItem.retryAfter > now()) return null;
+
+    const attempts = await this.listAttemptsForWorkItem(input.workItemId);
+    const active = attempts.find((attempt) => isActiveAttemptStatus(attempt.status));
+    if (active) return { attempt: active, created: false };
+    const attemptNumber = (attempts.at(-1)?.attemptNumber ?? 0) + 1;
+    let created: AgentAttempt;
+    try {
+      const row = await this.createAttempt({
+        organizationId: workItem.organizationId,
+        workflowRunId: input.workflowRunId,
+        workItemId: input.workItemId,
+        agentId: input.agentId,
+        harness: input.harness,
+        attemptNumber,
+        timeoutMs: input.timeoutMs,
+      });
+      created = agentAttemptSchema.parse(row);
+    } catch (error) {
+      if (!/unique constraint failed/i.test(String((error as Error)?.message ?? error)))
+        throw error;
+      const winner = (await this.listAttemptsForWorkItem(input.workItemId)).find((attempt) =>
+        isActiveAttemptStatus(attempt.status),
+      );
+      if (!winner) return null;
+      return { attempt: winner, created: false };
+    }
+
+    if (!(await this.claimWorkItem(input.workItemId, created.id))) {
+      await this.db.delete(agentAttempts).where(eq(agentAttempts.id, created.id));
+      const winner = (await this.listAttemptsForWorkItem(input.workItemId)).find((attempt) =>
+        isActiveAttemptStatus(attempt.status),
+      );
+      return winner ? { attempt: winner, created: false } : null;
+    }
+    return { attempt: created, created: true };
+  }
+
+  async startScheduledAttempt(attemptId: string): Promise<AgentAttempt> {
+    const current = await this.getAttempt(attemptId);
+    if (!current) throw new Error(`Agent attempt ${attemptId} not found`);
+    if (current.status === "queued") await this.transitionAttempt(attemptId, "preparing");
+    const preparing = await this.getAttempt(attemptId);
+    if (preparing?.status === "preparing") await this.transitionAttempt(attemptId, "running");
+    await this.db
+      .update(executionWorkItems)
+      .set({ status: "in_progress", blockedReason: null, updatedAt: now() })
+      .where(
+        and(
+          eq(executionWorkItems.id, current.workItemId),
+          eq(executionWorkItems.claimedByAttemptId, attemptId),
+        ),
+      );
+    const started = await this.getAttempt(attemptId);
+    if (!started) throw new Error(`Agent attempt ${attemptId} disappeared`);
+    return started;
+  }
+
+  async completeScheduledAttempt(input: {
+    attemptId: string;
+    status: Extract<AgentAttempt["status"], "succeeded" | "failed" | "cancelled" | "timed_out">;
+    error?: string | null;
+    retryDelayMs?: number;
+  }): Promise<{ attempt: AgentAttempt; workItem: ExecutionWorkItem }> {
+    const current = await this.getAttempt(input.attemptId);
+    if (!current) throw new Error(`Agent attempt ${input.attemptId} not found`);
+    if (isTerminalAttemptStatus(current.status)) {
+      const existingWorkItem = await this.getWorkItem(current.workItemId);
+      if (!existingWorkItem) throw new Error(`Work item ${current.workItemId} not found`);
+      return { attempt: current, workItem: existingWorkItem };
+    }
+    if (current.status === "queued" || current.status === "preparing") {
+      await this.startScheduledAttempt(input.attemptId);
+    }
+    if (input.status === "cancelled") {
+      await this.transitionAttempt(input.attemptId, "cancelling");
+      await this.transitionAttempt(input.attemptId, "cancelled");
+    } else {
+      await this.transitionAttempt(input.attemptId, input.status);
+    }
+    const item = await this.getWorkItem(current.workItemId);
+    if (!item) throw new Error(`Work item ${current.workItemId} not found`);
+
+    const retryable = input.status === "failed" || input.status === "timed_out";
+    const canRetry = retryable && current.attemptNumber < item.maxAttempts;
+    if (input.status === "succeeded") {
+      await this.updateWorkItemStatus(item.id, "completed");
+    } else if (canRetry) {
+      const retryAfter = new Date(
+        Date.now() + Math.max(0, input.retryDelayMs ?? 1_000),
+      ).toISOString();
+      await this.updateWorkItemStatus(item.id, "ready", { retryAfter, blockedReason: null });
+    } else if (input.status === "cancelled") {
+      await this.updateWorkItemStatus(item.id, "cancelled", {
+        blockedReason: input.error ?? "cancelled",
+      });
+    } else {
+      await this.updateWorkItemStatus(item.id, "failed", {
+        blockedReason: input.error ?? `${input.status} without retry eligibility`,
+      });
+    }
+    const completedAttempt = await this.getAttempt(input.attemptId);
+    const completedWorkItem = await this.getWorkItem(item.id);
+    if (!completedAttempt || !completedWorkItem) throw new Error("Scheduled outcome disappeared");
+    return { attempt: completedAttempt, workItem: completedWorkItem };
+  }
+
+  async getGoalProgress(goalId: string): Promise<{
+    goalId: string;
+    total: number;
+    completed: number;
+    active: number;
+    proposed: number;
+    ready: number;
+    blocked: number;
+    failed: number;
+    cancelled: number;
+    percent: number;
+    blockedItems: Array<{ id: string; title: string; reason: string }>;
+  }> {
+    const goalsRows = await this.db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
+    const goal = goalsRows[0];
+    if (!goal) throw new Error(`Goal ${goalId} not found`);
+    const items = await this.listWorkItems(goal.organizationId, goalId);
+    const completed = items.filter((item) => item.status === "completed").length;
+    const active = items.filter((item) => ["claimed", "in_progress"].includes(item.status)).length;
+    const proposed = items.filter((item) => item.status === "proposed").length;
+    const ready = items.filter((item) => item.status === "ready").length;
+    const blocked = items.filter((item) => item.status === "blocked").length;
+    const failed = items.filter((item) => item.status === "failed").length;
+    const cancelled = items.filter((item) => item.status === "cancelled").length;
+    return {
+      goalId,
+      total: items.length,
+      completed,
+      active,
+      proposed,
+      ready,
+      blocked,
+      failed,
+      cancelled,
+      percent: items.length === 0 ? 0 : Math.round((completed / items.length) * 100),
+      blockedItems: items
+        .filter((item) => item.status === "blocked")
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          reason: item.blockedReason ?? "blocked by scheduler",
+        })),
+    };
   }
 
   async createHarnessSession(input: CreateHarnessSessionInput) {
@@ -743,6 +1055,24 @@ function isActiveResourceLockConflict(error: unknown): boolean {
   return /unique constraint failed:\s*resource_locks\.(organization_id|resource_type|resource_id)/i.test(
     message,
   );
+}
+
+function parseWorkItem(row: typeof executionWorkItems.$inferSelect): ExecutionWorkItem {
+  const {
+    claimedByAttemptId: _claimedByAttemptId,
+    claimedAt: _claimedAt,
+    metadataJson,
+    ...workItem
+  } = row;
+  return executionWorkItemSchema.parse({ ...workItem, metadata: JSON.parse(metadataJson) });
+}
+
+function isActiveAttemptStatus(status: AgentAttempt["status"]): boolean {
+  return ["queued", "preparing", "running", "cancelling"].includes(status);
+}
+
+function isTerminalAttemptStatus(status: AgentAttempt["status"]): boolean {
+  return ["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(status);
 }
 
 function makeId(prefix: string): string {

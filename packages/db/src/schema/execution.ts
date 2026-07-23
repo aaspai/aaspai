@@ -92,6 +92,11 @@ export const executionWorkItems = sqliteTable(
     branchName: text("branch_name"),
     claimedByAttemptId: text("claimed_by_attempt_id"),
     claimedAt: text("claimed_at"),
+    priority: integer("priority").notNull().default(0),
+    deadlineAt: text("deadline_at"),
+    maxAttempts: integer("max_attempts").notNull().default(1),
+    retryAfter: text("retry_after"),
+    blockedReason: text("blocked_reason"),
     idempotencyKey: text("idempotency_key").notNull(),
     metadataJson: text("metadata_json").notNull().default("{}"),
     createdAt: text("created_at").notNull(),
@@ -103,6 +108,30 @@ export const executionWorkItems = sqliteTable(
       t.idempotencyKey,
     ),
     projectStatusIdx: index("execution_work_items_project_status_idx").on(t.projectId, t.status),
+  }),
+);
+
+export const executionWorkItemDependencies = sqliteTable(
+  "execution_work_item_dependencies",
+  {
+    organizationId: text("organization_id").notNull(),
+    workItemId: text("work_item_id")
+      .notNull()
+      .references(() => executionWorkItems.id, { onDelete: "cascade" }),
+    dependsOnWorkItemId: text("depends_on_work_item_id")
+      .notNull()
+      .references(() => executionWorkItems.id, { onDelete: "cascade" }),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({
+    edgeUniq: uniqueIndex("execution_work_item_dependencies_uniq").on(
+      t.workItemId,
+      t.dependsOnWorkItemId,
+    ),
+    workItemIdx: index("execution_work_item_dependencies_work_idx").on(t.workItemId),
+    dependencyIdx: index("execution_work_item_dependencies_dependency_idx").on(
+      t.dependsOnWorkItemId,
+    ),
   }),
 );
 
@@ -270,6 +299,7 @@ export type ProjectRow = typeof projects.$inferSelect;
 export type RepositoryRow = typeof repositories.$inferSelect;
 export type DefinitionRevisionRow = typeof definitionRevisions.$inferSelect;
 export type ExecutionWorkItemRow = typeof executionWorkItems.$inferSelect;
+export type ExecutionWorkItemDependencyRow = typeof executionWorkItemDependencies.$inferSelect;
 export type WorkflowRunRow = typeof workflowRuns.$inferSelect;
 export type AgentAttemptRow = typeof agentAttempts.$inferSelect;
 export type ExecutionWorkspaceRow = typeof executionWorkspaces.$inferSelect;

@@ -107,6 +107,11 @@ export const executionWorkItemSchema = z
       .nullable()
       .default(null),
     branchName: z.string().trim().max(256).nullable().default(null),
+    priority: z.number().int().min(-100_000).max(100_000).default(0),
+    deadlineAt: isoTimestampSchema.nullable().default(null),
+    maxAttempts: positiveIntegerSchema.default(1),
+    retryAfter: isoTimestampSchema.nullable().default(null),
+    blockedReason: z.string().max(4_096).nullable().default(null),
     idempotencyKey: idempotencyKeySchema,
     metadata: jsonObjectSchema.default({}),
     createdAt: isoTimestampSchema,
@@ -114,6 +119,16 @@ export const executionWorkItemSchema = z
   })
   .strict();
 export type ExecutionWorkItem = z.infer<typeof executionWorkItemSchema>;
+
+export const executionWorkItemDependencySchema = z
+  .object({
+    organizationId: identifierSchema,
+    workItemId: identifierSchema,
+    dependsOnWorkItemId: identifierSchema,
+    createdAt: isoTimestampSchema,
+  })
+  .strict();
+export type ExecutionWorkItemDependency = z.infer<typeof executionWorkItemDependencySchema>;
 
 export const workflowRunStatusSchema = z.enum([
   "queued",

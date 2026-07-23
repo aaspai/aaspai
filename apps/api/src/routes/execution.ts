@@ -1,7 +1,7 @@
 import { type AuthVerifier, authorizePrincipal } from "@aaspai/auth";
 import type { ApiScope, AuthPrincipal } from "@aaspai/contracts";
 import { getDefaultDb } from "@aaspai/db";
-import { ExecutionStore } from "@aaspai/execution";
+import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
 import type { Context, Hono } from "hono";
 
 interface ExecutionRouteOptions {
@@ -58,6 +58,92 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
     }
     return c.json({ data: workItem });
+  });
+
+  app.post("/v1/execution/work-items/:id/dependencies", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as {
+      dependsOnWorkItemId?: unknown;
+    } | null;
+    if (!body || typeof body.dependsOnWorkItemId !== "string" || body.dependsOnWorkItemId === "") {
+      return c.json({ error: "invalid_request", message: "dependsOnWorkItemId is required" }, 400);
+    }
+    const store = new ExecutionStore(getDefaultDb().db);
+    const workItem = await store.getWorkItem(c.req.param("id"));
+    if (!workItem) return c.json({ error: "not_found", message: "Work item not found" }, 404);
+    if (workItem.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+    }
+    try {
+      const dependency = await store.addWorkItemDependency(
+        auth.principal.organizationId,
+        workItem.id,
+        body.dependsOnWorkItemId,
+      );
+      return c.json({ data: dependency }, 201);
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error);
+      if (/cycle|depend on itself/i.test(message)) {
+        return c.json({ error: "dependency_cycle", message }, 409);
+      }
+      if (/not found/i.test(message)) {
+        return c.json({ error: "not_found", message }, 404);
+      }
+      if (/same goal/i.test(message)) {
+        return c.json({ error: "invalid_dependency", message }, 400);
+      }
+      throw error;
+    }
+  });
+
+  app.get("/v1/execution/work-items/:id/dependencies", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const store = new ExecutionStore(getDefaultDb().db);
+    const workItem = await store.getWorkItem(c.req.param("id"));
+    if (!workItem) return c.json({ error: "not_found", message: "Work item not found" }, 404);
+    if (workItem.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+    }
+    return c.json({ data: await store.listWorkItemDependencies(workItem.id) });
+  });
+
+  app.get("/v1/execution/goals/:id/progress", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const store = new ExecutionStore(getDefaultDb().db);
+    const goal = await store.getGoal(c.req.param("id"));
+    if (!goal) return c.json({ error: "not_found", message: "Goal not found" }, 404);
+    if (goal.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+    }
+    return c.json({ data: await store.getGoalProgress(goal.id) });
+  });
+
+  app.post("/v1/execution/workflows/:id/schedule", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body.agentId !== "string" || typeof body.harness !== "string") {
+      return c.json({ error: "invalid_request", message: "agentId and harness are required" }, 400);
+    }
+    const store = new ExecutionStore(getDefaultDb().db);
+    const workflowRun = await store.getWorkflowRun(c.req.param("id"));
+    if (!workflowRun) return c.json({ error: "not_found", message: "Workflow run not found" }, 404);
+    if (workflowRun.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+    }
+    const maxDispatch = typeof body.maxDispatch === "number" ? body.maxDispatch : undefined;
+    const result = await new DependencyScheduler(store).tick({
+      organizationId: auth.principal.organizationId,
+      goalId: workflowRun.goalId,
+      workflowRunId: workflowRun.id,
+      agentId: body.agentId,
+      harness: body.harness,
+      maxDispatch,
+    });
+    return c.json({ data: result }, 202);
   });
 
   app.post("/v1/execution/work-items/:id/claim", async (c) => {
