@@ -64,7 +64,9 @@ describe("crypto/aes", () => {
     it("throws when ciphertext is modified", () => {
       const envelope = encrypt("hello world", KEY);
       const [iv, ct, tag] = envelope.split(":") as [string, string, string];
-      const tamperedCt = `${ct.slice(0, 4)}X${ct.slice(5)}`;
+      const tamperedBytes = Buffer.from(ct, "base64");
+      tamperedBytes[0] ^= 0x01;
+      const tamperedCt = tamperedBytes.toString("base64");
       const tampered = `${iv}:${tamperedCt}:${tag}`;
       expect(() => decrypt(tampered, KEY)).toThrow();
     });
