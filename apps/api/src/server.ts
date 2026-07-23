@@ -32,6 +32,7 @@ import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
+import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerLoopRoutes } from "./routes/loops.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
@@ -58,6 +59,7 @@ export function createApiApp(): Hono {
   registerHealthRoutes(app);
   registerLoopRoutes(app);
   registerSessionRoutes(app);
+  registerExecutionRoutes(app);
   return app;
 }
 
