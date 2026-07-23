@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { AuthVerifier } from "@aaspai/auth";
 import {
   getDefaultDb,
   sessionEvents as sessionEventsTable,
@@ -6,12 +7,16 @@ import {
   wakeups as wakeupsTable,
 } from "@aaspai/db";
 import { getLogger } from "@aaspai/observability";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { Hono } from "hono";
+import { authenticate } from "./auth.js";
 
 const log = getLogger("api.routes.sessions");
 
-export function registerSessionRoutes(app: Hono): void {
+export function registerSessionRoutes(
+  app: Hono,
+  options: { authVerifier?: AuthVerifier } = {},
+): void {
   /**
    * Start a new session. The request is enqueued as a wakeup; the
    * worker picks it up and runs the session asynchronously. The API
@@ -19,6 +24,8 @@ export function registerSessionRoutes(app: Hono): void {
    * the result.
    */
   app.post("/v1/sessions", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
     const body = (await c.req.json().catch(() => ({}))) as {
       agentId?: string;
       prompt?: string;
@@ -41,7 +48,7 @@ export function registerSessionRoutes(app: Hono): void {
     // and run inline.
     await handle.db.insert(wakeupsTable).values({
       id: wakeupId,
-      organizationId: "default",
+      organizationId: auth.principal.organizationId,
       loopId: body.loopId ?? "manual",
       source: "api",
       triggerDetail: "http",
@@ -74,12 +81,19 @@ export function registerSessionRoutes(app: Hono): void {
   });
 
   app.get("/v1/sessions/:id", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
     const id = c.req.param("id");
     const handle = getDefaultDb();
     const rows = await handle.db
       .select()
       .from(sessionsTable)
-      .where(eq(sessionsTable.id, id))
+      .where(
+        and(
+          eq(sessionsTable.id, id),
+          eq(sessionsTable.organizationId, auth.principal.organizationId),
+        ),
+      )
       .limit(1);
     const row = rows[0];
     if (!row) {
@@ -89,12 +103,15 @@ export function registerSessionRoutes(app: Hono): void {
   });
 
   app.get("/v1/sessions", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
     const handle = getDefaultDb();
     const limitRaw = c.req.query("limit");
     const limit = Math.min(Math.max(Number(limitRaw ?? "20"), 1), 100);
     const rows = await handle.db
       .select()
       .from(sessionsTable)
+      .where(eq(sessionsTable.organizationId, auth.principal.organizationId))
       .orderBy(desc(sessionsTable.startedAt))
       .limit(limit);
     return c.json({ data: rows });
@@ -105,8 +122,23 @@ export function registerSessionRoutes(app: Hono): void {
    * all events in order. Phase 4: switches to a real subscription.
    */
   app.get("/v1/sessions/:id/events", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
     const id = c.req.param("id");
     const handle = getDefaultDb();
+    const session = await handle.db
+      .select({ id: sessionsTable.id })
+      .from(sessionsTable)
+      .where(
+        and(
+          eq(sessionsTable.id, id),
+          eq(sessionsTable.organizationId, auth.principal.organizationId),
+        ),
+      )
+      .limit(1);
+    if (!session[0]) {
+      return c.json({ error: "not_found", message: `Session ${id} not found` }, 404);
+    }
     const events = await handle.db
       .select()
       .from(sessionEventsTable)

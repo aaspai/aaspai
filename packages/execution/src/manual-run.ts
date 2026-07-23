@@ -8,6 +8,7 @@ import { executionPlanSchema } from "@aaspai/contracts/execution";
 import type { ExecutionTarget, RunProcessResult } from "@aaspai/contracts/runtime";
 import { GitPinnedDefinitionWorkspace } from "@aaspai/file-loader";
 import type { GitRepository } from "@aaspai/git";
+import { assertExecutionPlanCapabilities } from "./capabilities.js";
 import { ExecutionPlanRunner } from "./plan-runner.js";
 import type { ExecutionStore } from "./store.js";
 import { LocalExecutionWorkspaceManager } from "./workspace-manager.js";
@@ -47,6 +48,10 @@ export class ManualLocalExecutionService {
   ) {}
 
   async run(input: ManualLocalExecutionInput): Promise<ManualLocalExecutionResult> {
+    assertExecutionPlanCapabilities({
+      harness: input.harness,
+      target: input.target ?? { kind: "local", envPassthrough: false },
+    });
     const blueprintCommit = await this.git.resolveCommit(input.blueprintRepositoryPath);
     const projectInfo = await this.git.inspect(input.projectRepositoryPath);
     const projectCommit = projectInfo.headSha;

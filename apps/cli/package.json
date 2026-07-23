@@ -24,6 +24,8 @@
   "dependencies": {
     "better-sqlite3": "^12.11.1",
     "commander": "^12.1.0",
+    "@aaspai/harness": "workspace:*",
+    "@aaspai/runtime": "workspace:*",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {

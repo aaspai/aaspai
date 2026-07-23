@@ -7,6 +7,7 @@ import type {
 import { adapterTypeSchema, HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
 import type { JsonObject } from "@aaspai/contracts/primitives";
 import { getAdapter } from "@aaspai/harness";
+import { assertHarnessExecutable } from "./capabilities.js";
 import type { ExecutionStore } from "./store.js";
 
 export interface HarnessAgentInput {
@@ -31,6 +32,7 @@ export class HarnessExecutionPlanRunner {
   async run(input: ExecuteHarnessPlanInput): Promise<AdapterExecutionResult> {
     this.assertWorkspace(input);
     const adapterType = adapterTypeSchema.parse(input.plan.harness);
+    assertHarnessExecutable(adapterType);
     const adapter = getAdapter(adapterType);
     const session = await this.store.createHarnessSession({
       organizationId: input.plan.organizationId,

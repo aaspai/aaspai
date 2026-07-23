@@ -13,7 +13,6 @@
  *   - Better Auth composition (the verifier is injected by the composition root)
  *   - Webhooks
  *   - MCP / OpenAPI
- *   - Auth on legacy loop/session routes
  *
  * Architecture: the api does NOT execute sessions. It enqueues a
  * wakeup row in the DB. The worker picks it up and runs the session
@@ -38,6 +37,7 @@ import { registerCompanyRoutes } from "./routes/company.js";
 import { registerExecutionRoutes } from "./routes/execution.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerLoopRoutes } from "./routes/loops.js";
+import { registerProviderRoutes } from "./routes/providers.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 
 const log = getLogger("api.server");
@@ -66,8 +66,9 @@ export function createApiApp(
     return c.json({ error: "internal_error", message: (err as Error).message }, 500);
   });
   registerHealthRoutes(app);
-  registerLoopRoutes(app);
-  registerSessionRoutes(app);
+  registerLoopRoutes(app, { authVerifier: options.authVerifier });
+  registerSessionRoutes(app, { authVerifier: options.authVerifier });
+  registerProviderRoutes(app, { authVerifier: options.authVerifier });
   registerExecutionRoutes(app, { authVerifier: options.authVerifier });
   registerCompanyRoutes(app, {
     authVerifier: options.authVerifier,

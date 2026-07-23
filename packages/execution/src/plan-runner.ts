@@ -1,6 +1,7 @@
 import type { AgentAttempt, ExecutionPlan, ExecutionWorkspace } from "@aaspai/contracts/execution";
 import type { RunProcessResult } from "@aaspai/contracts/runtime";
-import { pickTarget, type RuntimeTarget } from "@aaspai/runtime";
+import { type RuntimeTarget, resolveTarget } from "@aaspai/runtime";
+import { assertRuntimeExecutable } from "./capabilities.js";
 import type { ExecutionStore } from "./store.js";
 
 export interface ExecutePlanInput {
@@ -19,11 +20,12 @@ export type RuntimeTargetPicker = (target: ExecutionPlan["target"]) => RuntimeTa
 export class ExecutionPlanRunner {
   constructor(
     private readonly store: ExecutionStore,
-    private readonly targetPicker: RuntimeTargetPicker = pickTarget,
+    private readonly targetPicker: RuntimeTargetPicker = resolveTarget,
   ) {}
 
   async run(input: ExecutePlanInput): Promise<RunProcessResult> {
     this.assertWorkspace(input);
+    assertRuntimeExecutable(input.plan.target);
     await this.store.transitionAttempt(input.plan.attemptId, "preparing");
 
     try {

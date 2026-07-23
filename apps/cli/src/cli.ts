@@ -13,6 +13,7 @@ import { dbCommand } from "./commands/db.js";
 import { initCommand } from "./commands/init.js";
 import { knowledgeCommand } from "./commands/knowledge.js";
 import { loopCommand } from "./commands/loop.js";
+import { providerCommand } from "./commands/provider.js";
 import { sessionCommand } from "./commands/session.js";
 import { skillCommand } from "./commands/skill.js";
 import { startCommand } from "./commands/start.js";
@@ -66,6 +67,7 @@ program.addCommand(loopCommand());
 program.addCommand(sessionCommand());
 program.addCommand(skillCommand());
 program.addCommand(toolCommand());
+program.addCommand(providerCommand());
 program.addCommand(stateCommand());
 program.addCommand(startCommand());
 

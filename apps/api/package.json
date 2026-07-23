@@ -24,7 +24,9 @@
     "@aaspai/execution": "workspace:*",
     "@aaspai/file-loader": "workspace:*",
     "@aaspai/git": "workspace:*",
+    "@aaspai/harness": "workspace:*",
     "@aaspai/observability": "workspace:*",
+    "@aaspai/runtime": "workspace:*",
     "@hono/node-server": "^1.19.9",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.11.4"

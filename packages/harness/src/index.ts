@@ -32,6 +32,7 @@ export {
 export {
   ADAPTER_REGISTRY_VERSION,
   getAdapter,
+  getAdapterCapabilities,
   isAdapterReady,
   listAdapters,
 } from "./registry.js";

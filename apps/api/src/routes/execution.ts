@@ -1,19 +1,13 @@
-import { type AuthVerifier, authorizePrincipal } from "@aaspai/auth";
-import {
-  type ApiScope,
-  type AuthPrincipal,
-  type ExecutionGovernanceInput,
-  executionGovernanceSchema,
-} from "@aaspai/contracts";
+import type { AuthVerifier } from "@aaspai/auth";
+import { type ExecutionGovernanceInput, executionGovernanceSchema } from "@aaspai/contracts";
 import { getDefaultDb } from "@aaspai/db";
 import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
-import type { Context, Hono } from "hono";
+import type { Hono } from "hono";
+import { authenticate } from "./auth.js";
 
 interface ExecutionRouteOptions {
   authVerifier?: AuthVerifier;
 }
-
-export type AuthResult = { principal: AuthPrincipal } | { response: Response };
 
 export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOptions = {}): void {
   app.post("/v1/execution/work-items", async (c) => {
@@ -168,14 +162,22 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       maxRepositoryConcurrency: boundedConcurrency(body.maxRepositoryConcurrency, 1),
       maxAgentConcurrency: boundedConcurrency(body.maxAgentConcurrency, 1),
     });
-    const result = await scheduler.tick({
-      organizationId: auth.principal.organizationId,
-      goalId: workflowRun.goalId,
-      workflowRunId: workflowRun.id,
-      agentId: body.agentId,
-      harness: body.harness,
-      maxDispatch,
-    });
+    let result: Awaited<ReturnType<DependencyScheduler["tick"]>>;
+    try {
+      result = await scheduler.tick({
+        organizationId: auth.principal.organizationId,
+        goalId: workflowRun.goalId,
+        workflowRunId: workflowRun.id,
+        agentId: body.agentId,
+        harness: body.harness,
+        maxDispatch,
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code === "provider_capability_unsupported") {
+        return c.json({ error: "provider_capability_unsupported", message: String(error) }, 422);
+      }
+      throw error;
+    }
     return c.json({ data: result }, 202);
   });
 
@@ -380,46 +382,6 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       throw error;
     }
   });
-}
-
-export async function authenticate(
-  c: Context,
-  verifier: AuthVerifier | undefined,
-  requiredScope: ApiScope,
-): Promise<AuthResult> {
-  if (!verifier) {
-    return {
-      response: c.json(
-        { error: "auth_unconfigured", message: "Execution API authentication is not configured" },
-        503,
-      ),
-    };
-  }
-
-  const authorization = c.req.header("Authorization");
-  const cookie = c.req.header("Cookie");
-  const bearer = authorization?.match(/^Bearer\s+([^\s]+)$/i);
-  const bearerToken = bearer?.[1];
-  const credential = bearerToken
-    ? { kind: "bearer" as const, value: bearerToken }
-    : cookie
-      ? { kind: "session" as const, value: cookie }
-      : undefined;
-  const verified = await verifier.verify({ credential });
-  if (!verified.ok) {
-    const status = verified.code === "missing_credential" ? 401 : 401;
-    return {
-      response: c.json({ error: verified.code, message: "Authentication required" }, status),
-    };
-  }
-
-  const authorized = authorizePrincipal(verified.principal, { requiredScopes: [requiredScope] });
-  if (!authorized.ok) {
-    return {
-      response: c.json({ error: authorized.code, message: "Authentication scope denied" }, 403),
-    };
-  }
-  return { principal: authorized.principal };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
