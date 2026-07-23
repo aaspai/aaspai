@@ -256,6 +256,19 @@ export const executionPlanSchema = z
   .strict();
 export type ExecutionPlan = z.infer<typeof executionPlanSchema>;
 
+export const executionEventSchema = z
+  .object({
+    id: positiveIntegerSchema,
+    organizationId: identifierSchema,
+    attemptId: identifierSchema,
+    ts: isoTimestampSchema,
+    type: identifierSchema,
+    payload: jsonObjectSchema,
+    seq: positiveIntegerSchema,
+  })
+  .strict();
+export type ExecutionEvent = z.infer<typeof executionEventSchema>;
+
 export type ExecutionTransition = {
   from: AttemptStatus;
   to: AttemptStatus;

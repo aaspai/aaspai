@@ -33,6 +33,17 @@ export class ExecutionPlanRunner {
         ...input.plan.target,
         cwd: input.workspace.path,
       } as ExecutionPlan["target"];
+      await this.store.appendEvent({
+        organizationId: input.plan.organizationId,
+        attemptId: input.plan.attemptId,
+        type: "attempt.started",
+        payload: {
+          command: input.command,
+          args: [...(input.args ?? [])],
+          cwd: input.workspace.path,
+        },
+        seq: 1,
+      });
       const result = await target.run(targetInput, {
         command: input.command,
         args: [...(input.args ?? [])],
@@ -41,6 +52,18 @@ export class ExecutionPlanRunner {
         stdin: input.stdin,
         signal: input.signal,
         timeoutMs: input.plan.timeoutMs ?? undefined,
+      });
+      await this.store.appendEvent({
+        organizationId: input.plan.organizationId,
+        attemptId: input.plan.attemptId,
+        type: "process.completed",
+        payload: {
+          exitCode: result.exitCode,
+          signal: result.signal ?? null,
+          timedOut: result.timedOut,
+          durationMs: result.durationMs,
+        },
+        seq: 2,
       });
       await this.completeAttempt(input.plan.attemptId, outcomeStatus(result), input.signal);
       return result;

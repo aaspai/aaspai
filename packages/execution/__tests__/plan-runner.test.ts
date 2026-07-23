@@ -68,6 +68,10 @@ describe("ExecutionPlanRunner", () => {
     ).resolves.toEqual(result);
 
     expect(run).toHaveBeenCalledTimes(1);
+    await expect(store.listEvents(attemptId)).resolves.toMatchObject([
+      { seq: 1, type: "attempt.started" },
+      { seq: 2, type: "process.completed" },
+    ]);
     const stored = await store.transitionAttempt(attemptId, "failed").catch(() => null);
     expect(stored).toBeNull();
   });
