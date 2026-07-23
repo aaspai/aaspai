@@ -192,17 +192,32 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
 }> {
   const config = parseCodexLocalConfig(ctx.config);
   const result = await runProcess({ command: config.command, args: ["--version"], cwd: ctx.cwd });
-  const ok = result.exitCode === 0;
+  const installed = result.exitCode === 0;
+  const auth = installed
+    ? await runProcess({ command: config.command, args: ["login", "status"], cwd: ctx.cwd })
+    : null;
+  const ok = installed && auth?.exitCode === 0;
   return {
     ok,
     checks: [
       {
         name: "codex_cli",
-        level: ok ? "info" : "error",
-        message: ok
+        level: installed ? "info" : "error",
+        message: installed
           ? `codex found: ${result.stdout.trim()}`
           : `codex not found: ${result.stderr.trim() || "binary missing"}`,
       },
+      ...(installed
+        ? [
+            {
+              name: "codex_auth" as const,
+              level: (ok ? "info" : "error") as "info" | "error",
+              message: ok
+                ? auth?.stdout.trim() || "codex authenticated"
+                : auth?.stderr.trim() || auth?.stdout.trim() || "codex is not authenticated",
+            },
+          ]
+        : []),
     ],
   };
 }

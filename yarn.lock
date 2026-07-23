@@ -384,6 +384,7 @@ __metadata:
     "@aaspai/db": "workspace:*"
     "@aaspai/execution": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
+    "@aaspai/harness": "workspace:*"
     "@aaspai/knowledge": "workspace:*"
     "@aaspai/sessions": "workspace:*"
     "@biomejs/biome": "npm:2.5.0"

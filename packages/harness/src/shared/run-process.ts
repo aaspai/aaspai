@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { delimiter, dirname, extname, join } from "node:path";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
 
 const DEFAULT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -20,6 +22,39 @@ function truncate(chunk: string, current: number): string {
   return `${head}${TRUNCATE_MARKER}${tail}`;
 }
 
+function resolveWindowsCommand(
+  command: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+): { command: string; args: readonly string[] } {
+  if (process.platform !== "win32") return { command, args };
+  let executable = command;
+  if (!extname(command) && !command.includes("\\") && !command.includes("/")) {
+    const pathValue = env.Path ?? env.PATH ?? "";
+    for (const directory of pathValue.split(delimiter)) {
+      for (const extension of [".exe", ".cmd"]) {
+        const candidate = join(directory, `${command}${extension}`);
+        if (existsSync(candidate)) {
+          executable = candidate;
+          break;
+        }
+      }
+      if (executable !== command) break;
+    }
+  }
+  if (extname(executable).toLowerCase() !== ".cmd") return { command: executable, args };
+
+  const matches = Array.from(
+    readFileSync(executable, "utf8").matchAll(/%dp0%[\\/]([^"\r\n]+?\.(?:js|exe))["']?\s+%\*/gi),
+  );
+  const target = matches.at(-1)?.[1];
+  if (!target) return { command, args };
+  const resolved = join(dirname(executable), target);
+  return extname(resolved).toLowerCase() === ".js"
+    ? { command: process.execPath, args: [resolved, ...args] }
+    : { command: resolved, args };
+}
+
 /**
  * Run a process on the local host. Mirrors the contract used by every
  * execution target in `@aaspai/runtime`. Streams stdout/stderr through
@@ -34,9 +69,10 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
   const { command, args, cwd, env: envOverrides, stdin, timeoutMs, signal: abortSignal } = options;
   const workingDir = cwd ?? process.cwd();
   const env = { ...process.env, ...(envOverrides ?? {}) };
+  const resolved = resolveWindowsCommand(command, args, env);
 
   return await new Promise<RunProcessResult>((resolve) => {
-    const child = spawn(command, args, {
+    const child = spawn(resolved.command, resolved.args, {
       cwd: workingDir,
       env,
       stdio: [stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],

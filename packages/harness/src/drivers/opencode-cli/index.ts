@@ -567,7 +567,7 @@ export const opencodeCli: ServerAdapterModule = {
       const { execFile } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const exec = promisify(execFile);
-      const cli = process.env.OPENCODE_CLI ?? "opencode";
+      const cli = await resolveOpencodeBinary(process.env.OPENCODE_CLI);
       const { stdout } = await exec(cli, ["--version"]);
       return {
         ok: true,
@@ -577,7 +577,11 @@ export const opencodeCli: ServerAdapterModule = {
       return {
         ok: false,
         checks: [
-          { name: "opencode_cli", level: "error", message: `not found: ${(err as Error).message}` },
+          {
+            name: "opencode_cli",
+            level: "error",
+            message: `opencode unavailable: ${(err as Error).message}`,
+          },
         ],
       };
     }

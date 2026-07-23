@@ -30,7 +30,7 @@ const nav = [
 
 const secondary = [
   { href: "/chat/agent/ceo", label: "Chat with CEO", icon: MessagesSquare },
-  { href: "/settings", label: "Settings", icon: Settings, disabled: true },
+  { href: "/setup", label: "Setup", icon: Settings },
 ];
 
 export function Sidebar() {
@@ -74,25 +74,10 @@ export function Sidebar() {
             const active = pathname === item.href;
             const baseClasses = cn(
               "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-              item.disabled
-                ? "cursor-not-allowed opacity-50"
-                : active
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              active
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
             );
-            if (item.disabled) {
-              return (
-                <li key={item.href}>
-                  <div className={baseClasses} title="Coming in v0.2">
-                    <item.icon className="h-4 w-4" />
-                    {item.label}
-                    <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                      soon
-                    </span>
-                  </div>
-                </li>
-              );
-            }
             return (
               <li key={item.href}>
                 <Link href={item.href} className={baseClasses}>
