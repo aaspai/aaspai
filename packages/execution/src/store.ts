@@ -9,6 +9,7 @@ import type {
   Goal,
   Project,
   Repository,
+  ResourceLock,
   SourceSnapshot,
   WorkflowRun,
 } from "@aaspai/contracts/execution";
@@ -19,6 +20,7 @@ import {
   executionPlanSchema,
   executionWorkItemSchema,
   executionWorkspaceSchema,
+  resourceLockSchema,
   workflowRunSchema,
 } from "@aaspai/contracts/execution";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
@@ -35,8 +37,11 @@ import {
   executionWorkspaces,
   goals,
   inArray,
+  isNull,
+  lte,
   projects,
   repositories,
+  resourceLocks,
   type SqliteDb,
   workflowRuns,
 } from "@aaspai/db";
@@ -153,6 +158,15 @@ export interface AppendEventInput {
 export interface CreateArtifactInput extends Omit<Artifact, "id" | "createdAt"> {
   id?: string;
   createdAt?: string;
+}
+
+export interface AcquireResourceLockInput {
+  id?: string;
+  organizationId: string;
+  resourceType: ResourceLock["resourceType"];
+  resourceId: string;
+  ownerAttemptId: string;
+  leaseExpiresAt: string;
 }
 
 export class ExecutionStore {
@@ -388,6 +402,76 @@ export class ExecutionStore {
     const cancelled = await this.getAttempt(attemptId);
     if (!cancelled) throw new Error(`Agent attempt ${attemptId} disappeared during cancellation`);
     return cancelled;
+  }
+
+  async acquireResourceLock(input: AcquireResourceLockInput): Promise<ResourceLock | null> {
+    const active = await this.db
+      .select()
+      .from(resourceLocks)
+      .where(
+        and(
+          eq(resourceLocks.organizationId, input.organizationId),
+          eq(resourceLocks.resourceType, input.resourceType),
+          eq(resourceLocks.resourceId, input.resourceId),
+          isNull(resourceLocks.releasedAt),
+        ),
+      )
+      .limit(1);
+    if (active[0]) return null;
+    const row = {
+      id: input.id ?? makeId("lock"),
+      organizationId: input.organizationId,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId,
+      ownerAttemptId: input.ownerAttemptId,
+      acquiredAt: now(),
+      leaseExpiresAt: input.leaseExpiresAt,
+      releasedAt: null,
+    } satisfies typeof resourceLocks.$inferInsert;
+    await this.db.insert(resourceLocks).values(row);
+    return resourceLockSchema.parse(row);
+  }
+
+  async findResourceLock(
+    organizationId: string,
+    resourceType: ResourceLock["resourceType"],
+    resourceId: string,
+  ): Promise<ResourceLock | null> {
+    const rows = await this.db
+      .select()
+      .from(resourceLocks)
+      .where(
+        and(
+          eq(resourceLocks.organizationId, organizationId),
+          eq(resourceLocks.resourceType, resourceType),
+          eq(resourceLocks.resourceId, resourceId),
+          isNull(resourceLocks.releasedAt),
+        ),
+      )
+      .limit(1);
+    return rows[0] ? resourceLockSchema.parse(rows[0]) : null;
+  }
+
+  async releaseResourceLock(lockId: string): Promise<ResourceLock | null> {
+    await this.db
+      .update(resourceLocks)
+      .set({ releasedAt: now() })
+      .where(and(eq(resourceLocks.id, lockId), isNull(resourceLocks.releasedAt)));
+    const rows = await this.db
+      .select()
+      .from(resourceLocks)
+      .where(eq(resourceLocks.id, lockId))
+      .limit(1);
+    return rows[0] ? resourceLockSchema.parse(rows[0]) : null;
+  }
+
+  async reconcileExpiredLocks(at = now()): Promise<number> {
+    const expired = await this.db
+      .select({ id: resourceLocks.id })
+      .from(resourceLocks)
+      .where(and(lte(resourceLocks.leaseExpiresAt, at), isNull(resourceLocks.releasedAt)));
+    for (const lock of expired) await this.releaseResourceLock(lock.id);
+    return expired.length;
   }
 
   async createWorkspace(input: CreateWorkspaceInput) {
