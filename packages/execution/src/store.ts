@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentAttempt,
   Artifact,
+  AttemptRole,
   AttemptStatus,
   ExecutionEvent,
   ExecutionWorkItem,
@@ -26,6 +27,21 @@ import {
   resourceLockSchema,
   workflowRunSchema,
 } from "@aaspai/contracts/execution";
+import type {
+  ApprovalStatus,
+  ExecutionApproval,
+  ExecutionGovernance,
+  ExecutionGovernanceEvent,
+  ExecutionGovernanceInput,
+  ExecutionVerification,
+  VerificationStatus,
+} from "@aaspai/contracts/governance";
+import {
+  executionApprovalSchema,
+  executionGovernanceEventSchema,
+  executionGovernanceSchema,
+  executionVerificationSchema,
+} from "@aaspai/contracts/governance";
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
@@ -36,8 +52,12 @@ import {
   definitionRevisions,
   desc,
   eq,
+  executionApprovals,
+  executionBudgetReservations,
   executionEvents,
+  executionGovernanceEvents,
   executionPlans,
+  executionVerifications,
   executionWorkItemDependencies,
   executionWorkItems,
   executionWorkspaces,
@@ -108,6 +128,7 @@ export interface CreateWorkItemInput {
   maxAttempts?: number;
   idempotencyKey: string;
   metadata?: Record<string, unknown>;
+  governance?: ExecutionGovernanceInput;
   status?: ExecutionWorkItem["status"];
 }
 
@@ -140,6 +161,16 @@ export interface CreateAttemptInput {
   attemptNumber?: number;
   timeoutMs?: number | null;
   status?: AgentAttempt["status"];
+  role?: AttemptRole;
+  parentAttemptId?: string | null;
+  verificationId?: string | null;
+}
+
+export interface CheckerAttemptInput {
+  verificationId: string;
+  agentId: string;
+  harness: string;
+  timeoutMs?: number | null;
 }
 
 export interface CreateHarnessSessionInput {
@@ -301,6 +332,7 @@ export class ExecutionStore {
       maxAttempts: input.maxAttempts ?? 1,
       retryAfter: null,
       blockedReason: null,
+      governanceJson: JSON.stringify(input.governance ?? {}),
       idempotencyKey: input.idempotencyKey,
       metadataJson: JSON.stringify(input.metadata ?? {}),
       createdAt: now(),
@@ -486,6 +518,9 @@ export class ExecutionStore {
       agentId: input.agentId,
       harness: input.harness,
       harnessSessionId: null,
+      role: input.role ?? "maker",
+      parentAttemptId: input.parentAttemptId ?? null,
+      verificationId: input.verificationId ?? null,
       status: input.status ?? "queued",
       attemptNumber: input.attemptNumber ?? 1,
       timeoutMs: input.timeoutMs ?? null,
@@ -520,6 +555,21 @@ export class ExecutionStore {
     const workItem = await this.getWorkItem(input.workItemId);
     if (!workItem || !["proposed", "ready"].includes(workItem.status)) return null;
     if (workItem.retryAfter && workItem.retryAfter > now()) return null;
+
+    const policyDecision = evaluateExecutionPolicy(workItem.governance, workItem.metadata);
+    if (!policyDecision.ok) {
+      await this.recordGovernanceEvent({
+        organizationId: workItem.organizationId,
+        workItemId: workItem.id,
+        action: "execute",
+        decision: "denied",
+        reason: policyDecision.reason,
+      });
+      await this.updateWorkItemStatus(workItem.id, "blocked", {
+        blockedReason: `execution denied: ${policyDecision.reason}`,
+      });
+      return null;
+    }
 
     const attempts = await this.listAttemptsForWorkItem(input.workItemId);
     const active = attempts.find((attempt) => isActiveAttemptStatus(attempt.status));
@@ -559,8 +609,18 @@ export class ExecutionStore {
       return null;
     }
 
+    if (!(await this.reserveBudget(workItem, created.id, input.agentId))) {
+      await this.releaseSchedulerLocks(created.id);
+      await this.db.delete(agentAttempts).where(eq(agentAttempts.id, created.id));
+      await this.updateWorkItemStatus(workItem.id, "blocked", {
+        blockedReason: "budget exhausted; no new attempt was started",
+      });
+      return null;
+    }
+
     if (!(await this.claimWorkItem(input.workItemId, created.id))) {
       await this.releaseSchedulerLocks(created.id);
+      await this.releaseBudgetReservations(created.id);
       await this.db.delete(agentAttempts).where(eq(agentAttempts.id, created.id));
       const winner = (await this.listAttemptsForWorkItem(input.workItemId)).find((attempt) =>
         isActiveAttemptStatus(attempt.status),
@@ -595,6 +655,7 @@ export class ExecutionStore {
     status: Extract<AgentAttempt["status"], "succeeded" | "failed" | "cancelled" | "timed_out">;
     error?: string | null;
     retryDelayMs?: number;
+    usage?: { tokens?: number; costUsd?: number };
   }): Promise<{ attempt: AgentAttempt; workItem: ExecutionWorkItem }> {
     const current = await this.getAttempt(input.attemptId);
     if (!current) throw new Error(`Agent attempt ${input.attemptId} not found`);
@@ -618,8 +679,30 @@ export class ExecutionStore {
 
     const retryable = input.status === "failed" || input.status === "timed_out";
     const canRetry = retryable && current.attemptNumber < item.maxAttempts;
+    await this.settleBudgetReservations(input.attemptId, input.usage);
     if (input.status === "succeeded") {
-      await this.updateWorkItemStatus(item.id, "completed");
+      if (item.governance.verification.required) {
+        const verification = await this.createVerification({
+          organizationId: item.organizationId,
+          workItemId: item.id,
+          makerAttemptId: current.id,
+        });
+        await this.updateWorkItemStatus(item.id, "awaiting_verification", {
+          blockedReason: `checker verification required (${verification.id})`,
+        });
+      } else if (item.governance.approval.required) {
+        const approval = await this.createApprovalRequest({
+          organizationId: item.organizationId,
+          workItemId: item.id,
+          actorType: item.governance.approval.actorType,
+          expiresAfterMs: item.governance.approval.expiresAfterMs,
+        });
+        await this.updateWorkItemStatus(item.id, "awaiting_approval", {
+          blockedReason: `approval required (${approval.id})`,
+        });
+      } else {
+        await this.updateWorkItemStatus(item.id, "completed");
+      }
     } else if (canRetry) {
       const retryAfter = new Date(
         Date.now() + Math.max(0, input.retryDelayMs ?? 1_000),
@@ -639,6 +722,454 @@ export class ExecutionStore {
     const completedWorkItem = await this.getWorkItem(item.id);
     if (!completedAttempt || !completedWorkItem) throw new Error("Scheduled outcome disappeared");
     return { attempt: completedAttempt, workItem: completedWorkItem };
+  }
+
+  async getVerification(verificationId: string): Promise<ExecutionVerification | null> {
+    const rows = await this.db
+      .select()
+      .from(executionVerifications)
+      .where(eq(executionVerifications.id, verificationId))
+      .limit(1);
+    return rows[0] ? parseVerification(rows[0]) : null;
+  }
+
+  async getVerificationForWorkItem(workItemId: string): Promise<ExecutionVerification | null> {
+    const rows = await this.db
+      .select()
+      .from(executionVerifications)
+      .where(eq(executionVerifications.workItemId, workItemId))
+      .orderBy(desc(executionVerifications.createdAt))
+      .limit(1);
+    return rows[0] ? parseVerification(rows[0]) : null;
+  }
+
+  async createVerification(input: {
+    organizationId: string;
+    workItemId: string;
+    makerAttemptId: string;
+    id?: string;
+  }): Promise<ExecutionVerification> {
+    const existing = await this.getVerificationForWorkItem(input.workItemId);
+    if (existing && existing.status === "pending") return existing;
+    const row = {
+      id: input.id ?? makeId("verification"),
+      organizationId: input.organizationId,
+      workItemId: input.workItemId,
+      makerAttemptId: input.makerAttemptId,
+      checkerAttemptId: null,
+      status: "pending",
+      summary: "",
+      evidenceIdsJson: "[]",
+      createdAt: now(),
+      completedAt: null,
+    } satisfies typeof executionVerifications.$inferInsert;
+    await this.db.insert(executionVerifications).values(row);
+    return parseVerification(row);
+  }
+
+  async createCheckerAttempt(input: CheckerAttemptInput): Promise<AgentAttempt> {
+    const verification = await this.getVerification(input.verificationId);
+    if (!verification) throw new Error(`Verification ${input.verificationId} not found`);
+    if (verification.status !== "pending") throw new Error("Verification is no longer pending");
+    const maker = await this.getAttempt(verification.makerAttemptId);
+    if (!maker) throw new Error(`Maker attempt ${verification.makerAttemptId} not found`);
+    const workItem = await this.getWorkItem(verification.workItemId);
+    if (!workItem) throw new Error(`Work item ${verification.workItemId} not found`);
+    if (
+      workItem.governance.verification.checkerAgentId &&
+      workItem.governance.verification.checkerAgentId !== input.agentId
+    ) {
+      throw new Error("Checker agent does not satisfy the verification plan");
+    }
+    if (
+      workItem.governance.verification.checkerHarness &&
+      workItem.governance.verification.checkerHarness !== input.harness
+    ) {
+      throw new Error("Checker harness does not satisfy the verification plan");
+    }
+    const existing = (await this.listAttemptsForWorkItem(verification.workItemId)).find(
+      (attempt) => attempt.role === "checker" && attempt.verificationId === verification.id,
+    );
+    if (existing) return existing;
+    const row = await this.createAttempt({
+      organizationId: verification.organizationId,
+      workflowRunId: maker.workflowRunId,
+      workItemId: verification.workItemId,
+      agentId: input.agentId,
+      harness: input.harness,
+      timeoutMs: input.timeoutMs,
+      attemptNumber: 1,
+      role: "checker",
+      parentAttemptId: maker.id,
+      verificationId: verification.id,
+    });
+    return agentAttemptSchema.parse(row);
+  }
+
+  async startCheckerAttempt(attemptId: string): Promise<AgentAttempt> {
+    const current = await this.getAttempt(attemptId);
+    if (!current || current.role !== "checker")
+      throw new Error(`Checker attempt ${attemptId} not found`);
+    if (current.status === "queued") await this.transitionAttempt(attemptId, "preparing");
+    const preparing = await this.getAttempt(attemptId);
+    if (preparing?.status === "preparing") await this.transitionAttempt(attemptId, "running");
+    const started = await this.getAttempt(attemptId);
+    if (!started) throw new Error(`Checker attempt ${attemptId} disappeared`);
+    return started;
+  }
+
+  async submitVerification(input: {
+    verificationId: string;
+    checkerAttemptId: string;
+    status: VerificationStatus;
+    summary: string;
+    evidenceIds?: string[];
+  }): Promise<{ verification: ExecutionVerification; workItem: ExecutionWorkItem }> {
+    const verification = await this.getVerification(input.verificationId);
+    if (!verification) throw new Error(`Verification ${input.verificationId} not found`);
+    const checker = await this.getAttempt(input.checkerAttemptId);
+    if (!checker || checker.role !== "checker" || checker.verificationId !== verification.id) {
+      throw new Error("Checker attempt does not belong to verification");
+    }
+    const currentWorkItem = await this.getWorkItem(verification.workItemId);
+    if (!currentWorkItem) throw new Error(`Work item ${verification.workItemId} not found`);
+    if (
+      input.status === "passed" &&
+      currentWorkItem.governance.verification.minEvidence > (input.evidenceIds ?? []).length
+    ) {
+      throw new Error("Verification requires more evidence");
+    }
+    if (!isTerminalAttemptStatus(checker.status)) {
+      if (checker.status === "queued" || checker.status === "preparing") {
+        await this.startCheckerAttempt(checker.id);
+      }
+      await this.transitionAttempt(checker.id, input.status === "passed" ? "succeeded" : "failed");
+    }
+    await this.db
+      .update(executionVerifications)
+      .set({
+        checkerAttemptId: checker.id,
+        status: input.status,
+        summary: input.summary,
+        evidenceIdsJson: JSON.stringify(input.evidenceIds ?? []),
+        completedAt: now(),
+      })
+      .where(eq(executionVerifications.id, verification.id));
+
+    await this.recordGovernanceEvent({
+      organizationId: verification.organizationId,
+      workItemId: verification.workItemId,
+      attemptId: checker.id,
+      action: "verification.submit",
+      decision: input.status === "passed" ? "allowed" : "denied",
+      reason: input.summary,
+      metadata: {
+        verificationId: verification.id,
+        status: input.status,
+        evidenceIds: input.evidenceIds ?? [],
+      },
+    });
+
+    if (input.status === "passed") {
+      if (currentWorkItem.governance.approval.required) {
+        const approval = await this.createApprovalRequest({
+          organizationId: currentWorkItem.organizationId,
+          workItemId: currentWorkItem.id,
+          verificationId: verification.id,
+          actorType: currentWorkItem.governance.approval.actorType,
+          expiresAfterMs: currentWorkItem.governance.approval.expiresAfterMs,
+        });
+        await this.updateWorkItemStatus(currentWorkItem.id, "awaiting_approval", {
+          blockedReason: `approval required (${approval.id})`,
+        });
+      } else {
+        await this.updateWorkItemStatus(currentWorkItem.id, "completed");
+      }
+    } else {
+      await this.updateWorkItemStatus(currentWorkItem.id, "blocked", {
+        blockedReason: `verification ${input.status}: ${input.summary}`,
+      });
+    }
+    const updated = await this.getVerification(verification.id);
+    const workItem = await this.getWorkItem(currentWorkItem.id);
+    if (!updated || !workItem) throw new Error("Verification result disappeared");
+    return { verification: updated, workItem };
+  }
+
+  async createApprovalRequest(input: {
+    organizationId: string;
+    workItemId: string;
+    verificationId?: string | null;
+    actorType: "human" | "operator" | "supervisor";
+    expiresAfterMs?: number | null;
+  }): Promise<ExecutionApproval> {
+    const requested = await this.listApprovalsForWorkItem(input.workItemId);
+    const active = requested.find((approval) => approval.status === "requested");
+    if (active) return active;
+    const requestedAt = new Date();
+    const expiresAt = input.expiresAfterMs
+      ? new Date(requestedAt.getTime() + input.expiresAfterMs).toISOString()
+      : null;
+    const row = {
+      id: makeId("approval"),
+      organizationId: input.organizationId,
+      workItemId: input.workItemId,
+      verificationId: input.verificationId ?? null,
+      status: "requested",
+      actorType: input.actorType,
+      actorId: null,
+      reason: "",
+      requestedAt: requestedAt.toISOString(),
+      expiresAt,
+      decidedAt: null,
+    } satisfies typeof executionApprovals.$inferInsert;
+    await this.db.insert(executionApprovals).values(row);
+    return parseApproval(row);
+  }
+
+  async listApprovalsForWorkItem(workItemId: string): Promise<ExecutionApproval[]> {
+    const rows = await this.db
+      .select()
+      .from(executionApprovals)
+      .where(eq(executionApprovals.workItemId, workItemId))
+      .orderBy(desc(executionApprovals.requestedAt));
+    return rows.map(parseApproval);
+  }
+
+  async getApproval(approvalId: string): Promise<ExecutionApproval | null> {
+    const rows = await this.db
+      .select()
+      .from(executionApprovals)
+      .where(eq(executionApprovals.id, approvalId))
+      .limit(1);
+    return rows[0] ? parseApproval(rows[0]) : null;
+  }
+
+  async decideApproval(input: {
+    approvalId: string;
+    actorId: string;
+    actorType: "human" | "operator" | "supervisor";
+    status: Exclude<ApprovalStatus, "requested" | "expired" | "cancelled">;
+    reason?: string;
+  }): Promise<{ approval: ExecutionApproval; workItem: ExecutionWorkItem }> {
+    const rows = await this.db
+      .select()
+      .from(executionApprovals)
+      .where(eq(executionApprovals.id, input.approvalId))
+      .limit(1);
+    const current = rows[0] ? parseApproval(rows[0]) : null;
+    if (!current) throw new Error(`Approval ${input.approvalId} not found`);
+    if (current.status !== "requested") throw new Error("Approval is no longer requested");
+    if (current.expiresAt && current.expiresAt <= now()) {
+      await this.db
+        .update(executionApprovals)
+        .set({ status: "expired", decidedAt: now() })
+        .where(eq(executionApprovals.id, current.id));
+      throw new Error("Approval has expired");
+    }
+    if (current.actorType !== input.actorType)
+      throw new Error("Approval actor type is not authorized");
+    const pendingWorkItem = await this.getWorkItem(current.workItemId);
+    if (!pendingWorkItem) throw new Error(`Work item ${current.workItemId} not found`);
+    if (pendingWorkItem.status !== "awaiting_approval")
+      throw new Error("Work item is not awaiting approval");
+    await this.db
+      .update(executionApprovals)
+      .set({
+        status: input.status,
+        actorId: input.actorId,
+        reason: input.reason ?? "",
+        decidedAt: now(),
+      })
+      .where(eq(executionApprovals.id, current.id));
+    const workItem = await this.getWorkItem(current.workItemId);
+    if (!workItem) throw new Error(`Work item ${current.workItemId} not found`);
+    if (input.status === "approved") await this.updateWorkItemStatus(workItem.id, "completed");
+    else
+      await this.updateWorkItemStatus(workItem.id, "blocked", {
+        blockedReason: input.reason ?? input.status,
+      });
+    await this.recordGovernanceEvent({
+      organizationId: current.organizationId,
+      workItemId: current.workItemId,
+      action: `approval.${input.status}`,
+      decision: input.status === "approved" ? "allowed" : "denied",
+      reason: input.reason ?? input.status,
+      metadata: { approvalId: current.id, actorId: input.actorId, actorType: input.actorType },
+    });
+    const approvalRows = await this.db
+      .select()
+      .from(executionApprovals)
+      .where(eq(executionApprovals.id, current.id))
+      .limit(1);
+    const approval = approvalRows[0] ? parseApproval(approvalRows[0]) : null;
+    const updatedWorkItem = await this.getWorkItem(workItem.id);
+    if (!approval || !updatedWorkItem) throw new Error("Approval decision disappeared");
+    return { approval, workItem: updatedWorkItem };
+  }
+
+  async recordGovernanceEvent(
+    input: Omit<ExecutionGovernanceEvent, "id" | "occurredAt" | "attemptId" | "metadata"> & {
+      attemptId?: string | null;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<ExecutionGovernanceEvent> {
+    const row = {
+      id: makeId("governance"),
+      organizationId: input.organizationId,
+      workItemId: input.workItemId ?? null,
+      attemptId: input.attemptId ?? null,
+      action: input.action,
+      decision: input.decision,
+      reason: input.reason,
+      metadataJson: JSON.stringify(input.metadata ?? {}),
+      occurredAt: now(),
+    } satisfies typeof executionGovernanceEvents.$inferInsert;
+    await this.db.insert(executionGovernanceEvents).values(row);
+    const { metadataJson, ...event } = row;
+    return executionGovernanceEventSchema.parse({ ...event, metadata: JSON.parse(metadataJson) });
+  }
+
+  async listGovernanceEvents(
+    organizationId: string,
+    workItemId?: string,
+  ): Promise<ExecutionGovernanceEvent[]> {
+    const rows = await this.db
+      .select()
+      .from(executionGovernanceEvents)
+      .where(
+        workItemId
+          ? and(
+              eq(executionGovernanceEvents.organizationId, organizationId),
+              eq(executionGovernanceEvents.workItemId, workItemId),
+            )
+          : eq(executionGovernanceEvents.organizationId, organizationId),
+      )
+      .orderBy(desc(executionGovernanceEvents.occurredAt));
+    return rows.map((row) => {
+      const { metadataJson, ...event } = row;
+      return executionGovernanceEventSchema.parse({ ...event, metadata: JSON.parse(metadataJson) });
+    });
+  }
+
+  private async reserveBudget(
+    workItem: ExecutionWorkItem,
+    attemptId: string,
+    agentId: string,
+  ): Promise<boolean> {
+    if (workItem.governance.budget.limits.length === 0) return true;
+    const warnings: string[] = [];
+    try {
+      this.db.transaction((tx) => {
+        for (const limit of workItem.governance.budget.limits) {
+          const scopeId = budgetScopeId(limit.scope, workItem, agentId, attemptId);
+          const rows = tx
+            .select()
+            .from(executionBudgetReservations)
+            .where(
+              and(
+                eq(executionBudgetReservations.organizationId, workItem.organizationId),
+                eq(executionBudgetReservations.scope, limit.scope),
+                eq(executionBudgetReservations.scopeId, scopeId),
+                inArray(executionBudgetReservations.status, ["reserved", "settled"]),
+              ),
+            )
+            .all();
+          const tokens = rows.reduce(
+            (sum, row) => sum + (row.status === "reserved" ? row.reservedTokens : row.actualTokens),
+            0,
+          );
+          const costUsd = rows.reduce(
+            (sum, row) =>
+              sum + (row.status === "reserved" ? row.reservedCostUsd : row.actualCostUsd),
+            0,
+          );
+          const runs = rows.reduce((sum, row) => sum + row.reservedRuns, 0);
+          if (
+            (limit.tokens > 0 && tokens >= limit.tokens) ||
+            (limit.costUsd > 0 && costUsd >= limit.costUsd) ||
+            (limit.runs > 0 && runs + 1 > limit.runs)
+          ) {
+            throw new BudgetExhaustedError(`budget exhausted for ${limit.scope}:${scopeId}`);
+          }
+          if (limit.runs > 0 && runs / limit.runs >= workItem.governance.budget.soft) {
+            warnings.push(`budget soft threshold reached for ${limit.scope}:${scopeId}`);
+          }
+          tx.insert(executionBudgetReservations)
+            .values({
+              id: makeId("budget"),
+              organizationId: workItem.organizationId,
+              workItemId: workItem.id,
+              attemptId,
+              scope: limit.scope,
+              scopeId,
+              reservedTokens: 0,
+              reservedCostUsd: 0,
+              reservedRuns: 1,
+              actualTokens: 0,
+              actualCostUsd: 0,
+              status: "reserved",
+              createdAt: now(),
+              settledAt: null,
+            })
+            .run();
+        }
+      });
+    } catch (error) {
+      if (!(error instanceof BudgetExhaustedError)) throw error;
+      await this.recordGovernanceEvent({
+        organizationId: workItem.organizationId,
+        workItemId: workItem.id,
+        attemptId,
+        action: "budget.reserve",
+        decision: "denied",
+        reason: error.message,
+      });
+      return false;
+    }
+    for (const reason of warnings) {
+      await this.recordGovernanceEvent({
+        organizationId: workItem.organizationId,
+        workItemId: workItem.id,
+        attemptId,
+        action: "budget.reserve",
+        decision: "warning",
+        reason,
+      });
+    }
+    return true;
+  }
+
+  private async releaseBudgetReservations(attemptId: string): Promise<void> {
+    await this.db
+      .update(executionBudgetReservations)
+      .set({ status: "released", settledAt: now() })
+      .where(
+        and(
+          eq(executionBudgetReservations.attemptId, attemptId),
+          eq(executionBudgetReservations.status, "reserved"),
+        ),
+      );
+  }
+
+  private async settleBudgetReservations(
+    attemptId: string,
+    usage?: { tokens?: number; costUsd?: number },
+  ): Promise<void> {
+    await this.db
+      .update(executionBudgetReservations)
+      .set({
+        status: "settled",
+        actualTokens: usage?.tokens ?? 0,
+        actualCostUsd: usage?.costUsd ?? 0,
+        settledAt: now(),
+      })
+      .where(
+        and(
+          eq(executionBudgetReservations.attemptId, attemptId),
+          eq(executionBudgetReservations.status, "reserved"),
+        ),
+      );
   }
 
   private async acquireSchedulerSlots(input: {
@@ -704,6 +1235,8 @@ export class ExecutionStore {
     active: number;
     proposed: number;
     ready: number;
+    awaitingVerification: number;
+    awaitingApproval: number;
     blocked: number;
     failed: number;
     cancelled: number;
@@ -718,6 +1251,10 @@ export class ExecutionStore {
     const active = items.filter((item) => ["claimed", "in_progress"].includes(item.status)).length;
     const proposed = items.filter((item) => item.status === "proposed").length;
     const ready = items.filter((item) => item.status === "ready").length;
+    const awaitingVerification = items.filter(
+      (item) => item.status === "awaiting_verification",
+    ).length;
+    const awaitingApproval = items.filter((item) => item.status === "awaiting_approval").length;
     const blocked = items.filter((item) => item.status === "blocked").length;
     const failed = items.filter((item) => item.status === "failed").length;
     const cancelled = items.filter((item) => item.status === "cancelled").length;
@@ -728,6 +1265,8 @@ export class ExecutionStore {
       active,
       proposed,
       ready,
+      awaitingVerification,
+      awaitingApproval,
       blocked,
       failed,
       cancelled,
@@ -1130,14 +1669,83 @@ function isActiveResourceLockConflict(error: unknown): boolean {
   );
 }
 
+class BudgetExhaustedError extends Error {}
+
 function parseWorkItem(row: typeof executionWorkItems.$inferSelect): ExecutionWorkItem {
   const {
     claimedByAttemptId: _claimedByAttemptId,
     claimedAt: _claimedAt,
     metadataJson,
+    governanceJson,
     ...workItem
   } = row;
-  return executionWorkItemSchema.parse({ ...workItem, metadata: JSON.parse(metadataJson) });
+  return executionWorkItemSchema.parse({
+    ...workItem,
+    metadata: JSON.parse(metadataJson),
+    governance: executionGovernanceSchema.parse(JSON.parse(governanceJson)),
+  });
+}
+
+function parseVerification(row: typeof executionVerifications.$inferSelect): ExecutionVerification {
+  const { evidenceIdsJson, ...verification } = row;
+  return executionVerificationSchema.parse({
+    ...verification,
+    evidenceIds: JSON.parse(evidenceIdsJson),
+  });
+}
+
+function parseApproval(row: typeof executionApprovals.$inferSelect): ExecutionApproval {
+  return executionApprovalSchema.parse(row);
+}
+
+function budgetScopeId(
+  scope: ExecutionGovernance["budget"]["limits"][number]["scope"],
+  workItem: ExecutionWorkItem,
+  agentId: string,
+  attemptId: string,
+): string {
+  if (scope === "organization") return workItem.organizationId;
+  if (scope === "goal") return workItem.goalId;
+  if (scope === "project") return workItem.projectId;
+  if (scope === "agent") return agentId;
+  return attemptId;
+}
+
+function evaluateExecutionPolicy(
+  governance: ExecutionGovernance,
+  metadata: Record<string, unknown>,
+): { ok: true } | { ok: false; reason: string } {
+  const action = governance.policy.actions.execute;
+  if (action && !action.allowed)
+    return { ok: false, reason: "execute action is disallowed by policy" };
+  if (action?.requireApproval) {
+    return { ok: false, reason: `execute action requires ${action.requireApproval} approval` };
+  }
+  const paths = Array.isArray(metadata.paths)
+    ? metadata.paths.filter((path): path is string => typeof path === "string")
+    : [];
+  const deniedPath = paths.find((path) =>
+    governance.policy.denylist.some((pattern) => matchesPath(pattern, path)),
+  );
+  if (deniedPath) return { ok: false, reason: `path is denied by policy: ${deniedPath}` };
+  if (governance.policy.allowlist.length > 0) {
+    const outsideAllowlist = paths.find(
+      (path) => !governance.policy.allowlist.some((pattern) => matchesPath(pattern, path)),
+    );
+    if (outsideAllowlist)
+      return { ok: false, reason: `path is outside policy allowlist: ${outsideAllowlist}` };
+  }
+  if (governance.policy.maxFilesChanged > 0 && paths.length > governance.policy.maxFilesChanged) {
+    return { ok: false, reason: "change exceeds policy maxFilesChanged" };
+  }
+  return { ok: true };
+}
+
+function matchesPath(pattern: string, path: string): boolean {
+  if (pattern === path || pattern === "**") return true;
+  if (pattern.endsWith("/**")) return path.startsWith(pattern.slice(0, -3));
+  if (pattern.endsWith("*")) return path.startsWith(pattern.slice(0, -1));
+  return false;
 }
 
 function isActiveAttemptStatus(status: AgentAttempt["status"]): boolean {

@@ -12,6 +12,7 @@
     "./errors": "./src/errors.ts",
     "./event": "./src/event.ts",
     "./execution": "./src/execution.ts",
+    "./governance": "./src/governance.ts",
     "./harness": "./src/harness.ts",
     "./identity": "./src/identity.ts",
     "./observability": "./src/observability.ts",
