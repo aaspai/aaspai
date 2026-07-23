@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowDown, Send, User } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -225,7 +226,14 @@ function TurnBubble({ turn, agentTitle }: { turn: Turn; agentTitle: string }) {
           <span>{formatRelative(turn.ts)}</span>
           {turn.status === "sending" && <span>· sending…</span>}
           {turn.status === "error" && <span>· failed</span>}
-          {turn.sessionId && <span className="font-mono">· {turn.sessionId.slice(0, 12)}…</span>}
+          {turn.sessionId && (
+            <Link
+              href={`/sessions/${encodeURIComponent(turn.sessionId)}`}
+              className="font-mono underline-offset-2 hover:underline"
+            >
+              · {turn.sessionId.slice(0, 12)}…
+            </Link>
+          )}
         </div>
       </div>
       {isUser && (

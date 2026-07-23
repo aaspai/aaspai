@@ -101,7 +101,7 @@ export function initCommand(): Command {
         `  ${pc.cyan("aaspai state")}                               # one-screen dashboard`,
       );
       console.log(
-        `  ${pc.cyan("aaspai start --port 7420")}                  # worker + API + web UI`,
+        `  ${pc.cyan("aaspai start")}                               # start the scheduler daemon`,
       );
       console.log("");
     });

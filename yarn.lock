@@ -64,6 +64,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@aaspai/cli@workspace:apps/cli"
   dependencies:
+    "@aaspai/db": "workspace:*"
+    "@aaspai/execution": "workspace:*"
     "@aaspai/harness": "workspace:*"
     "@aaspai/runtime": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
@@ -384,6 +386,7 @@ __metadata:
     "@aaspai/db": "workspace:*"
     "@aaspai/execution": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
+    "@aaspai/harness": "workspace:*"
     "@aaspai/knowledge": "workspace:*"
     "@aaspai/sessions": "workspace:*"
     "@biomejs/biome": "npm:2.5.0"

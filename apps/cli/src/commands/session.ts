@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
 import { Sessions } from "@aaspai/sessions";
-import { SkillRegistry } from "@aaspai/skills";
+import { loadSkillDirectory } from "@aaspai/skills";
 import { Command } from "commander";
 import pc from "picocolors";
 
 export function sessionCommand(): Command {
   const cmd = new Command("session").description("Session operations");
 
-  function makeSessions(): Sessions {
+  async function makeSessions(): Promise<Sessions> {
     const agentSource = new FileAgentConfigSource(process.env.AASPAI_AGENTS_DIR ?? "./agents");
     const knowledgeSource = new FileKnowledgeSource(
       process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
     );
-    const skills = new SkillRegistry();
+    const skills = await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
     return new Sessions({ agentSource, knowledgeSource, skillRegistry: skills });
   }
 
@@ -21,7 +21,7 @@ export function sessionCommand(): Command {
     .command("list")
     .description("List recent sessions")
     .action(async () => {
-      const s = makeSessions();
+      const s = await makeSessions();
       const rows = await s.list();
       console.log(pc.cyan(`Sessions (${rows.length})`));
       for (const r of rows.slice(0, 20)) {
@@ -34,7 +34,7 @@ export function sessionCommand(): Command {
     .command("show <id>")
     .description("Show a session")
     .action(async (id: string) => {
-      const s = makeSessions();
+      const s = await makeSessions();
       const r = await s.get(id);
       if (!r) {
         console.log(pc.red(`✗ Session ${id} not found`));
@@ -56,8 +56,15 @@ export function sessionCommand(): Command {
     .option("--prompt <text>", "the prompt", "hello from aaspai")
     .option("--adapter <type>", "override adapter", "claude_local")
     .option("--runtime <type>", "override runtime", "local")
+    .option("--skill <key>", "workspace skill to include; repeatable", collect, [])
     .action(async (opts) => {
-      const s = makeSessions();
+      const s = await makeSessions();
+      const skillRegistry = await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
+      const skillRefs = (opts.skill as string[]).map((key) => {
+        const skill = skillRegistry.get(key);
+        if (!skill) throw new Error(`Skill ${key} not found`);
+        return { key: skill.key, version: skill.version };
+      });
       console.log(pc.cyan(`Starting session for ${opts.agent}...`));
       const result = await s.execute({
         organizationId: "default",
@@ -66,11 +73,11 @@ export function sessionCommand(): Command {
         runtime: { kind: opts.runtime },
         prompt: opts.prompt,
         config: {},
-        skills: [],
+        skills: skillRefs,
         budget: {},
         idempotencyKey: randomUUID(),
       });
-      console.log(pc.green(`✓ Session ${result.sessionId}`));
+      console.log(pc.green(`✓ Session ${result.logRef ?? result.sessionId}`));
       console.log(`  status:  ${result.status}`);
       console.log(`  summary: ${result.summary ?? "(no summary)"}`);
       // Stop the underlying sources so the process exits.
@@ -94,7 +101,7 @@ export function sessionCommand(): Command {
     .command("pause <id>")
     .description("Pause a running session")
     .action(async (id: string) => {
-      const s = makeSessions();
+      const s = await makeSessions();
       await s.pause(id, "manual pause");
       console.log(pc.green(`✓ Paused ${id}`));
     });
@@ -103,7 +110,7 @@ export function sessionCommand(): Command {
     .command("resume <id>")
     .description("Resume a paused session")
     .action(async (id: string) => {
-      const s = makeSessions();
+      const s = await makeSessions();
       await s.resume(id);
       console.log(pc.green(`✓ Resumed ${id}`));
     });
@@ -112,7 +119,7 @@ export function sessionCommand(): Command {
     .command("stop <id>")
     .description("Stop a running session")
     .action(async (id: string) => {
-      const s = makeSessions();
+      const s = await makeSessions();
       await s.stop(id, "manual stop");
       console.log(pc.green(`✓ Stopped ${id}`));
     });
@@ -121,10 +128,14 @@ export function sessionCommand(): Command {
     .command("cancel <id>")
     .description("Cancel a running session")
     .action(async (id: string) => {
-      const s = makeSessions();
+      const s = await makeSessions();
       await s.cancel(id, "manual cancel");
       console.log(pc.green(`✓ Cancelled ${id}`));
     });
 
   return cmd;
+}
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }

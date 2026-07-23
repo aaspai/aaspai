@@ -22,13 +22,15 @@
     "prepublishOnly": "yarn build"
   },
   "dependencies": {
-    "@aaspai/harness": "workspace:*",
-    "@aaspai/runtime": "workspace:*",
     "better-sqlite3": "^12.11.1",
     "commander": "^12.1.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
+    "@aaspai/db": "workspace:*",
+    "@aaspai/execution": "workspace:*",
+    "@aaspai/harness": "workspace:*",
+    "@aaspai/runtime": "workspace:*",
     "@biomejs/biome": "^2.1.1",
     "@types/node": "^24.0.0",
     "esbuild": "0.25",

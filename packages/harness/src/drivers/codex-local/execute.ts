@@ -74,6 +74,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const onLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
     if (stream === "stderr") {
       collectedErrors.push(redactHomePath(chunk));
+      await ctx.onLog(stream, redactHomePath(chunk));
     } else {
       for (const line of chunk.split(/\r?\n/)) {
         if (line.length === 0) continue;
@@ -192,30 +193,45 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
 }> {
   const config = parseCodexLocalConfig(ctx.config);
   const result = await runProcess({ command: config.command, args: ["--version"], cwd: ctx.cwd });
-  const ok = result.exitCode === 0;
+  const installed = result.exitCode === 0;
+  const auth = installed
+    ? await runProcess({ command: config.command, args: ["login", "status"], cwd: ctx.cwd })
+    : null;
+  const ok = installed && auth?.exitCode === 0;
   return {
     ok,
     checks: [
       {
         name: "codex_cli",
-        level: ok ? "info" : "error",
-        message: ok
+        level: installed ? "info" : "error",
+        message: installed
           ? `codex found: ${result.stdout.trim()}`
           : `codex not found: ${result.stderr.trim() || "binary missing"}`,
       },
+      ...(installed
+        ? [
+            {
+              name: "codex_auth" as const,
+              level: (ok ? "info" : "error") as "info" | "error",
+              message: ok
+                ? auth?.stdout.trim() || "codex authenticated"
+                : auth?.stderr.trim() || auth?.stdout.trim() || "codex is not authenticated",
+            },
+          ]
+        : []),
     ],
   };
 }
 
 function buildCodexArgs(config: CodexLocalConfig, ctx: AdapterExecutionContext): string[] {
-  const args: string[] = ["exec", "--json"];
+  const args: string[] = ctx.runtime.sessionId
+    ? ["exec", "resume", ctx.runtime.sessionId, "--json"]
+    : ["exec", "--json", "--sandbox", config.sandbox];
   if (config.model) args.push("--model", config.model);
   if (config.modelReasoningEffort)
     args.push("-c", `model_reasoning_effort=${config.modelReasoningEffort}`);
-  args.push("--sandbox", config.sandbox);
-  args.push("--approval-mode", config.approvalMode);
-  if (config.maxTurns) args.push("--max-turns", String(config.maxTurns));
-  if (ctx.runtime.sessionId) args.push("--session", ctx.runtime.sessionId);
+  args.push("-c", `approval_policy="${config.approvalMode}"`);
+  if (ctx.runtime.sessionId) args.push("-c", `sandbox_mode="${config.sandbox}"`);
   for (const extra of config.extraArgs) args.push(extra);
   return args;
 }

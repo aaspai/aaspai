@@ -220,8 +220,15 @@ export class FileAgentConfigSource implements AgentConfigSource {
       );
     }
 
-    const adapterConfig = configYaml ? (yaml.load(configYaml) as JsonObject) : ({} as JsonObject);
-    const runtimeConfig = (fm.runtime as JsonObject) ?? ({} as JsonObject);
+    const sidecar = configYaml ? (yaml.load(configYaml) as JsonObject) : ({} as JsonObject);
+    const adapterConfig =
+      sidecar.adapterConfig && typeof sidecar.adapterConfig === "object"
+        ? (sidecar.adapterConfig as JsonObject)
+        : sidecar;
+    const runtimeConfig =
+      sidecar.runtimeConfig && typeof sidecar.runtimeConfig === "object"
+        ? (sidecar.runtimeConfig as JsonObject)
+        : ((fm.runtime as JsonObject) ?? ({} as JsonObject));
     const tools = toolsYaml ? (yaml.load(toolsYaml) as JsonObject) : ({} as JsonObject);
     const skills = skillsLock ? JSON.parse(skillsLock) : [];
     const relations = relationsYaml ? (yaml.load(relationsYaml) as JsonObject) : ({} as JsonObject);

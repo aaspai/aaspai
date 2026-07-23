@@ -69,7 +69,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   const onLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
     if (stream === "stderr") {
-      collectedErrors.push(redactHomePath(chunk));
+      const redacted = redactHomePath(chunk);
+      collectedErrors.push(redacted);
+      await ctx.onLog(stream, redacted);
     } else {
       for (const line of chunk.split(/\r?\n/)) {
         if (line.length === 0) continue;
@@ -192,17 +194,32 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
 }> {
   const config = parseClaudeLocalConfig(ctx.config);
   const result = await runProcess({ command: config.command, args: ["--version"], cwd: ctx.cwd });
-  const ok = result.exitCode === 0;
+  const installed = result.exitCode === 0;
+  const auth = installed
+    ? await runProcess({ command: config.command, args: ["auth", "status"], cwd: ctx.cwd })
+    : null;
+  const ok = installed && auth?.exitCode === 0;
   return {
     ok,
     checks: [
       {
         name: "claude_cli",
-        level: ok ? "info" : "error",
-        message: ok
+        level: installed ? "info" : "error",
+        message: installed
           ? `claude found: ${result.stdout.trim()}`
           : `claude not found: ${result.stderr.trim() || "binary missing"}`,
       },
+      ...(installed
+        ? [
+            {
+              name: "claude_auth" as const,
+              level: (ok ? "info" : "error") as "info" | "error",
+              message: ok
+                ? auth?.stdout.trim() || "claude authenticated"
+                : auth?.stderr.trim() || auth?.stdout.trim() || "claude is not authenticated",
+            },
+          ]
+        : []),
     ],
   };
 }

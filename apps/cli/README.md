@@ -21,7 +21,6 @@ After install, the `aaspai` binary is on your PATH.
 ```bash
 mkdir my-project && cd my-project
 aaspai init                 # scaffold agents/, knowledge/, loops/
-aaspai db migrate           # create the state DB
 aaspai agent list           # see the 4 seeded agents, including the CEO
 aaspai session start \
   --agent agent/operator \
@@ -79,7 +78,7 @@ aaspai session       Session operations (list, show, start, stop, cancel)
 aaspai skill         Skill operations
 aaspai tool          Tool operations
 aaspai state         Workspace state (counts, recent activity)
-aaspai start         Start the worker + API daemons
+aaspai start         Start the scheduler daemon
 ```
 
 ## Architecture

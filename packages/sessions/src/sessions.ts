@@ -88,12 +88,11 @@ export class Sessions {
     const knowledge = await this.knowledgeLoader.loadFor(agent);
 
     // 3. Materialize skills (foundation: no-op until Phase 4)
+    const skillInstructions: string[] = [];
     for (const ref of req.skills) {
       const skill = this.opts.skillRegistry.get(ref.key);
       if (skill) {
-        // Foundation slice: just register; the actual write to disk happens
-        // in a later phase when we know the runtime base path.
-        this.opts.skillRegistry.register(skill);
+        skillInstructions.push(`## Skill: ${skill.name}\n\n${skill.instructions}`);
       }
     }
 
@@ -149,7 +148,12 @@ export class Sessions {
     const knowledgeBlock = knowledge.context ? `\n\n---\n\n${knowledge.context}\n` : "";
     const systemBlock =
       agent.systemPrompt.trim().length > 0 ? `${agent.systemPrompt.trim()}\n\n---\n\n` : "";
-    const fullPrompt = `${systemBlock}${req.prompt}${knowledgeBlock}`;
+    const cliBlock = process.env.AASPAI_CLI_PATH
+      ? `Current aaspai CLI command: ${JSON.stringify(process.execPath)} ${JSON.stringify(process.env.AASPAI_CLI_PATH)}. Use this exact entry point for nested aaspai commands; do not call another global installation.\n\n---\n\n`
+      : "";
+    const skillsBlock =
+      skillInstructions.length > 0 ? `${skillInstructions.join("\n\n")}\n\n---\n\n` : "";
+    const fullPrompt = `${systemBlock}${cliBlock}${skillsBlock}${req.prompt}${knowledgeBlock}`;
 
     let result: SessionResult;
     const startedAtMs = Date.now();
@@ -171,7 +175,7 @@ export class Sessions {
           sessionDisplayId: undefined,
           taskKey: undefined,
         },
-        config: { ...agent.adapterConfig, ...(req.config ?? {}), systemPrompt: agent.systemPrompt },
+        config: { ...agent.adapterConfig, ...(req.config ?? {}) },
         context: {
           cwd: req.cwd ?? process.cwd(),
           prompt: fullPrompt,
@@ -236,7 +240,7 @@ export class Sessions {
         costUsd: adapterResult.costUsd,
         errorFamily: adapterResult.errorFamily,
         errorCode: adapterResult.errorCode,
-        summary: adapterResult.summary,
+        summary: adapterResult.summary ?? adapterResult.errorMessage,
         logRef: sessionId,
       };
       await db.db
