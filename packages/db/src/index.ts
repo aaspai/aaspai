@@ -18,6 +18,7 @@ export {
 export { runMigrations } from "./migrations.js";
 export * as schema from "./schema";
 export type { API_SCOPE_VALUES, ApiScope } from "./schema/api-keys";
+export * from "./schema/company-operations";
 export * from "./schema/execution";
 export * from "./schema/knowledge";
 export * from "./schema/memory";

@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@aaspai/auth": "workspace:*",
+    "@aaspai/company": "workspace:*",
     "@aaspai/contracts": "workspace:*",
     "@aaspai/db": "workspace:*",
     "@aaspai/execution": "workspace:*",

@@ -13,7 +13,7 @@ interface ExecutionRouteOptions {
   authVerifier?: AuthVerifier;
 }
 
-type AuthResult = { principal: AuthPrincipal } | { response: Response };
+export type AuthResult = { principal: AuthPrincipal } | { response: Response };
 
 export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOptions = {}): void {
   app.post("/v1/execution/work-items", async (c) => {
@@ -373,7 +373,7 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
   });
 }
 
-async function authenticate(
+export async function authenticate(
   c: Context,
   verifier: AuthVerifier | undefined,
   requiredScope: ApiScope,

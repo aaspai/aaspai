@@ -432,6 +432,67 @@ const SQLITE_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS knowledge_change_requests_org_status_idx
     ON knowledge_change_requests (organization_id, status)`,
+  `CREATE TABLE IF NOT EXISTS departments (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    manager_agent_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (organization_id, name)
+  )`,
+  `CREATE INDEX IF NOT EXISTS departments_org_status_idx
+    ON departments (organization_id, status)`,
+  `CREATE TABLE IF NOT EXISTS department_members (
+    department_id TEXT NOT NULL,
+    organization_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (department_id, agent_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS department_members_org_agent_idx
+    ON department_members (organization_id, agent_id)`,
+  `CREATE TABLE IF NOT EXISTS service_agents (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    department_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    heartbeat_at TEXT,
+    last_run_at TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (organization_id, agent_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS service_agents_org_status_idx
+    ON service_agents (organization_id, status)`,
+  `CREATE TABLE IF NOT EXISTS autonomy_proposals (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    from_level TEXT NOT NULL,
+    to_level TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'proposed',
+    proposed_by TEXT NOT NULL,
+    reviewed_by TEXT,
+    review_reason TEXT NOT NULL DEFAULT '',
+    reviewed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS autonomy_proposals_org_status_idx
+    ON autonomy_proposals (organization_id, status)`,
+  `CREATE INDEX IF NOT EXISTS autonomy_proposals_target_idx
+    ON autonomy_proposals (organization_id, target_type, target_id)`,
 ];
 
 /**
