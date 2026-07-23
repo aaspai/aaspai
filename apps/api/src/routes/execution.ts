@@ -138,6 +138,13 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     return c.json({ data: await store.getGoalProgress(goal.id) });
   });
 
+  app.get("/v1/execution/company/health", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const store = new ExecutionStore(getDefaultDb().db);
+    return c.json({ data: await store.getCompanyHealth(auth.principal.organizationId) });
+  });
+
   app.post("/v1/execution/workflows/:id/schedule", async (c) => {
     const auth = await authenticate(c, options.authVerifier, "write");
     if ("response" in auth) return auth.response;

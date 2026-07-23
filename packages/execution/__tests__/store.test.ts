@@ -109,6 +109,58 @@ describe("ExecutionStore", () => {
     await expect(store.listArtifacts(attempt.id)).resolves.toEqual([artifact]);
   });
 
+  it("builds an isolated cross-project company health projection", async () => {
+    const organizationId = "org_health_a";
+    const goal = await store.createGoal({
+      organizationId,
+      title: "Company health goal",
+      status: "active",
+    });
+    const project = await store.createProject({
+      organizationId,
+      goalId: goal.id,
+      title: "Health project",
+    });
+    const repository = await store.createRepository({
+      organizationId,
+      projectId: project.id,
+      purpose: "project",
+      provider: "local",
+      localPath: "workspace/m9/health-project",
+    });
+    await store.createWorkItem({
+      organizationId,
+      goalId: goal.id,
+      projectId: project.id,
+      repositoryId: repository.id,
+      title: "Blocked operational work",
+      status: "blocked",
+      idempotencyKey: "health:blocked",
+    });
+    await store.createGoal({ organizationId: "org_health_b", title: "Other company goal" });
+
+    const health = await store.getCompanyHealth(organizationId);
+
+    expect(health).toMatchObject({
+      organizationId,
+      status: "at_risk",
+      totalGoals: 1,
+      totalProjects: 1,
+      totalWork: 1,
+      blockedWork: 1,
+      completionPercent: 0,
+      pendingApprovals: 0,
+      pendingVerifications: 0,
+    });
+    expect(health.goals).toEqual([
+      expect.objectContaining({ id: goal.id, projectCount: 1, blockedWork: 1 }),
+    ]);
+    expect(health.projects).toEqual([
+      expect.objectContaining({ id: project.id, totalWork: 1, blockedWork: 1 }),
+    ]);
+    expect(health.signals).toEqual([expect.objectContaining({ code: "blocked_work", count: 1 })]);
+  });
+
   it("rejects invalid attempt transitions", async () => {
     const goal = await store.createGoal({ organizationId: "org_test", title: "Test" });
     const project = await store.createProject({

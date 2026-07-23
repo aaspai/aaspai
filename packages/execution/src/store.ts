@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { type CompanyHealth, companyHealthSchema } from "@aaspai/contracts";
 import type {
   AgentAttempt,
   Artifact,
@@ -1398,6 +1399,193 @@ export class ExecutionStore {
     };
   }
 
+  /**
+   * Build the company operating read model from durable execution state.
+   * This is intentionally a projection: it cannot mutate work, bypass
+   * governance, or infer progress from prompts or agent claims.
+   */
+  async getCompanyHealth(organizationId: string): Promise<CompanyHealth> {
+    const [
+      goalRows,
+      projectRows,
+      workItemRows,
+      attemptRows,
+      approvalRows,
+      verificationRows,
+      budgetRows,
+    ] = await Promise.all([
+      this.db.select().from(goals).where(eq(goals.organizationId, organizationId)),
+      this.db.select().from(projects).where(eq(projects.organizationId, organizationId)),
+      this.db
+        .select()
+        .from(executionWorkItems)
+        .where(eq(executionWorkItems.organizationId, organizationId)),
+      this.db.select().from(agentAttempts).where(eq(agentAttempts.organizationId, organizationId)),
+      this.db
+        .select()
+        .from(executionApprovals)
+        .where(eq(executionApprovals.organizationId, organizationId)),
+      this.db
+        .select()
+        .from(executionVerifications)
+        .where(eq(executionVerifications.organizationId, organizationId)),
+      this.db
+        .select()
+        .from(executionBudgetReservations)
+        .where(eq(executionBudgetReservations.organizationId, organizationId)),
+    ]);
+    const workItems = workItemRows.map((row) => parseWorkItem(row));
+    const generatedAt = new Date().toISOString();
+    const completedWork = workItems.filter((item) => item.status === "completed").length;
+    const activeWork = workItems.filter((item) =>
+      ["claimed", "in_progress"].includes(item.status),
+    ).length;
+    const blockedWork = workItems.filter((item) => item.status === "blocked").length;
+    const failedWork = workItems.filter((item) => item.status === "failed").length;
+    const runningAttempts = attemptRows.filter((attempt) =>
+      ["queued", "preparing", "running", "cancelling"].includes(attempt.status),
+    ).length;
+    const failedAttempts = attemptRows.filter((attempt) =>
+      ["failed", "timed_out", "lost"].includes(attempt.status),
+    ).length;
+    const terminalAttempts = attemptRows.filter((attempt) =>
+      ["succeeded", "failed", "timed_out", "cancelled", "lost"].includes(attempt.status),
+    );
+    const successfulAttempts = terminalAttempts.filter(
+      (attempt) => attempt.status === "succeeded",
+    ).length;
+    const pendingApprovals = approvalRows.filter(
+      (approval) => approval.status === "requested",
+    ).length;
+    const pendingVerifications = verificationRows.filter(
+      (verification) => verification.status === "pending",
+    ).length;
+    const overdueWork = workItems.filter(
+      (item) =>
+        item.deadlineAt !== null &&
+        item.deadlineAt < generatedAt &&
+        !["completed", "cancelled"].includes(item.status),
+    ).length;
+    const completionPercent = percent(completedWork, workItems.length);
+    const reliabilityPercent = percent(successfulAttempts, terminalAttempts.length);
+    const signals: CompanyHealth["signals"] = [];
+    if (blockedWork > 0) {
+      signals.push({
+        code: "blocked_work",
+        severity: blockedWork >= 3 ? "critical" : "warning",
+        title: "Blocked work needs intervention",
+        detail: `${blockedWork} work item${blockedWork === 1 ? " is" : "s are"} blocked by policy, dependency, or execution state.`,
+        count: blockedWork,
+      });
+    }
+    if (failedAttempts > 0 || failedWork > 0) {
+      const count = failedAttempts + failedWork;
+      signals.push({
+        code: "failed_attempts",
+        severity: failedAttempts >= 3 ? "critical" : "warning",
+        title: "Execution reliability needs attention",
+        detail: `${count} failed or timed-out execution outcome${count === 1 ? "" : "s"} recorded.`,
+        count,
+      });
+    }
+    if (pendingApprovals + pendingVerifications > 0) {
+      const count = pendingApprovals + pendingVerifications;
+      signals.push({
+        code: "pending_governance",
+        severity: "warning",
+        title: "Governance decisions are waiting",
+        detail: `${pendingApprovals} approval${pendingApprovals === 1 ? "" : "s"} and ${pendingVerifications} verification${pendingVerifications === 1 ? " is" : "s are"} pending.`,
+        count,
+      });
+    }
+    if (overdueWork > 0) {
+      signals.push({
+        code: "overdue_work",
+        severity: "critical",
+        title: "Work is past its deadline",
+        detail: `${overdueWork} incomplete work item${overdueWork === 1 ? " is" : "s are"} past the recorded deadline.`,
+        count: overdueWork,
+      });
+    }
+
+    const score = Math.max(
+      0,
+      Math.min(
+        100,
+        100 -
+          Math.min(40, blockedWork * 15) -
+          Math.min(25, failedAttempts * 10) -
+          Math.min(15, overdueWork * 10) -
+          Math.min(10, (pendingApprovals + pendingVerifications) * 3),
+      ),
+    );
+    const status = signals.some((signal) => signal.severity === "critical")
+      ? "critical"
+      : signals.length > 0 || score < 80
+        ? "at_risk"
+        : "healthy";
+    const goalsHealth = goalRows.map((goal) => {
+      const items = workItems.filter((item) => item.goalId === goal.id);
+      const goalProjects = projectRows.filter((project) => project.goalId === goal.id);
+      const goalCompleted = items.filter((item) => item.status === "completed").length;
+      return {
+        id: goal.id,
+        title: goal.title,
+        status: goal.status,
+        projectCount: goalProjects.length,
+        totalWork: items.length,
+        completedWork: goalCompleted,
+        blockedWork: items.filter((item) => item.status === "blocked").length,
+        failedWork: items.filter((item) => item.status === "failed").length,
+        completionPercent: percent(goalCompleted, items.length),
+      };
+    });
+    const projectsHealth = projectRows.map((project) => {
+      const items = workItems.filter((item) => item.projectId === project.id);
+      const projectCompleted = items.filter((item) => item.status === "completed").length;
+      return {
+        id: project.id,
+        goalId: project.goalId,
+        title: project.title,
+        status: project.status,
+        totalWork: items.length,
+        completedWork: projectCompleted,
+        activeWork: items.filter((item) => ["claimed", "in_progress"].includes(item.status)).length,
+        blockedWork: items.filter((item) => item.status === "blocked").length,
+        failedWork: items.filter((item) => item.status === "failed").length,
+        completionPercent: percent(projectCompleted, items.length),
+      };
+    });
+    return companyHealthSchema.parse({
+      organizationId,
+      generatedAt,
+      status,
+      score,
+      totalGoals: goalRows.length,
+      totalProjects: projectRows.length,
+      totalWork: workItems.length,
+      completedWork,
+      activeWork,
+      blockedWork,
+      failedWork,
+      totalAttempts: attemptRows.length,
+      runningAttempts,
+      failedAttempts,
+      reliabilityPercent,
+      completionPercent,
+      pendingApprovals,
+      pendingVerifications,
+      overdueWork,
+      actualCostUsd: budgetRows.reduce((sum, row) => sum + row.actualCostUsd, 0),
+      reservedCostUsd: budgetRows.reduce((sum, row) => sum + row.reservedCostUsd, 0),
+      actualTokens: budgetRows.reduce((sum, row) => sum + row.actualTokens, 0),
+      reservedTokens: budgetRows.reduce((sum, row) => sum + row.reservedTokens, 0),
+      signals,
+      goals: goalsHealth,
+      projects: projectsHealth,
+    });
+  }
+
   async createHarnessSession(input: CreateHarnessSessionInput) {
     const id = input.id ?? makeId("sess");
     const row = {
@@ -1879,4 +2067,8 @@ function makeId(prefix: string): string {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function percent(value: number, total: number): number {
+  return total === 0 ? 0 : Math.round((value / total) * 100);
 }
