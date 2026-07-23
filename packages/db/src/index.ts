@@ -18,6 +18,7 @@ export {
 export { runMigrations } from "./migrations.js";
 export * as schema from "./schema";
 export type { API_SCOPE_VALUES, ApiScope } from "./schema/api-keys";
+export * from "./schema/execution";
 // Phase 2 schema re-exports (tables + row types) so consumers don't have
 // to know the schema/phase2 subpath.
 export {
