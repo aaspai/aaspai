@@ -149,7 +149,10 @@ export class Sessions {
     const knowledgeBlock = knowledge.context ? `\n\n---\n\n${knowledge.context}\n` : "";
     const systemBlock =
       agent.systemPrompt.trim().length > 0 ? `${agent.systemPrompt.trim()}\n\n---\n\n` : "";
-    const fullPrompt = `${systemBlock}${req.prompt}${knowledgeBlock}`;
+    const cliBlock = process.env.AASPAI_CLI_PATH
+      ? `Current aaspai CLI command: ${JSON.stringify(process.execPath)} ${JSON.stringify(process.env.AASPAI_CLI_PATH)}. Use this exact entry point for nested aaspai commands; do not call another global installation.\n\n---\n\n`
+      : "";
+    const fullPrompt = `${systemBlock}${cliBlock}${req.prompt}${knowledgeBlock}`;
 
     let result: SessionResult;
     const startedAtMs = Date.now();
@@ -171,7 +174,7 @@ export class Sessions {
           sessionDisplayId: undefined,
           taskKey: undefined,
         },
-        config: { ...agent.adapterConfig, ...(req.config ?? {}), systemPrompt: agent.systemPrompt },
+        config: { ...agent.adapterConfig, ...(req.config ?? {}) },
         context: {
           cwd: req.cwd ?? process.cwd(),
           prompt: fullPrompt,
@@ -236,7 +239,7 @@ export class Sessions {
         costUsd: adapterResult.costUsd,
         errorFamily: adapterResult.errorFamily,
         errorCode: adapterResult.errorCode,
-        summary: adapterResult.summary,
+        summary: adapterResult.summary ?? adapterResult.errorMessage,
         logRef: sessionId,
       };
       await db.db

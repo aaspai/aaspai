@@ -21,6 +21,7 @@ import { stateCommand } from "./commands/state.js";
 import { toolCommand } from "./commands/tool.js";
 
 const program = new Command();
+process.env.AASPAI_CLI_PATH ??= process.argv[1];
 
 // Read the version from package.json so we don't have to keep this
 // in sync with the version field at publish time. After esbuild
