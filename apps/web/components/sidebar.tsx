@@ -2,6 +2,7 @@
 
 import {
   Bot,
+  Brain,
   Database,
   Goal,
   ListTree,
@@ -19,6 +20,7 @@ const nav = [
   { href: "/agents", label: "Agents", icon: ListTree },
   { href: "/sessions", label: "Sessions", icon: ScrollText },
   { href: "/execution", label: "Execution", icon: Workflow },
+  { href: "/memory", label: "Memory", icon: Brain },
   { href: "/state", label: "State", icon: Database },
 ];
 

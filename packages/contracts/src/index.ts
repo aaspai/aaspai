@@ -6,6 +6,7 @@ export * from "./execution";
 export * from "./governance";
 export * from "./harness";
 export * from "./identity";
+export * from "./memory";
 export * from "./observability";
 export * from "./phase2";
 export * from "./primitives";

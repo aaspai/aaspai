@@ -17,6 +17,7 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { type MemoryRecord, memoryRecordSchema } from "@aaspai/contracts";
 import {
   agentAttempts,
   artifacts,
@@ -33,6 +34,7 @@ import {
   getDefaultDb,
   goals,
   loopOutputs,
+  memoryRecords,
   projects,
   repositories,
   runMigrations,
@@ -72,6 +74,51 @@ export function isAaspaiWorkspace(): boolean {
     existsSync(join(root, "aaspai.config.json")) ||
     existsSync(join(root, ".aaspai", "state.db"))
   );
+}
+
+export async function listMemoryRecords(
+  options: { organizationId?: string; query?: string; limit?: number } = {},
+): Promise<MemoryRecord[]> {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) return [];
+  const handle = getDefaultDb();
+  runMigrations(handle);
+  const rows = await handle.db.select().from(memoryRecords).orderBy(desc(memoryRecords.createdAt));
+  const organizationId =
+    options.organizationId ?? rows.find((row) => row.organizationId)?.organizationId;
+  const query = options.query?.trim().toLowerCase() ?? "";
+  const limit = Math.min(Math.max(options.limit ?? 100, 1), 200);
+  const records: MemoryRecord[] = [];
+  for (const row of rows) {
+    if (organizationId && row.organizationId !== organizationId) continue;
+    const parsed = memoryRecordSchema.safeParse({
+      id: row.id,
+      organizationId: row.organizationId,
+      kind: row.kind,
+      title: row.title,
+      content: row.content,
+      contentHash: row.contentHash,
+      scope: parseJsonValue(row.scopeJson, {}),
+      sensitivity: row.sensitivity,
+      provenance: parseJsonValue(row.provenanceJson, {}),
+      evidence: parseJsonValue(row.evidenceJson, []),
+      retention: parseJsonValue(row.retentionJson, {}),
+      status: row.status,
+      tags: parseJsonValue(row.tagsJson, []),
+      relatedIds: parseJsonValue(row.relatedIdsJson, []),
+      supersedesId: row.supersedesId,
+      metadata: parseJsonValue(row.metadataJson, {}),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    });
+    if (!parsed.success) continue;
+    const record = parsed.data;
+    const haystack = `${record.title} ${record.content} ${record.tags.join(" ")}`.toLowerCase();
+    if (query && !haystack.includes(query)) continue;
+    records.push(record);
+    if (records.length >= limit) break;
+  }
+  return records;
 }
 
 export interface AgentSummary {
@@ -373,6 +420,15 @@ function safeJson(s: string | null | undefined): Record<string, unknown> | null 
       : null;
   } catch {
     return null;
+  }
+}
+
+function parseJsonValue<T>(s: string | null | undefined, fallback: T): T {
+  if (!s) return fallback;
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return fallback;
   }
 }
 

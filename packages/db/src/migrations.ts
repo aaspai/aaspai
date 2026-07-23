@@ -337,6 +337,34 @@ const SQLITE_STATEMENTS = [
     ON execution_governance_events (organization_id, occurred_at)`,
   `CREATE INDEX IF NOT EXISTS execution_governance_events_work_item_idx
     ON execution_governance_events (work_item_id)`,
+  `CREATE TABLE IF NOT EXISTS memory_records (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    scope_json TEXT NOT NULL,
+    sensitivity TEXT NOT NULL DEFAULT 'internal',
+    provenance_json TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    retention_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'active',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    related_ids_json TEXT NOT NULL DEFAULT '[]',
+    supersedes_id TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT,
+    token_count INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE INDEX IF NOT EXISTS memory_records_org_status_idx
+    ON memory_records (organization_id, status)`,
+  `CREATE INDEX IF NOT EXISTS memory_records_scope_idx
+    ON memory_records (organization_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS memory_records_source_hash_idx
+    ON memory_records (organization_id, content_hash)`,
 ];
 
 /**
