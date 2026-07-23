@@ -117,6 +117,8 @@ export interface DispatchWorkItemInput {
   agentId: string;
   harness: string;
   timeoutMs?: number | null;
+  organizationConcurrency?: number;
+  projectConcurrency?: number;
 }
 
 export interface CreateWorkflowRunInput {
@@ -545,7 +547,20 @@ export class ExecutionStore {
       return { attempt: winner, created: false };
     }
 
+    const slots = await this.acquireSchedulerSlots({
+      organizationId: workItem.organizationId,
+      projectId: workItem.projectId,
+      attemptId: created.id,
+      organizationConcurrency: input.organizationConcurrency ?? 1,
+      projectConcurrency: input.projectConcurrency ?? 1,
+    });
+    if (!slots) {
+      await this.db.delete(agentAttempts).where(eq(agentAttempts.id, created.id));
+      return null;
+    }
+
     if (!(await this.claimWorkItem(input.workItemId, created.id))) {
+      await this.releaseSchedulerLocks(created.id);
       await this.db.delete(agentAttempts).where(eq(agentAttempts.id, created.id));
       const winner = (await this.listAttemptsForWorkItem(input.workItemId)).find((attempt) =>
         isActiveAttemptStatus(attempt.status),
@@ -584,6 +599,7 @@ export class ExecutionStore {
     const current = await this.getAttempt(input.attemptId);
     if (!current) throw new Error(`Agent attempt ${input.attemptId} not found`);
     if (isTerminalAttemptStatus(current.status)) {
+      await this.releaseSchedulerLocks(current.id);
       const existingWorkItem = await this.getWorkItem(current.workItemId);
       if (!existingWorkItem) throw new Error(`Work item ${current.workItemId} not found`);
       return { attempt: current, workItem: existingWorkItem };
@@ -618,10 +634,67 @@ export class ExecutionStore {
         blockedReason: input.error ?? `${input.status} without retry eligibility`,
       });
     }
+    await this.releaseSchedulerLocks(input.attemptId);
     const completedAttempt = await this.getAttempt(input.attemptId);
     const completedWorkItem = await this.getWorkItem(item.id);
     if (!completedAttempt || !completedWorkItem) throw new Error("Scheduled outcome disappeared");
     return { attempt: completedAttempt, workItem: completedWorkItem };
+  }
+
+  private async acquireSchedulerSlots(input: {
+    organizationId: string;
+    projectId: string;
+    attemptId: string;
+    organizationConcurrency: number;
+    projectConcurrency: number;
+  }): Promise<ResourceLock[] | null> {
+    const leaseExpiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    const acquired: ResourceLock[] = [];
+    const acquire = async (
+      resourceType: ResourceLock["resourceType"],
+      resourceId: string,
+      count: number,
+    ): Promise<boolean> => {
+      for (let slot = 0; slot < Math.max(1, count); slot++) {
+        const lock = await this.acquireResourceLock({
+          organizationId: input.organizationId,
+          resourceType,
+          resourceId: `${resourceId}:${slot}`,
+          ownerAttemptId: input.attemptId,
+          leaseExpiresAt,
+        });
+        if (lock) {
+          acquired.push(lock);
+          return true;
+        }
+      }
+      return false;
+    };
+    if (
+      !(await acquire(
+        "organization_slot",
+        `organization:${input.organizationId}`,
+        input.organizationConcurrency,
+      )) ||
+      !(await acquire("project_slot", `project:${input.projectId}`, input.projectConcurrency))
+    ) {
+      await this.releaseSchedulerLocks(input.attemptId);
+      return null;
+    }
+    return acquired;
+  }
+
+  private async releaseSchedulerLocks(ownerAttemptId: string): Promise<void> {
+    await this.db
+      .update(resourceLocks)
+      .set({ releasedAt: now() })
+      .where(
+        and(
+          eq(resourceLocks.ownerAttemptId, ownerAttemptId),
+          inArray(resourceLocks.resourceType, ["organization_slot", "project_slot"]),
+          isNull(resourceLocks.releasedAt),
+        ),
+      );
   }
 
   async getGoalProgress(goalId: string): Promise<{

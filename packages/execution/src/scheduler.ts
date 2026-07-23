@@ -55,6 +55,7 @@ export class DependencyScheduler {
 
   async tick(input: SchedulerTickInput): Promise<SchedulerTickResult> {
     const now = (input.now ?? new Date()).toISOString();
+    await this.store.reconcileExpiredLocks(now);
     const items = await this.store.listWorkItems(input.organizationId, input.goalId);
     const dependencies = new Map<
       string,
@@ -119,6 +120,8 @@ export class DependencyScheduler {
         workItemId: current.id,
         agentId: input.agentId,
         harness: input.harness,
+        organizationConcurrency: this.maxOrganizationConcurrency,
+        projectConcurrency: this.maxProjectConcurrency,
       });
       if (!result) continue;
       dispatched.push({ workItem: current, ...result });

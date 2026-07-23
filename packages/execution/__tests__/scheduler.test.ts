@@ -138,8 +138,7 @@ describe("DependencyScheduler", () => {
       harness: "dry_run_local",
       maxDispatch: 2,
     };
-    const first = await scheduler.tick(input);
-    const second = await scheduler.tick(input);
+    const [first, second] = await Promise.all([scheduler.tick(input), scheduler.tick(input)]);
 
     expect(first.dispatched).toHaveLength(1);
     expect([one.id, two.id]).toContain(first.dispatched[0]?.workItem.id);
