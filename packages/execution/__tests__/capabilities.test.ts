@@ -15,7 +15,15 @@ describe("provider capability guards", () => {
     expect(() =>
       assertExecutionPlanCapabilities({
         harness: "dry_run_local",
-        target: { kind: "ssh", host: "example.com", username: "root", remoteCwd: "/work" },
+        target: {
+          kind: "ssh",
+          host: "example.com",
+          port: 22,
+          username: "root",
+          remoteCwd: "/work",
+          strictHostKeyChecking: true,
+          shellCommand: "bash",
+        },
       }),
     ).toThrowError(ProviderCapabilityError);
     let captured: unknown;
