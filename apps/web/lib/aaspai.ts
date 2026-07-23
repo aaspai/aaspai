@@ -562,11 +562,13 @@ export async function getExecutionAttemptDetail(
     await handle.db.select().from(executionPlans).where(eq(executionPlans.attemptId, id)).limit(1)
   )[0];
   const harnessSession = attempt.harnessSessionId
-    ? (await handle.db
-        .select()
-        .from(sessions)
-        .where(eq(sessions.id, attempt.harnessSessionId))
-        .limit(1))[0]
+    ? (
+        await handle.db
+          .select()
+          .from(sessions)
+          .where(eq(sessions.id, attempt.harnessSessionId))
+          .limit(1)
+      )[0]
     : undefined;
   const eventRows = await handle.db
     .select()
