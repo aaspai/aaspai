@@ -149,6 +149,35 @@ describe("DependencyScheduler", () => {
     ];
     expect(attempts).toHaveLength(1);
   });
+
+  it("does not dispatch two loop items onto the same branch concurrently", async () => {
+    const fixture = await createFixture(store);
+    const first = await createItem(store, fixture, "First branch change", "branch-first", {
+      branchName: "loop/shared",
+    });
+    const second = await createItem(store, fixture, "Second branch change", "branch-second", {
+      branchName: "loop/shared",
+    });
+    const result = await new DependencyScheduler(store, {
+      maxOrganizationConcurrency: 2,
+      maxProjectConcurrency: 2,
+    }).tick({
+      organizationId: fixture.organizationId,
+      goalId: fixture.goal.id,
+      workflowRunId: fixture.run.id,
+      agentId: "agent_scheduler",
+      harness: "dry_run_local",
+      maxDispatch: 2,
+    });
+
+    expect(result.dispatched).toHaveLength(1);
+    expect([first.id, second.id]).toContain(result.dispatched[0]?.workItem.id);
+    const attempts = [
+      ...(await store.listAttemptsForWorkItem(first.id)),
+      ...(await store.listAttemptsForWorkItem(second.id)),
+    ];
+    expect(attempts).toHaveLength(1);
+  });
 });
 
 async function createFixture(store: ExecutionStore) {
@@ -187,13 +216,14 @@ async function createItem(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   title: string,
   key: string,
-  options: { maxAttempts?: number } = {},
+  options: { maxAttempts?: number; branchName?: string } = {},
 ) {
   return store.createWorkItem({
     organizationId: fixture.organizationId,
     goalId: fixture.goal.id,
     projectId: fixture.project.id,
     repositoryId: fixture.repository.id,
+    branchName: options.branchName,
     title,
     idempotencyKey: `${key}:${randomUUID()}`,
     maxAttempts: options.maxAttempts,

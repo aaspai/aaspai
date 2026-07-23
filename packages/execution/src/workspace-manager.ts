@@ -45,13 +45,18 @@ export class LocalExecutionWorkspaceManager {
       baseCommitSha: input.baseCommitSha,
       status: "creating",
     });
-    const lock = await this.store.acquireResourceLock({
-      organizationId: input.organizationId,
-      resourceType: "branch",
-      resourceId: `${input.repositoryId}:${branchName}`,
-      ownerAttemptId: input.attemptId,
-      leaseExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-    });
+    const resourceId = `${input.repositoryId}:${branchName}`;
+    const existing = await this.store.findResourceLock(input.organizationId, "branch", resourceId);
+    const lock =
+      existing?.ownerAttemptId === input.attemptId
+        ? existing
+        : await this.store.acquireResourceLock({
+            organizationId: input.organizationId,
+            resourceType: "branch",
+            resourceId,
+            ownerAttemptId: input.attemptId,
+            leaseExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          });
     if (!lock) {
       await this.store.updateWorkspaceStatus(workspace.id, "failed");
       throw new Error(`Execution branch is already locked: ${branchName}`);

@@ -100,6 +100,7 @@ export const executionWorkItemSchema = z
     goalId: identifierSchema,
     projectId: identifierSchema,
     repositoryId: identifierSchema,
+    workflowRunId: identifierSchema.nullable().default(null),
     title: z.string().trim().min(1).max(512),
     description: z.string().max(16_384).default(""),
     status: workItemStatusSchema.default("proposed"),
@@ -150,6 +151,8 @@ export const workflowRunSchema = z
     organizationId: identifierSchema,
     goalId: identifierSchema,
     definitionRevisionId: identifierSchema,
+    sourceType: z.string().trim().min(1).max(64).nullable().default(null),
+    sourceId: identifierSchema.nullable().default(null),
     status: workflowRunStatusSchema.default("queued"),
     idempotencyKey: idempotencyKeySchema,
     startedAt: isoTimestampSchema.nullable().default(null),
@@ -158,6 +161,26 @@ export const workflowRunSchema = z
   })
   .strict();
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
+
+export const loopOutputKindSchema = z.enum(["report", "escalation", "noop"]);
+export type LoopOutputKind = z.infer<typeof loopOutputKindSchema>;
+
+export const loopOutputSchema = z
+  .object({
+    id: identifierSchema,
+    organizationId: identifierSchema,
+    loopId: identifierSchema,
+    workflowRunId: identifierSchema,
+    kind: loopOutputKindSchema,
+    sourceRef: z.string().trim().min(1).max(512),
+    title: z.string().trim().min(1).max(512),
+    body: z.string().trim().min(1).max(65_536),
+    severity: z.enum(["info", "warn", "critical"]).nullable().default(null),
+    workItemId: identifierSchema.nullable().default(null),
+    createdAt: isoTimestampSchema,
+  })
+  .strict();
+export type LoopOutput = z.infer<typeof loopOutputSchema>;
 
 export const attemptStatusSchema = z.enum([
   "queued",

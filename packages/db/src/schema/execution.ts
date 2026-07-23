@@ -84,6 +84,9 @@ export const executionWorkItems = sqliteTable(
     repositoryId: text("repository_id")
       .notNull()
       .references(() => repositories.id),
+    // Nullable lineage link. It is intentionally not a SQL FK because the
+    // work-item table is declared before workflow_runs in this schema module.
+    workflowRunId: text("workflow_run_id"),
     title: text("title").notNull(),
     description: text("description").notNull().default(""),
     status: text("status").notNull().default("proposed"),
@@ -147,6 +150,8 @@ export const workflowRuns = sqliteTable(
     definitionRevisionId: text("definition_revision_id")
       .notNull()
       .references(() => definitionRevisions.id),
+    sourceType: text("source_type"),
+    sourceId: text("source_id"),
     status: text("status").notNull().default("queued"),
     idempotencyKey: text("idempotency_key").notNull(),
     startedAt: text("started_at"),
@@ -155,6 +160,35 @@ export const workflowRuns = sqliteTable(
   },
   (t) => ({
     orgIdemUniq: uniqueIndex("workflow_runs_org_idem_uniq").on(t.organizationId, t.idempotencyKey),
+  }),
+);
+
+export const loopOutputs = sqliteTable(
+  "loop_outputs",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    loopId: text("loop_id").notNull(),
+    workflowRunId: text("workflow_run_id")
+      .notNull()
+      .references(() => workflowRuns.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    sourceRef: text("source_ref").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    severity: text("severity"),
+    workItemId: text("work_item_id").references(() => executionWorkItems.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({
+    runSourceUniq: uniqueIndex("loop_outputs_run_source_uniq").on(
+      t.workflowRunId,
+      t.kind,
+      t.sourceRef,
+    ),
+    loopTimeIdx: index("loop_outputs_loop_time_idx").on(t.organizationId, t.loopId, t.createdAt),
   }),
 );
 
@@ -402,6 +436,7 @@ export type DefinitionRevisionRow = typeof definitionRevisions.$inferSelect;
 export type ExecutionWorkItemRow = typeof executionWorkItems.$inferSelect;
 export type ExecutionWorkItemDependencyRow = typeof executionWorkItemDependencies.$inferSelect;
 export type WorkflowRunRow = typeof workflowRuns.$inferSelect;
+export type LoopOutputRow = typeof loopOutputs.$inferSelect;
 export type AgentAttemptRow = typeof agentAttempts.$inferSelect;
 export type ExecutionWorkspaceRow = typeof executionWorkspaces.$inferSelect;
 export type ResourceLockRow = typeof resourceLocks.$inferSelect;

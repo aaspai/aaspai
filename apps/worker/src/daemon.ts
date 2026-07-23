@@ -3,8 +3,8 @@
  *
  * Responsibilities (minimal):
  *   1. Watch the file system (agents/, knowledge/, loops/) → fresh config cache
- *   2. Tick the scheduler every `tickIntervalMs` → enqueue wakeups for due loops
- *   3. Poll queued wakeups → run the session via `@aaspai/sessions`
+ *   2. Tick the scheduler every `tickIntervalMs` → create durable loop runs
+ *   3. Poll queued wakeups → convert them into durable loop runs
  *   4. Loop forever (until SIGINT/SIGTERM)
  *
  * What's NOT here (deferred):
@@ -14,16 +14,28 @@
  *   - Webhooks
  *   - Job queue (Phase 4 — for now we use the wakeups table directly)
  */
-import { randomUUID } from "node:crypto";
-import type { LoopPattern } from "@aaspai/contracts/phase2";
-import { closeDefaultDb, getDefaultDb, wakeups as wakeupsTable } from "@aaspai/db";
-import { ExecutionStore } from "@aaspai/execution";
+import {
+  closeDefaultDb,
+  definitionRevisions,
+  getDefaultDb,
+  projects,
+  repositories,
+  wakeups as wakeupsTable,
+} from "@aaspai/db";
+import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
 import {
   FileAgentConfigSource,
   FileKnowledgeSource,
   FileLoopConfigSource,
 } from "@aaspai/file-loader";
-import { KillSwitch, PatternRegistry, Scheduler, STARTER_PATTERNS } from "@aaspai/loops";
+import {
+  KillSwitch,
+  type LoopExecutionLineage,
+  LoopRunner,
+  PatternRegistry,
+  Scheduler,
+  STARTER_PATTERNS,
+} from "@aaspai/loops";
 import { getLogger } from "@aaspai/observability";
 import { Sessions } from "@aaspai/sessions";
 import { and, eq } from "drizzle-orm";
@@ -51,11 +63,14 @@ export class WorkerDaemon {
   private readonly scheduler: Scheduler;
   private readonly killSwitch: KillSwitch;
   private readonly patternRegistry: PatternRegistry;
+  private readonly executionStore: ExecutionStore;
+  private readonly executionScheduler: DependencyScheduler;
+  private loopLineage: LoopExecutionLineage | null = null;
 
   private tickHandle: NodeJS.Timeout | null = null;
   private pollHandle: NodeJS.Timeout | null = null;
   private pollInFlight = false;
-  private inFlightSession: Promise<void> | null = null;
+  private inFlightWork: Promise<void> | null = null;
   private shuttingDown = false;
   private running = false;
   private startedAt: string | null = null;
@@ -74,6 +89,12 @@ export class WorkerDaemon {
       agentSource: this.agentSource,
       knowledgeSource: this.knowledgeSource,
       skillRegistry: undefined as never, // foundation: skills are no-op
+    });
+    this.executionStore = new ExecutionStore(getDefaultDb().db);
+    this.executionScheduler = new DependencyScheduler(this.executionStore, {
+      maxOrganizationConcurrency: 1,
+      maxProjectConcurrency: 1,
+      retryDelayMs: 1_000,
     });
 
     this.killSwitch = new KillSwitch();
@@ -99,13 +120,13 @@ export class WorkerDaemon {
     await this.agentSource.start();
     await this.knowledgeSource.start();
     await this.loopSource.start();
+    this.loopLineage = await this.ensureLoopLineage();
     log.info("file sources ready", {
       agents: (await this.agentSource.list()).length,
       knowledge: (await this.knowledgeSource.list()).length,
       loops: (await this.loopSource.list()).length,
     });
 
-    this.scheduler.start();
     this.tickHandle = setInterval(() => {
       this.tickScheduler().catch((err) => log.error("scheduler tick failed", { err: String(err) }));
     }, this.tickIntervalMs);
@@ -127,8 +148,7 @@ export class WorkerDaemon {
     const handle = (signal: NodeJS.Signals) => {
       log.info("received shutdown signal", { signal });
       // stop() is async but we can't await a signal handler.
-      // Mark shuttingDown immediately so pollWakeups/claimAndRun
-      // bail; then call stop() which awaits the in-flight session.
+      // Mark shuttingDown immediately so pollWakeups/claimAndRun bail.
       this.shuttingDown = true;
       void this.stop()
         .then(() => process.exit(0))
@@ -149,12 +169,12 @@ export class WorkerDaemon {
     if (this.tickHandle) clearInterval(this.tickHandle);
     if (this.pollHandle) clearInterval(this.pollHandle);
     this.scheduler.stop();
-    if (this.inFlightSession) {
-      log.info("awaiting in-flight session before shutdown");
+    if (this.inFlightWork) {
+      log.info("awaiting in-flight work before shutdown");
       try {
-        await this.inFlightSession;
+        await this.inFlightWork;
       } catch (err) {
-        log.warn("in-flight session ended with error during shutdown", { err: String(err) });
+        log.warn("in-flight work ended with error during shutdown", { err: String(err) });
       }
     }
     await this.agentSource.stop();
@@ -193,23 +213,38 @@ export class WorkerDaemon {
   }
 
   private async tickScheduler(): Promise<void> {
-    const result = await this.scheduler.tick(new Date());
-    if (result.fired > 0 || result.skipped > 0) {
-      log.info("scheduler tick", { ...result });
+    if (!this.loopLineage) return;
+    const now = new Date();
+    const due = this.scheduler.due(now);
+    for (const resolved of due) {
+      const runner = new LoopRunner({
+        organizationId: this.organizationId,
+        execution: { store: this.executionStore, lineage: this.loopLineage },
+        killSwitch: this.killSwitch,
+      });
+      const result = await runner.run(resolved, {
+        triggerKey: `scheduled:${now.toISOString().slice(0, 16)}`,
+        now,
+      });
+      await this.executeWorkItems(result.runId, resolved.pattern.agent);
+      log.info("durable loop tick", {
+        loopId: resolved.pattern.id,
+        runId: result.runId,
+        workItems: result.workItems.length,
+        outputs: result.outputs.length,
+        stopped: result.stopped,
+      });
     }
   }
 
   /**
-   * Pick up queued wakeups and run them. Each wakeup spawns a session
-   * via `@aaspai/sessions`, which records the result to the DB and
-   * to `session_events`. The in-flight guard prevents overlap: a
-   * 5s poll that fires while a previous session is still running
-   * is dropped (not queued, not delayed) so we never have more
-   * than one opencode.exe process at a time per worker.
+   * Pick up queued wakeups and convert them into durable loop runs. The
+   * in-flight guard prevents overlap in this worker; WorkItems are then
+   * bounded by the execution scheduler and governance checks.
    */
   private async pollWakeups(): Promise<void> {
     if (this.shuttingDown) return;
-    if (this.pollInFlight || this.inFlightSession) {
+    if (this.pollInFlight || this.inFlightWork) {
       log.debug("poll skipped: previous tick or session still in flight");
       return;
     }
@@ -224,8 +259,8 @@ export class WorkerDaemon {
 
       for (const wakeup of queued) {
         if (this.shuttingDown) break;
-        if (this.inFlightSession) break;
-        this.inFlightSession = this.claimAndRun(wakeup.id)
+        if (this.inFlightWork) break;
+        this.inFlightWork = this.claimAndRun(wakeup.id)
           .catch((err) =>
             log.error("wakeup unhandled error", {
               wakeupId: wakeup.id,
@@ -233,7 +268,7 @@ export class WorkerDaemon {
             }),
           )
           .finally(() => {
-            this.inFlightSession = null;
+            this.inFlightWork = null;
           });
       }
     } finally {
@@ -292,7 +327,6 @@ export class WorkerDaemon {
 
   private async executeWakeup(wakeupId: string): Promise<void> {
     const handle = getDefaultDb();
-    const sessionId = `sess_${randomUUID()}`;
 
     const wakeupRow = (
       await handle.db.select().from(wakeupsTable).where(eq(wakeupsTable.id, wakeupId)).limit(1)
@@ -303,62 +337,137 @@ export class WorkerDaemon {
       return;
     }
 
-    const payload = safeJsonParse(wakeupRow.payloadJson) ?? {};
-    const agentId = wakeupRow.agentId ?? (payload as { agentId?: string }).agentId;
-    if (!agentId) {
-      log.warn("wakeup has no agentId", { wakeupId });
-      await this.markFailed(wakeupId, "no agentId");
+    const resolved = this.patternRegistry.get(wakeupRow.loopId);
+    if (!resolved || !this.loopLineage) {
+      await this.markFailed(wakeupId, "loop is not registered or execution lineage is unavailable");
       return;
     }
-
-    const prompt =
-      (payload as { prompt?: string }).prompt ??
-      `Worker-triggered wakeup for ${wakeupRow.loopId} (${wakeupRow.reason ?? "no reason"})`;
-
-    // Resolve the agent's adapter from its config. Falls back to the
-    // loop's configured adapter, then to dry_run_local as a last resort.
-    let adapterType = "dry_run_local";
-    try {
-      const agent = await this.agentSource.get(agentId);
-      if (agent.adapter) adapterType = agent.adapter;
-    } catch {
-      // Agent config not found; fall back to the loop's adapter
-      try {
-        const loop = await this.loopSource.get(wakeupRow.loopId);
-        const loopAdapter = (loop as unknown as { agentAdapter?: string } | null)?.agentAdapter;
-        if (loopAdapter) adapterType = loopAdapter;
-      } catch {
-        /* keep dry_run */
-      }
-    }
-
-    log.info("running wakeup", { wakeupId, agentId, adapter: adapterType });
-
-    const result = await this.sessions.execute({
+    const runner = new LoopRunner({
       organizationId: this.organizationId,
-      agentId,
-      adapter: adapterType,
-      runtime: { kind: "local" },
-      prompt,
-      config: {},
-      skills: [],
-      budget: {},
-      idempotencyKey: sessionId,
-      wakeupId,
-      traceId: wakeupId,
+      execution: { store: this.executionStore, lineage: this.loopLineage },
+      killSwitch: this.killSwitch,
     });
+    const run = await runner.run(resolved, { triggerKey: `wakeup:${wakeupId}` });
+    await this.executeWorkItems(run.runId, resolved.pattern.agent);
 
     await handle.db
       .update(wakeupsTable)
       .set({
         status: "completed",
         finishedAt: new Date().toISOString(),
-        sessionId: result.sessionId,
         error: undefined,
       } as never)
       .where(eq(wakeupsTable.id, wakeupId));
 
-    log.info("wakeup complete", { wakeupId, sessionId, status: result.status });
+    log.info("wakeup converted to durable loop run", {
+      wakeupId,
+      runId: run.runId,
+      workItems: run.workItems.length,
+      outputs: run.outputs.length,
+    });
+  }
+
+  private async executeWorkItems(workflowRunId: string, agentId: string): Promise<void> {
+    const agent = await this.agentSource.get(agentId).catch(() => null);
+    const adapter = agent?.adapter ?? "dry_run_local";
+    const run = await this.executionStore.getWorkflowRun(workflowRunId);
+    if (!run) throw new Error(`Workflow run ${workflowRunId} not found`);
+    await this.executionScheduler.run(
+      {
+        organizationId: this.organizationId,
+        goalId: run.goalId,
+        workflowRunId,
+        agentId,
+        harness: adapter,
+        maxDispatch: 1,
+      },
+      async ({ workItem, attempt }) => {
+        const metadata = workItem.metadata;
+        const prompt =
+          typeof metadata === "object" && metadata !== null && "decision" in metadata
+            ? String((metadata as { decision?: unknown }).decision)
+            : workItem.description;
+        const result = await this.sessions.execute({
+          organizationId: this.organizationId,
+          agentId,
+          adapter,
+          runtime: { kind: "local" },
+          prompt,
+          config: {},
+          skills: [],
+          budget: {},
+          idempotencyKey: attempt.id,
+          traceId: workflowRunId,
+        });
+        return result.status === "succeeded" ? "succeeded" : "failed";
+      },
+      { maxTicks: 100 },
+    );
+  }
+
+  private async ensureLoopLineage(): Promise<LoopExecutionLineage> {
+    const handle = getDefaultDb();
+    const suffix = this.organizationId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const goalId = `goal:loops:${suffix}`;
+    const projectId = `project:loops:${suffix}`;
+    const repositoryId = `repo:loops:${suffix}`;
+    const definitionRevisionId = `revision:loops:${suffix}`;
+    if (!(await this.executionStore.getGoal(goalId))) {
+      await this.executionStore.createGoal({
+        id: goalId,
+        organizationId: this.organizationId,
+        title: "Company loop execution",
+        description: "Durable work generated by company loops.",
+        status: "active",
+      });
+    }
+    const project = await handle.db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+    if (!project[0]) {
+      await this.executionStore.createProject({
+        id: projectId,
+        organizationId: this.organizationId,
+        goalId,
+        title: "Loop work",
+        description: "Execution project for bounded loop actions.",
+      });
+    }
+    const repository = await handle.db
+      .select()
+      .from(repositories)
+      .where(eq(repositories.id, repositoryId))
+      .limit(1);
+    if (!repository[0]) {
+      await this.executionStore.createRepository({
+        id: repositoryId,
+        organizationId: this.organizationId,
+        projectId,
+        purpose: "blueprint",
+        provider: "local",
+        localPath: process.env.AASPAI_DEFINITIONS_DIR ?? ".",
+        defaultBranch: "main",
+      });
+    }
+    const revision = await handle.db
+      .select()
+      .from(definitionRevisions)
+      .where(eq(definitionRevisions.id, definitionRevisionId))
+      .limit(1);
+    if (!revision[0]) {
+      await this.executionStore.createDefinitionRevision({
+        id: definitionRevisionId,
+        organizationId: this.organizationId,
+        repositoryId,
+        commitSha: "0000000",
+        sourcePath: process.env.AASPAI_DEFINITIONS_DIR ?? ".",
+        dirty: true,
+        contentHash: "worker-loop-definition",
+      });
+    }
+    return { goalId, projectId, repositoryId, definitionRevisionId };
   }
 
   private async markFailed(wakeupId: string, reason: string): Promise<void> {
@@ -394,14 +503,5 @@ export class WorkerDaemon {
     if (recovered > 0) {
       log.warn("recovered stale wakeup claims on startup", { recovered, staleMs });
     }
-  }
-}
-
-function safeJsonParse(s: string | null): unknown {
-  if (!s) return null;
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
   }
 }

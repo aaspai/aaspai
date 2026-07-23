@@ -1,40 +1,43 @@
 /**
- * LoopRunner — executes a single `LoopPattern` end-to-end.
+ * Durable loop orchestration.
  *
- * `discover` → for each work item → `decide` → if `act`, create a wakeup
- * and (optionally) run the session inline → if `report`, append to the
- * loop's run log → if `escalate`, write a kill-switch / audit event.
- *
- * Foundation slice: discovers, decides, runs the session via
- * `@aaspai/sessions`, and writes a run record. Phase 3b moves the
- * wakeup creation to the scheduler (so the loop and scheduler are
- * not on the same process tick).
+ * A loop is a control-plane decision maker. It may discover and decide, but
+ * it never invokes a harness. Action decisions become governed WorkItems and
+ * are executed later by the dependency scheduler.
  */
-import { randomUUID } from "node:crypto";
-import type {
-  DecideResult,
-  LoopConfigSource,
-  LoopPattern,
-  WorkItem,
-} from "@aaspai/contracts/phase2";
-import {
-  type AuditEventInsert,
-  auditEvents,
-  getDefaultDb,
-  type WakeupInsert,
-  wakeups,
-} from "@aaspai/db";
+
+import type { ExecutionWorkItem, LoopOutput } from "@aaspai/contracts/execution";
+import type { ExecutionGovernanceInput } from "@aaspai/contracts/governance";
+import type { LoopConfigSource, LoopPattern, WorkItem } from "@aaspai/contracts/phase2";
+import type { ExecutionStore } from "@aaspai/execution";
 import { getLogger } from "@aaspai/observability";
-import type { Sessions } from "@aaspai/sessions";
-import { eq } from "drizzle-orm";
-import type { ResolvedLoopPattern } from "./pattern.js";
+import type { KillSwitch } from "./kill-switch.js";
+import type { DecideResult, ResolvedLoopPattern } from "./pattern.js";
 
 const log = getLogger("loops.runner");
 
+export interface LoopExecutionLineage {
+  goalId: string;
+  projectId: string;
+  repositoryId: string;
+  definitionRevisionId: string;
+}
+
 export interface LoopRunnerOptions {
   organizationId: string;
-  loopSource: LoopConfigSource;
-  sessions: Sessions;
+  /** Kept as a compatibility seam for file-backed loop sources. */
+  loopSource?: LoopConfigSource;
+  execution: {
+    store: ExecutionStore;
+    lineage: LoopExecutionLineage;
+  };
+  killSwitch?: KillSwitch;
+}
+
+export interface RunOptions {
+  /** Stable trigger identity. Reusing it coalesces duplicate active triggers. */
+  triggerKey?: string;
+  now?: Date;
 }
 
 export interface RunOutcome {
@@ -45,186 +48,262 @@ export interface RunOutcome {
   escalated: number;
   noops: number;
   durationMs: number;
+  stopped: boolean;
   items: readonly WorkItem[];
+  workItems: readonly ExecutionWorkItem[];
+  outputs: readonly LoopOutput[];
 }
 
 export class LoopRunner {
   constructor(private readonly opts: LoopRunnerOptions) {}
 
-  /**
-   * Run a single loop once. Loads the pattern from the source, runs
-   * discover + decide, then executes any `act` decisions inline.
-   */
-  async run(resolved: ResolvedLoopPattern): Promise<RunOutcome> {
+  async run(resolved: ResolvedLoopPattern, options: RunOptions = {}): Promise<RunOutcome> {
     const startedAt = Date.now();
-    const runId = `run_${randomUUID()}`;
-    log.info("loop run start", { loop: resolved.pattern.id, runId });
-
-    const state = await this.snapshotState(resolved.pattern);
-    const items = await resolved.discover(state as never, {
-      loopId: resolved.pattern.id,
-      now: new Date(),
+    const now = options.now ?? new Date();
+    const triggerKey = options.triggerKey ?? now.toISOString();
+    const { store, lineage } = this.opts.execution;
+    const idempotencyKey = `loop:${resolved.pattern.id}:${triggerKey}`;
+    const existing = await store.getWorkflowRunByIdempotency(
+      this.opts.organizationId,
+      idempotencyKey,
+    );
+    if (existing) return this.replayExisting(resolved.pattern, existing, startedAt);
+    const run = await store.createWorkflowRun({
+      organizationId: this.opts.organizationId,
+      goalId: lineage.goalId,
+      definitionRevisionId: lineage.definitionRevisionId,
+      sourceType: "loop",
+      sourceId: resolved.pattern.id,
+      idempotencyKey,
     });
 
+    const stopped =
+      resolved.pattern.status !== "enabled" ||
+      (resolved.pattern.pauseReason !== null && resolved.pattern.pauseReason !== undefined) ||
+      this.opts.killSwitch?.isPaused(resolved.pattern.id) === true;
+    if (stopped) {
+      await store.updateWorkflowRunStatus(run.id, "cancelled");
+      return emptyOutcome(resolved.pattern, run.id, startedAt, true);
+    }
+
+    log.info("loop run start", { loop: resolved.pattern.id, runId: run.id });
+    const state = { paused: false, workflowRunId: run.id };
+    const items = await resolved.discover(state, { loopId: resolved.pattern.id, now });
     let fired = 0;
     let reported = 0;
     let escalated = 0;
     let noops = 0;
-    const decisions: Array<{ item: WorkItem; decide: DecideResult }> = [];
+    const workItems: ExecutionWorkItem[] = [];
+    const outputs: LoopOutput[] = [];
 
     for (const item of items) {
-      const decide = await resolved.decide(item, state as never, {
-        loopId: resolved.pattern.id,
-        now: new Date(),
-      });
-      decisions.push({ item, decide });
-      if (decide.kind === "act") fired++;
-      else if (decide.kind === "report") reported++;
-      else if (decide.kind === "escalate") escalated++;
-      else noops++;
-    }
-
-    // Execute any "act" decisions inline (synchronous, foundation).
-    // Phase 3b: enqueue wakeups instead and let the scheduler run them.
-    for (const { item, decide } of decisions) {
-      if (decide.kind !== "act") continue;
-      const wakeup = await this.enqueueWakeup(resolved.pattern, item, decide.reason);
-      if (wakeup) {
-        try {
-          await this.opts.sessions.execute({
-            organizationId: this.opts.organizationId,
-            agentId: resolved.pattern.agent,
-            adapter: "dry_run_local",
-            runtime: { kind: "local" },
-            prompt: this.buildActPrompt(resolved.pattern, item, decide),
-            config: {},
-            skills: [],
-            budget: {},
-            idempotencyKey: wakeup.id,
-            wakeupId: wakeup.id,
-            traceId: runId,
-          });
-        } catch (err) {
-          log.error("act execution failed", { loop: resolved.pattern.id, item, err: String(err) });
+      const decision = await resolved.decide(item, state, { loopId: resolved.pattern.id, now });
+      if (decision.kind === "act") {
+        fired++;
+        if (resolved.pattern.autonomyLevel === "L0" || resolved.pattern.autonomyLevel === "L1") {
+          reported++;
+          outputs.push(
+            await store.createLoopOutput({
+              organizationId: this.opts.organizationId,
+              loopId: resolved.pattern.id,
+              workflowRunId: run.id,
+              kind: "report",
+              sourceRef: sourceRef(item),
+              title: `Report-only action: ${item.title}`,
+              body: decision.reason,
+            }),
+          );
+          continue;
         }
+        const createdWorkItem = await store.createWorkItem({
+          organizationId: this.opts.organizationId,
+          goalId: lineage.goalId,
+          projectId: lineage.projectId,
+          repositoryId: lineage.repositoryId,
+          workflowRunId: run.id,
+          definitionRevisionId: lineage.definitionRevisionId,
+          title: item.title,
+          description: item.description ?? decision.reason,
+          branchName: stringValue(item.data?.branchName),
+          sourceCommitSha: validSha(item.data?.sourceCommitSha),
+          priority: numberValue(item.data?.priority, 0),
+          deadlineAt: stringValue(item.data?.deadlineAt),
+          maxAttempts: boundedAttempts(item.data?.maxAttempts),
+          idempotencyKey: `loop:${resolved.pattern.id}:${triggerKey}:${sourceRef(item)}`,
+          metadata: {
+            loopId: resolved.pattern.id,
+            workflowRunId: run.id,
+            sourceRef: item.ref,
+            decision: decision.reason,
+            payload: item.data ?? {},
+            timeoutMs: numberValue(item.data?.timeoutMs, 0) || undefined,
+          },
+          governance: governanceFor(resolved.pattern),
+        });
+        const workItem = await store.getWorkItem(createdWorkItem.id);
+        if (!workItem) throw new Error(`Loop WorkItem ${createdWorkItem.id} disappeared`);
+        workItems.push(workItem);
+        continue;
+      }
+
+      if (decision.kind === "report") {
+        reported++;
+        outputs.push(
+          await store.createLoopOutput({
+            organizationId: this.opts.organizationId,
+            loopId: resolved.pattern.id,
+            workflowRunId: run.id,
+            kind: "report",
+            sourceRef: sourceRef(item),
+            title: decision.payload.title,
+            body: decision.payload.body,
+          }),
+        );
+      } else if (decision.kind === "escalate") {
+        escalated++;
+        outputs.push(
+          await store.createLoopOutput({
+            organizationId: this.opts.organizationId,
+            loopId: resolved.pattern.id,
+            workflowRunId: run.id,
+            kind: "escalation",
+            sourceRef: sourceRef(item),
+            title: `Escalation: ${item.title}`,
+            body: decision.reason,
+            severity: decision.severity,
+          }),
+        );
+      } else {
+        noops++;
       }
     }
 
-    // Audit event for the run
-    await this.recordAudit({
-      action: "loop.run",
-      targetType: "loop",
-      targetId: resolved.pattern.id,
-      metadata: {
-        runId,
-        items: items.length,
-        fired,
-        reported,
-        escalated,
-        noops,
-        durationMs: Date.now() - startedAt,
-      },
-    });
-
+    if (workItems.length === 0) await store.updateWorkflowRunStatus(run.id, "succeeded");
     const outcome: RunOutcome = {
       loopId: resolved.pattern.id,
-      runId,
+      runId: run.id,
       fired,
       reported,
       escalated,
       noops,
       durationMs: Date.now() - startedAt,
+      stopped: false,
       items,
+      workItems,
+      outputs,
     };
     log.info("loop run complete", { ...outcome, items: items.length });
     return outcome;
   }
 
-  /**
-   * The "STATE.md view" — what the discover function sees. For
-   * foundation, this is a small read of recent sessions + the
-   * loop's status. Phase 4 wires the real StateStore.
-   */
-  private async snapshotState(_loop: LoopPattern): Promise<unknown> {
-    return { paused: _loop.pauseReason !== null && _loop.pauseReason !== undefined };
-  }
-
-  private async enqueueWakeup(
-    loop: LoopPattern,
-    item: WorkItem,
-    reason: string,
-  ): Promise<WakeupInsert | null> {
-    const wakeup: WakeupInsert = {
-      id: `wake_${randomUUID()}`,
-      organizationId: this.opts.organizationId,
-      loopId: loop.id,
-      source: "manual",
-      triggerDetail: loop.id,
-      reason: `${reason}: ${item.title}`,
-      agentId: loop.agent,
-      payloadJson: JSON.stringify({ item, loopId: loop.id }),
-      status: "queued",
-      idempotencyKey: `loop:${loop.id}:${item.ref.id}`,
-      requestedAt: new Date().toISOString(),
+  private async replayExisting(
+    pattern: LoopPattern,
+    run: Awaited<ReturnType<ExecutionStore["getWorkflowRun"]>> extends infer T
+      ? Exclude<T, null>
+      : never,
+    startedAt: number,
+  ): Promise<RunOutcome> {
+    const workItems = (
+      await this.opts.execution.store.listWorkItems(this.opts.organizationId)
+    ).filter((item) => item.workflowRunId === run.id);
+    const outputs = (
+      await this.opts.execution.store.listLoopOutputs(this.opts.organizationId, pattern.id)
+    ).filter((output) => output.workflowRunId === run.id);
+    return {
+      loopId: pattern.id,
+      runId: run.id,
+      fired: workItems.length,
+      reported: outputs.filter((output) => output.kind === "report").length,
+      escalated: outputs.filter((output) => output.kind === "escalation").length,
+      noops: 0,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      stopped: run.status === "cancelled",
+      items: [],
+      workItems,
+      outputs,
     };
-    try {
-      const db = getDefaultDb();
-      await db.db.insert(wakeups).values(wakeup as never);
-      return wakeup;
-    } catch (err) {
-      log.warn("wakeup enqueue failed", { err: String(err) });
-      return null;
-    }
-  }
-
-  private buildActPrompt(loop: LoopPattern, item: WorkItem, decide: { reason: string }): string {
-    return [
-      `Loop: ${loop.id} (${loop.title})`,
-      `Action: ${decide.reason}`,
-      `Item: ${item.title}`,
-      `Reference: ${item.ref.kind}/${item.ref.id}`,
-      "",
-      "Decide whether to delegate, defer, or escalate. Respond tersely.",
-    ].join("\n");
-  }
-
-  /**
-   * Run a single pattern inline. The discover/decide run in-process
-   * (no DB roundtrip); any `act` decisions execute the session in
-   * the same call. The result is a structured `RunOutcome` for the
-   * audit log + STATE.md.
-   */
-  /** Make `_loop` (the unused param warning suppressor) cooperate with TS. */
-  private readonly __unused: (loop: LoopPattern) => void = (l) => void l;
-
-  private async recordAudit(input: {
-    action: string;
-    targetType: string;
-    targetId: string;
-    metadata: JsonObjectSafe;
-  }): Promise<void> {
-    const now = new Date().toISOString();
-    const audit: AuditEventInsert = {
-      id: `evt_${randomUUID()}`,
-      organizationId: this.opts.organizationId,
-      actorId: "system:loop-runner",
-      action: input.action,
-      targetType: input.targetType,
-      targetId: input.targetId,
-      occurredAt: now,
-      recordedAt: now,
-      metadataJson: JSON.stringify(input.metadata),
-    };
-    try {
-      const db = getDefaultDb();
-      await db.db.insert(auditEvents).values(audit as never);
-    } catch (err) {
-      log.warn("audit insert failed", { err: String(err) });
-    }
   }
 }
 
-// We avoid pulling `JsonObject` here to keep this module's surface tight.
-type JsonObjectSafe = Record<string, unknown>;
+function emptyOutcome(
+  pattern: LoopPattern,
+  runId: string,
+  startedAt: number,
+  stopped: boolean,
+): RunOutcome {
+  return {
+    loopId: pattern.id,
+    runId,
+    fired: 0,
+    reported: 0,
+    escalated: 0,
+    noops: 0,
+    durationMs: Math.max(0, Date.now() - startedAt),
+    stopped,
+    items: [],
+    workItems: [],
+    outputs: [],
+  };
+}
 
-export { eq };
+function sourceRef(item: WorkItem): string {
+  return `${item.ref.kind}:${item.ref.id}`;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function validSha(value: unknown): string | null {
+  return typeof value === "string" && /^[0-9a-f]{7,64}$/i.test(value) ? value : null;
+}
+
+function boundedAttempts(value: unknown): number {
+  return Math.min(5, Math.max(1, Math.floor(numberValue(value, 1))));
+}
+
+function governanceFor(loop: LoopPattern): ExecutionGovernanceInput {
+  const gate = parseObject(loop.gateJson);
+  const budget = parseObject(loop.budgetJson);
+  const perRun = objectValue(budget.perRun);
+  const limits = [];
+  const runs = numberValue(perRun.runs, 0);
+  const tokens = numberValue(perRun.tokens, 0);
+  const costUsd = numberValue(perRun.costUsd, 0);
+  if (runs || tokens || costUsd) limits.push({ scope: "attempt" as const, runs, tokens, costUsd });
+  return {
+    risk: loop.autonomyLevel === "L3" ? "high" : loop.autonomyLevel === "L2" ? "medium" : "low",
+    verification: {
+      required: loop.autonomyLevel !== "L0",
+      checkerAgentId: loop.agent,
+      checkerHarness: "dry_run_local",
+      minEvidence: 0,
+    },
+    approval: { required: loop.autonomyLevel === "L2", actorType: "human" },
+    budget: { limits, soft: numberValue(budget.soft, 0.8) },
+    policy: gate as ExecutionGovernanceInput["policy"],
+  };
+}
+
+function parseObject(value: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+export type { DecideResult };

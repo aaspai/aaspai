@@ -7,13 +7,13 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { LoopPattern, Trigger, Wakeup } from "@aaspai/contracts/phase2";
+import type { LoopPattern } from "@aaspai/contracts/phase2";
 import { getDefaultDb } from "@aaspai/db";
 import { type WakeupInsert, wakeups as wakeupsTable } from "@aaspai/db/schema/phase2";
 import { getLogger } from "@aaspai/observability";
 import cronParser from "cron-parser";
 import type { KillSwitch } from "./kill-switch.js";
-import type { PatternRegistry } from "./pattern.js";
+import type { PatternRegistry, ResolvedLoopPattern } from "./pattern.js";
 
 const log = getLogger("loops.scheduler");
 
@@ -61,11 +61,7 @@ export class Scheduler {
     let skipped = 0;
 
     for (const resolved of this.registry.resolved()) {
-      if (this.killSwitch.isPaused(resolved.pattern.id)) {
-        skipped++;
-        continue;
-      }
-      if (!isDue(resolved.pattern, now)) {
+      if (this.killSwitch.isPaused(resolved.pattern.id) || !isDue(resolved.pattern, now)) {
         skipped++;
         continue;
       }
@@ -74,6 +70,15 @@ export class Scheduler {
       else deferred++;
     }
     return { fired, deferred, skipped };
+  }
+
+  /** Returns due patterns for durable orchestration callers. */
+  due(now: Date): readonly ResolvedLoopPattern[] {
+    if (this.killSwitch.isGlobalPaused()) return [];
+    return this.registry
+      .resolved()
+      .filter((resolved) => !this.killSwitch.isPaused(resolved.pattern.id))
+      .filter((resolved) => isDue(resolved.pattern, now));
   }
 
   async fire(loop: LoopPattern, source: "scheduled" | "manual" | "test"): Promise<boolean> {

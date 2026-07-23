@@ -42,6 +42,7 @@ export const DAILY_TRIAGE: ResolvedLoopPattern = {
   pattern: {
     ...STUB_PATTERN,
     id: "loop/daily-triage",
+    autonomyLevel: "L2",
     title: "Daily Triage",
     description: "Morning scan of CI failures, open issues, and recent commits → STATE.md.",
     timestamp: new Date().toISOString(),
@@ -55,6 +56,7 @@ export const PR_BABYSITTER: ResolvedLoopPattern = {
   pattern: {
     ...STUB_PATTERN,
     id: "loop/pr-babysitter",
+    autonomyLevel: "L2",
     title: "PR Babysitter",
     description: "Herd PRs through review/CI/rebase/merge.",
     timestamp: new Date().toISOString(),
@@ -68,6 +70,7 @@ export const CI_SWEEPER: ResolvedLoopPattern = {
   pattern: {
     ...STUB_PATTERN,
     id: "loop/ci-sweeper",
+    autonomyLevel: "L2",
     title: "CI Sweeper",
     description: "React to red CI: classify (flake/regression/infra) → fix.",
     timestamp: new Date().toISOString(),
