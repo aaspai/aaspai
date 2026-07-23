@@ -136,6 +136,7 @@ __metadata:
   dependencies:
     "@aaspai/contracts": "workspace:*"
     "@aaspai/db": "workspace:*"
+    "@aaspai/file-loader": "workspace:*"
     "@aaspai/git": "workspace:*"
     "@aaspai/runtime": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
