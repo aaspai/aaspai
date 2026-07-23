@@ -19,7 +19,8 @@
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
     "@aaspai/db": "workspace:*",
-    "@aaspai/git": "workspace:*"
+    "@aaspai/git": "workspace:*",
+    "@aaspai/runtime": "workspace:*"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.1.1",
