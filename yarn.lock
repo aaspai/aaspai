@@ -149,6 +149,7 @@ __metadata:
   resolution: "@aaspai/file-loader@workspace:packages/file-loader"
   dependencies:
     "@aaspai/contracts": "workspace:*"
+    "@aaspai/git": "workspace:*"
     "@aaspai/observability": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@types/js-yaml": "npm:^4.0.9"
