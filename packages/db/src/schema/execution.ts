@@ -84,6 +84,7 @@ export const executionWorkItems = sqliteTable(
     repositoryId: text("repository_id")
       .notNull()
       .references(() => repositories.id),
+    repositoryIdsJson: text("repository_ids_json").notNull().default("[]"),
     // Nullable lineage link. It is intentionally not a SQL FK because the
     // work-item table is declared before workflow_runs in this schema module.
     workflowRunId: text("workflow_run_id"),

@@ -134,6 +134,7 @@ const SQLITE_STATEMENTS = [
     goal_id TEXT NOT NULL,
     project_id TEXT NOT NULL,
     repository_id TEXT NOT NULL,
+    repository_ids_json TEXT NOT NULL DEFAULT '[]',
     workflow_run_id TEXT,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
@@ -537,6 +538,11 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
   {
     check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'governance_json'",
     sql: "ALTER TABLE execution_work_items ADD COLUMN governance_json TEXT NOT NULL DEFAULT '{}'",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'repository_ids_json'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN repository_ids_json TEXT NOT NULL DEFAULT '[]'",
   },
   {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'harness_session_id'",
