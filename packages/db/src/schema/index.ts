@@ -3,6 +3,7 @@ export * from "./audit-log";
 export * from "./audit-log";
 export * from "./auth";
 export * from "./execution";
+export * from "./memory";
 export * from "./login-attempts";
 export * from "./organizations";
 export * from "./phase2";
