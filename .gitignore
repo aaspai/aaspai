@@ -22,6 +22,7 @@ coverage/
 study/
 workspace/
 test/
+.gstack/
 
 # aaspai runtime (agent state, knowledge, scratch — never committed)
 .aaspai/
