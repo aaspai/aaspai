@@ -92,6 +92,17 @@ describe("ExecutionStore", () => {
     const completed = await store.transitionAttempt(attempt.id, "succeeded");
     expect(completed.status).toBe("succeeded");
     expect(completed.finishedAt).toEqual(expect.any(String));
+
+    const artifact = await store.createArtifact({
+      organizationId,
+      attemptId: attempt.id,
+      kind: "result",
+      path: "workspace/artifacts/result.json",
+      mediaType: "application/json",
+      sizeBytes: 42,
+      sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    });
+    await expect(store.listArtifacts(attempt.id)).resolves.toEqual([artifact]);
   });
 
   it("rejects invalid attempt transitions", async () => {

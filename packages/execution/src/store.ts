@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
   AgentAttempt,
+  Artifact,
   AttemptStatus,
+  ExecutionEvent,
   ExecutionWorkItem,
   ExecutionWorkspace,
   Goal,
@@ -13,14 +15,18 @@ import type {
 import {
   agentAttemptSchema,
   assertValidAttemptTransition,
+  executionEventSchema,
   executionWorkspaceSchema,
 } from "@aaspai/contracts/execution";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
   agentAttempts,
   and,
+  artifacts,
+  asc,
   definitionRevisions,
   eq,
+  executionEvents,
   executionPlans,
   executionWorkItems,
   executionWorkspaces,
@@ -130,6 +136,20 @@ export interface CreatePlanInput {
   prompt: string;
   timeoutMs?: number | null;
   runtimeConfig?: Record<string, unknown>;
+}
+
+export interface AppendEventInput {
+  organizationId: string;
+  attemptId: string;
+  type: string;
+  payload: Record<string, unknown>;
+  seq: number;
+  ts?: string;
+}
+
+export interface CreateArtifactInput extends Omit<Artifact, "id" | "createdAt"> {
+  id?: string;
+  createdAt?: string;
 }
 
 export class ExecutionStore {
@@ -380,6 +400,67 @@ export class ExecutionStore {
     } satisfies typeof executionPlans.$inferInsert;
     await this.db.insert(executionPlans).values(row);
     return row;
+  }
+
+  async appendEvent(input: AppendEventInput): Promise<ExecutionEvent> {
+    const row = {
+      organizationId: input.organizationId,
+      attemptId: input.attemptId,
+      ts: input.ts ?? now(),
+      type: input.type,
+      payloadJson: JSON.stringify(input.payload),
+      seq: input.seq,
+    } satisfies typeof executionEvents.$inferInsert;
+    await this.db.insert(executionEvents).values(row);
+    const rows = await this.db
+      .select()
+      .from(executionEvents)
+      .where(
+        and(eq(executionEvents.attemptId, input.attemptId), eq(executionEvents.seq, input.seq)),
+      )
+      .limit(1);
+    const created = rows[0];
+    if (!created)
+      throw new Error(`Execution event ${input.attemptId}/${input.seq} was not persisted`);
+    const { payloadJson, ...event } = created;
+    return executionEventSchema.parse({ ...event, payload: JSON.parse(payloadJson) });
+  }
+
+  async listEvents(attemptId: string): Promise<ExecutionEvent[]> {
+    const rows = await this.db
+      .select()
+      .from(executionEvents)
+      .where(eq(executionEvents.attemptId, attemptId))
+      .orderBy(asc(executionEvents.seq));
+    return rows.map((row) => {
+      const { payloadJson, ...event } = row;
+      return executionEventSchema.parse({ ...event, payload: JSON.parse(payloadJson) });
+    });
+  }
+
+  async createArtifact(input: CreateArtifactInput): Promise<Artifact> {
+    const row = {
+      id: input.id ?? makeId("artifact"),
+      organizationId: input.organizationId,
+      attemptId: input.attemptId,
+      kind: input.kind,
+      path: input.path,
+      mediaType: input.mediaType,
+      sizeBytes: input.sizeBytes,
+      sha256: input.sha256,
+      createdAt: input.createdAt ?? now(),
+    } satisfies typeof artifacts.$inferInsert;
+    await this.db.insert(artifacts).values(row);
+    return row as Artifact;
+  }
+
+  async listArtifacts(attemptId: string): Promise<Artifact[]> {
+    const rows = await this.db
+      .select()
+      .from(artifacts)
+      .where(eq(artifacts.attemptId, attemptId))
+      .orderBy(asc(artifacts.createdAt));
+    return rows as Artifact[];
   }
 }
 
