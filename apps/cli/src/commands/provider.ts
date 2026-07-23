@@ -37,7 +37,13 @@ export function providerCommand(): Command {
           const installed = !environment.checks.some(
             (check) => check.name.endsWith("_cli") && /not found|enoent/i.test(check.message),
           );
-          return { type, label: info?.label ?? type, installed, ready: environment.ok, environment };
+          return {
+            type,
+            label: info?.label ?? type,
+            installed,
+            ready: environment.ok,
+            environment,
+          };
         }),
       );
       if (options.json) {
