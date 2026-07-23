@@ -10,6 +10,7 @@ import {
   MessagesSquare,
   ScrollText,
   Settings,
+  ShieldCheck,
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
@@ -21,6 +22,7 @@ const nav = [
   { href: "/agents", label: "Agents", icon: ListTree },
   { href: "/sessions", label: "Sessions", icon: ScrollText },
   { href: "/execution", label: "Execution", icon: Workflow },
+  { href: "/governance", label: "Governance", icon: ShieldCheck },
   { href: "/memory", label: "Memory", icon: Brain },
   { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/state", label: "State", icon: Database },

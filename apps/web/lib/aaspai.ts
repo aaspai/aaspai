@@ -17,10 +17,17 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type CompanyHealth, type MemoryRecord, memoryRecordSchema } from "@aaspai/contracts";
+import {
+  type AutonomyChangeRequest,
+  autonomyChangeRequestSchema,
+  type CompanyHealth,
+  type MemoryRecord,
+  memoryRecordSchema,
+} from "@aaspai/contracts";
 import {
   agentAttempts,
   artifacts,
+  autonomyChangeRequests,
   definitionRevisions,
   executionApprovals,
   executionBudgetReservations,
@@ -595,6 +602,26 @@ export async function listExecutionGoalProgress(): Promise<ExecutionGoalProgress
     });
   }
   return result;
+}
+
+export async function listAutonomyChangeRequests(
+  organizationId?: string,
+): Promise<AutonomyChangeRequest[]> {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) return [];
+  const handle = getDefaultDb();
+  runMigrations(handle);
+  const rows = await handle.db
+    .select()
+    .from(autonomyChangeRequests)
+    .orderBy(desc(autonomyChangeRequests.updatedAt));
+  const scopedOrganizationId =
+    organizationId ?? rows.find((row) => row.organizationId)?.organizationId;
+  return rows.flatMap((row) => {
+    if (scopedOrganizationId && row.organizationId !== scopedOrganizationId) return [];
+    const parsed = autonomyChangeRequestSchema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 export async function listExecutionAttempts(limit = 50): Promise<ExecutionAttemptSummary[]> {
