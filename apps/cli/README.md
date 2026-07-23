@@ -22,12 +22,24 @@ After install, the `aaspai` binary is on your PATH.
 mkdir my-project && cd my-project
 aaspai init                 # scaffold agents/, knowledge/, loops/
 aaspai db migrate           # create the state DB
-aaspai agent list           # see the 3 seeded agents
+aaspai agent list           # see the 4 seeded agents, including the CEO
 aaspai session start \
   --agent agent/operator \
   --adapter dry_run_local \
   --prompt "say hello"
 ```
+
+The CEO is the coordination entry point. To run a CEO conversation through
+the installed Codex CLI, opt in explicitly:
+
+```bash
+aaspai chat ceo --adapter codex_local --model gpt-5-codex
+```
+
+The CEO creates goals, delegates work through recorded sessions, and expects
+implementation work to finish with focused validation and a GitHub PR. Keep
+major issues in `docs/issues/` unless the human explicitly asks for a GitHub
+issue. Branch names must be descriptive and must not contain `codex`.
 
 The `dry_run_local` adapter synthesizes a response — no API key
 required, no network call. Switch to a real LLM by setting

@@ -17,7 +17,10 @@ export function initCommand(): Command {
         ["agents/_index.md", SCAFFOLD_TEMPLATES.AGENT_INDEX],
         ["agents/ceo/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_CEO],
         ["agents/ceo/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
-        ["agents/ceo/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
+        [
+          "agents/ceo/tools.yaml",
+          "allow:\n  - Read\n  - ListSkills\n  - ListAgents\n  - AskUserQuestion\n  - Bash\ndeny:\n  - Write\n  - Edit\nrequire_approval_for:\n  - Bash\n",
+        ],
         ["agents/ceo/skills.lock.json", "[]\n"],
         ["agents/ceo/relations.yaml", "reportsTo: null\nmanages: []\npeers: []\n"],
         ["agents/operator/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_OPERATOR],
