@@ -64,9 +64,13 @@ describe("crypto/aes", () => {
     it("throws when ciphertext is modified", () => {
       const envelope = encrypt("hello world", KEY);
       const [iv, ct, tag] = envelope.split(":") as [string, string, string];
-      const tamperedBytes = Buffer.from(ct, "base64");
-      tamperedBytes[0] = (tamperedBytes[0] ?? 0) ^ 0x01;
+      const originalBytes = Buffer.from(ct, "base64");
+      const tamperedBytes = Buffer.from(originalBytes);
+      const lastIndex = tamperedBytes.length - 1;
+      if (lastIndex < 0) throw new Error("Expected non-empty ciphertext");
+      tamperedBytes[lastIndex] = (tamperedBytes[lastIndex] ?? 0) ^ 0xff;
       const tamperedCt = tamperedBytes.toString("base64");
+      expect(tamperedCt).not.toBe(ct);
       const tampered = `${iv}:${tamperedCt}:${tag}`;
       expect(() => decrypt(tampered, KEY)).toThrow();
     });
