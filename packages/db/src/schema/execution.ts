@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const goals = sqliteTable(
@@ -193,7 +194,12 @@ export const resourceLocks = sqliteTable(
     leaseExpiresAt: text("lease_expires_at").notNull(),
     releasedAt: text("released_at"),
   },
-  (t) => ({ resourceIdx: index("resource_locks_resource_idx").on(t.resourceType, t.resourceId) }),
+  (t) => ({
+    resourceIdx: index("resource_locks_resource_idx").on(t.resourceType, t.resourceId),
+    activeResourceUniq: uniqueIndex("resource_locks_active_uniq")
+      .on(t.organizationId, t.resourceType, t.resourceId)
+      .where(sql`${t.releasedAt} IS NULL`),
+  }),
 );
 
 export const executionPlans = sqliteTable(
