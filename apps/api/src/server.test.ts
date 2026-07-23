@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { InMemoryAuthVerifier } from "@aaspai/auth";
 import { authPrincipalSchema } from "@aaspai/contracts";
 import { closeDefaultDb, getDefaultDb, runMigrations } from "@aaspai/db";
+import { ExecutionStore } from "@aaspai/execution";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApiApp } from "./server.js";
 
@@ -139,5 +140,45 @@ describe("execution API authorization", () => {
       }),
     });
     expect(writeAttempt.status).toBe(403);
+  });
+
+  it("returns company-scoped operational health", async () => {
+    const organizationId = "org_health_api";
+    const store = new ExecutionStore(getDefaultDb().db);
+    const goal = await store.createGoal({ organizationId, title: "API health goal" });
+    const project = await store.createProject({
+      organizationId,
+      goalId: goal.id,
+      title: "API health project",
+    });
+    await store.createWorkItem({
+      organizationId,
+      goalId: goal.id,
+      projectId: project.id,
+      repositoryId: "repo_health_api",
+      title: "Blocked API work",
+      status: "blocked",
+      idempotencyKey: "api-health-blocked",
+    });
+    const healthVerifier = new InMemoryAuthVerifier([
+      { token: "read-health", principal: principal(organizationId, ["read"]) },
+    ]);
+
+    const response = await createApiApp({ authVerifier: healthVerifier }).request(
+      "/v1/execution/company/health",
+      { headers: { authorization: "Bearer read-health" } },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        organizationId,
+        status: "at_risk",
+        totalGoals: 1,
+        totalProjects: 1,
+        blockedWork: 1,
+        signals: [expect.objectContaining({ code: "blocked_work" })],
+      },
+    });
   });
 });

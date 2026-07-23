@@ -8,6 +8,7 @@ import {
   FileCheck2,
   GitBranch,
   Goal,
+  HeartPulse,
   Layers3,
   ShieldAlert,
   Timer,
@@ -64,6 +65,32 @@ export default async function CompanyCommandCenterPage() {
           <div className="mt-0.5 truncate max-w-[260px]">{overview.workspace}</div>
         </div>
       </header>
+
+      {overview.health && (
+        <section className="grid gap-3 rounded-lg border bg-card p-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="flex items-center gap-3">
+            <HeartPulse className="h-5 w-5 text-primary" />
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Company health
+              </p>
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-2xl font-semibold tabular-nums">{overview.health.score}</span>
+                <StatusBadge status={overview.health.status} />
+              </div>
+            </div>
+          </div>
+          <MiniStat label="Work completion" value={`${overview.health.completionPercent}%`} />
+          <MiniStat
+            label="Execution reliability"
+            value={`${overview.health.reliabilityPercent}%`}
+          />
+          <MiniStat
+            label="Signals"
+            value={`${overview.health.signals.length} · ${overview.health.pendingApprovals + overview.health.pendingVerifications} governance`}
+          />
+        </section>
+      )}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard

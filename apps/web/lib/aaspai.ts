@@ -17,7 +17,7 @@
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type MemoryRecord, memoryRecordSchema } from "@aaspai/contracts";
+import { type CompanyHealth, type MemoryRecord, memoryRecordSchema } from "@aaspai/contracts";
 import {
   agentAttempts,
   artifacts,
@@ -45,6 +45,7 @@ import {
   wakeups,
   workflowRuns,
 } from "@aaspai/db";
+import { ExecutionStore } from "@aaspai/execution";
 import { FileAgentConfigSource } from "@aaspai/file-loader";
 import type { KnowledgeSnapshot } from "@aaspai/knowledge";
 import { createKnowledgeCurator } from "@aaspai/knowledge";
@@ -833,6 +834,7 @@ export interface CompanyEvidenceSummary {
 export interface CompanyOverview {
   organizationId: string | null;
   workspace: string;
+  health: CompanyHealth | null;
   goals: CompanyGoalSummary[];
   projects: Array<{
     id: string;
@@ -957,6 +959,9 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
   const companyOutputs = outputRows.filter(inCompany);
   const companyGovernance = governanceRows.filter(inCompany);
   const companyBudgets = budgetRows.filter(inCompany);
+  const health = organizationId
+    ? await new ExecutionStore(db).getCompanyHealth(organizationId)
+    : null;
   const projectById = new Map(companyProjects.map((project) => [project.id, project]));
   const repositoryById = new Map(
     companyRepositories.map((repository) => [repository.id, repository]),
@@ -1067,6 +1072,7 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
   return {
     organizationId,
     workspace: workspaceRoot(),
+    health,
     goals: goalProgress,
     projects: companyProjects.map((project) => ({
       id: project.id,
