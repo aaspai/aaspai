@@ -15,6 +15,7 @@
     "@aaspai/contracts": "workspace:*",
     "@aaspai/db": "workspace:*",
     "@aaspai/file-loader": "workspace:*",
+    "@aaspai/knowledge": "workspace:*",
     "@aaspai/sessions": "workspace:*",
     "@radix-ui/react-avatar": "^1.1.0",
     "@radix-ui/react-dialog": "^1.1.0",

@@ -33,6 +33,7 @@ import {
   executionWorkspaces,
   getDefaultDb,
   goals,
+  knowledgeProposals,
   loopOutputs,
   memoryRecords,
   projects,
@@ -40,10 +41,13 @@ import {
   runMigrations,
   sessionEvents,
   sessions,
+  temporalFacts,
   wakeups,
   workflowRuns,
 } from "@aaspai/db";
 import { FileAgentConfigSource } from "@aaspai/file-loader";
+import type { KnowledgeSnapshot } from "@aaspai/knowledge";
+import { createKnowledgeCurator } from "@aaspai/knowledge";
 import { asc, desc, eq } from "drizzle-orm";
 
 /**
@@ -53,12 +57,35 @@ import { asc, desc, eq } from "drizzle-orm";
  *
  * Idempotent — safe to call from any data accessor.
  */
-function ensureWorkspaceEnv(): void {
+export function ensureWorkspaceEnv(): void {
   const root = workspaceRoot();
   process.env.AASPAI_CWD = root;
   if (!process.env.AASPAI_DB) {
     process.env.AASPAI_DB = `sqlite:${join(root, ".aaspai", "state.db")}`;
   }
+}
+
+export async function getKnowledgeSnapshot(): Promise<
+  KnowledgeSnapshot & { organizationId: string | null }
+> {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) {
+    return { organizationId: null, facts: [], proposals: [], changeRequests: [], signals: [] };
+  }
+  const handle = getDefaultDb();
+  runMigrations(handle);
+  const [factRows, proposalRows, goalRows] = await Promise.all([
+    handle.db.select({ organizationId: temporalFacts.organizationId }).from(temporalFacts),
+    handle.db
+      .select({ organizationId: knowledgeProposals.organizationId })
+      .from(knowledgeProposals),
+    handle.db.select({ organizationId: goals.organizationId }).from(goals),
+  ]);
+  const organizationId = firstOrganizationId([factRows, proposalRows, goalRows]);
+  if (!organizationId) {
+    return { organizationId: null, facts: [], proposals: [], changeRequests: [], signals: [] };
+  }
+  return { organizationId, ...(await createKnowledgeCurator(handle.db).snapshot(organizationId)) };
 }
 
 export function workspaceRoot(): string {

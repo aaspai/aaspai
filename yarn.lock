@@ -213,6 +213,7 @@ __metadata:
   resolution: "@aaspai/knowledge@workspace:packages/knowledge"
   dependencies:
     "@aaspai/contracts": "workspace:*"
+    "@aaspai/db": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
     "@aaspai/observability": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
@@ -361,6 +362,7 @@ __metadata:
     "@aaspai/contracts": "workspace:*"
     "@aaspai/db": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
+    "@aaspai/knowledge": "workspace:*"
     "@aaspai/sessions": "workspace:*"
     "@biomejs/biome": "npm:2.5.0"
     "@radix-ui/react-avatar": "npm:^1.1.0"
