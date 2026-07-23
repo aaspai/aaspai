@@ -1,8 +1,19 @@
-import { ExternalLink, FileCheck2, GitPullRequest, ShieldCheck } from "lucide-react";
+import {
+  CircleDollarSign,
+  ExternalLink,
+  FileCheck2,
+  GitPullRequest,
+  ShieldCheck,
+} from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { getCompanyOverview, isAaspaiWorkspace, listAutonomyChangeRequests } from "@/lib/aaspai";
+import {
+  getCompanyOverview,
+  isAaspaiWorkspace,
+  listAutonomyChangeRequests,
+  listAutonomyProposals,
+} from "@/lib/aaspai";
 import { formatRelative } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +31,10 @@ export default async function GovernancePage() {
   }
 
   const overview = await getCompanyOverview();
-  const changeRequests = await listAutonomyChangeRequests(overview.organizationId ?? undefined);
+  const [changeRequests, proposals] = await Promise.all([
+    listAutonomyChangeRequests(overview.organizationId ?? undefined),
+    listAutonomyProposals(overview.organizationId ?? undefined),
+  ]);
   const approvals = overview.approvals.filter((approval) => approval.status === "requested");
   const verificationItems = overview.workItems.filter((item) => item.verificationRequired);
   const failedRequests = changeRequests.filter((request) => request.status === "failed");
@@ -49,6 +63,11 @@ export default async function GovernancePage() {
           icon={GitPullRequest}
           label="Failed publications"
           value={failedRequests.length}
+        />
+        <SummaryCard
+          icon={ShieldCheck}
+          label="Autonomy proposals"
+          value={proposals.filter((proposal) => proposal.status !== "rejected").length}
         />
       </section>
 
@@ -79,9 +98,18 @@ export default async function GovernancePage() {
                   </div>
                   <div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground">
                     <span>Requested {formatRelative(approval.requestedAt)}</span>
-                    <Link className="text-primary hover:underline" href="/execution">
-                      Open execution
-                    </Link>
+                    {approval.attemptId ? (
+                      <Link
+                        className="text-primary hover:underline"
+                        href={`/execution/attempts/${encodeURIComponent(approval.attemptId)}`}
+                      >
+                        Open attempt
+                      </Link>
+                    ) : (
+                      <Link className="text-primary hover:underline" href="/execution">
+                        Open execution
+                      </Link>
+                    )}
                   </div>
                 </div>
               ))
@@ -106,7 +134,16 @@ export default async function GovernancePage() {
                   className="flex items-center justify-between gap-3 rounded-lg border p-3"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{item.title}</p>
+                    {item.attemptId ? (
+                      <Link
+                        className="truncate text-sm font-medium text-primary hover:underline"
+                        href={`/execution/attempts/${encodeURIComponent(item.attemptId)}`}
+                      >
+                        {item.title}
+                      </Link>
+                    ) : (
+                      <p className="truncate text-sm font-medium">{item.title}</p>
+                    )}
                     <p className="mt-1 text-xs text-muted-foreground">
                       {item.status} · {item.evidenceCount} evidence item(s)
                     </p>
@@ -189,6 +226,74 @@ export default async function GovernancePage() {
           )}
         </CardContent>
       </Card>
+
+      <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CircleDollarSign className="h-4 w-4 text-emerald-600" /> Budget posture
+            </CardTitle>
+            <CardDescription>
+              Durable reservations and actual usage for this company.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid grid-cols-2 gap-3">
+            <Metric
+              label="Reserved cost"
+              value={`$${overview.budget.reservedCostUsd.toFixed(4)}`}
+            />
+            <Metric label="Actual cost" value={`$${overview.budget.actualCostUsd.toFixed(4)}`} />
+            <Metric
+              label="Reserved tokens"
+              value={overview.budget.reservedTokens.toLocaleString()}
+            />
+            <Metric label="Actual tokens" value={overview.budget.actualTokens.toLocaleString()} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Autonomy proposals</CardTitle>
+            <CardDescription>
+              Proposed policy changes remain visible until reviewed and published through Git.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {proposals.length === 0 ? (
+              <EmptyState text="No autonomy proposals have been recorded." />
+            ) : (
+              proposals.slice(0, 8).map((proposal) => {
+                const request = changeRequests.find((item) => item.proposalId === proposal.id);
+                return (
+                  <div key={proposal.id} className="rounded-lg border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-medium">
+                        {proposal.targetType} · {proposal.targetId}
+                      </p>
+                      <Badge variant={proposal.status === "rejected" ? "destructive" : "secondary"}>
+                        {proposal.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {proposal.fromLevel} → {proposal.toLevel} · {proposal.rationale}
+                    </p>
+                    {request?.pullRequestUrl && (
+                      <a
+                        className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        href={request.pullRequestUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open definition PR <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </CardContent>
+        </Card>
+      </section>
     </div>
   );
 }
@@ -218,5 +323,14 @@ function SummaryCard({
 function EmptyState({ text }: { text: string }) {
   return (
     <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">{text}</p>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border p-3">
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
+    </div>
   );
 }
