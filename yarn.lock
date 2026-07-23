@@ -9,6 +9,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@aaspai/api@workspace:apps/api"
   dependencies:
+    "@aaspai/auth": "workspace:*"
     "@aaspai/contracts": "workspace:*"
     "@aaspai/db": "workspace:*"
     "@aaspai/execution": "workspace:*"
