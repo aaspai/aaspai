@@ -21,17 +21,25 @@ import {
   agentAttempts,
   artifacts,
   definitionRevisions,
+  executionApprovals,
+  executionBudgetReservations,
   executionEvents,
+  executionGovernanceEvents,
   executionPlans,
+  executionVerifications,
+  executionWorkItemDependencies,
   executionWorkItems,
   executionWorkspaces,
   getDefaultDb,
   goals,
+  loopOutputs,
   projects,
   repositories,
+  runMigrations,
   sessionEvents,
   sessions,
   wakeups,
+  workflowRuns,
 } from "@aaspai/db";
 import { FileAgentConfigSource } from "@aaspai/file-loader";
 import { asc, desc, eq } from "drizzle-orm";
@@ -667,4 +675,430 @@ export async function getExecutionAttemptDetail(
     })),
     artifacts: artifactRows,
   };
+}
+
+export interface CompanyGoalSummary {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  total: number;
+  completed: number;
+  active: number;
+  ready: number;
+  blocked: number;
+  waiting: number;
+  failed: number;
+  percent: number;
+}
+
+export interface CompanyWorkItemSummary {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: number;
+  goalId: string;
+  projectId: string;
+  projectTitle: string | null;
+  repositoryId: string;
+  repositoryTitle: string | null;
+  branchName: string | null;
+  owner: string | null;
+  harness: string | null;
+  blockedReason: string | null;
+  dependencyIds: string[];
+  dependencyTitles: string[];
+  approvalRequired: boolean;
+  verificationRequired: boolean;
+  evidenceCount: number;
+  updatedAt: string;
+}
+
+export interface CompanyRunSummary {
+  id: string;
+  goalId: string;
+  status: string;
+  sourceType: string | null;
+  sourceId: string | null;
+  createdAt: string;
+  attemptCount: number;
+}
+
+export interface CompanyApprovalSummary {
+  id: string;
+  workItemId: string;
+  workItemTitle: string | null;
+  status: string;
+  actorType: string;
+  reason: string;
+  requestedAt: string;
+  expiresAt: string | null;
+}
+
+export interface CompanyEvidenceSummary {
+  id: string;
+  title: string;
+  body: string;
+  kind: string;
+  severity: string | null;
+  workItemId: string | null;
+  workflowRunId: string;
+  createdAt: string;
+}
+
+export interface CompanyOverview {
+  organizationId: string | null;
+  workspace: string;
+  goals: CompanyGoalSummary[];
+  projects: Array<{
+    id: string;
+    goalId: string;
+    title: string;
+    description: string;
+    status: string;
+    repositoryCount: number;
+  }>;
+  repositories: Array<{
+    id: string;
+    projectId: string | null;
+    purpose: string;
+    provider: string;
+    localPath: string;
+    remoteUrl: string | null;
+    defaultBranch: string;
+  }>;
+  revisions: Array<{
+    id: string;
+    repositoryId: string;
+    commitSha: string;
+    sourcePath: string;
+    dirty: boolean;
+    createdAt: string;
+  }>;
+  workItems: CompanyWorkItemSummary[];
+  approvals: CompanyApprovalSummary[];
+  runs: CompanyRunSummary[];
+  attempts: ExecutionAttemptSummary[];
+  evidence: CompanyEvidenceSummary[];
+  agents: AgentSummary[];
+  governance: Array<{
+    id: string;
+    action: string;
+    decision: string;
+    reason: string;
+    workItemId: string | null;
+    attemptId: string | null;
+    occurredAt: string;
+  }>;
+  budget: {
+    reservedCostUsd: number;
+    actualCostUsd: number;
+    reservedTokens: number;
+    actualTokens: number;
+  };
+  stats: {
+    completedWork: number;
+    activeWork: number;
+    blockedWork: number;
+    pendingApprovals: number;
+    runningAttempts: number;
+    failedAttempts: number;
+    totalAttempts: number;
+    totalEvidence: number;
+  };
+}
+
+/**
+ * Build the command-center read model from the durable execution tables.
+ * This keeps the page useful in the local workspace today and gives the API
+ * layer a stable projection to expose when the web app becomes multi-tenant.
+ */
+export async function getCompanyOverview(): Promise<CompanyOverview> {
+  ensureWorkspaceEnv();
+  const handle = getDefaultDb();
+  runMigrations(handle);
+  const db = handle.db;
+  const [
+    goalRows,
+    projectRows,
+    repositoryRows,
+    revisionRows,
+    workItemRows,
+    dependencyRows,
+    runRows,
+    attemptRows,
+    approvalRows,
+    verificationRows,
+    outputRows,
+    governanceRows,
+    budgetRows,
+  ] = await Promise.all([
+    db.select().from(goals).orderBy(desc(goals.updatedAt)),
+    db.select().from(projects).orderBy(desc(projects.updatedAt)),
+    db.select().from(repositories).orderBy(desc(repositories.updatedAt)),
+    db.select().from(definitionRevisions).orderBy(desc(definitionRevisions.createdAt)),
+    db
+      .select()
+      .from(executionWorkItems)
+      .orderBy(desc(executionWorkItems.priority), desc(executionWorkItems.updatedAt)),
+    db.select().from(executionWorkItemDependencies),
+    db.select().from(workflowRuns).orderBy(desc(workflowRuns.createdAt)),
+    db.select().from(agentAttempts).orderBy(desc(agentAttempts.createdAt)),
+    db.select().from(executionApprovals).orderBy(desc(executionApprovals.requestedAt)),
+    db.select().from(executionVerifications),
+    db.select().from(loopOutputs).orderBy(desc(loopOutputs.createdAt)),
+    db.select().from(executionGovernanceEvents).orderBy(desc(executionGovernanceEvents.occurredAt)),
+    db.select().from(executionBudgetReservations),
+  ]);
+
+  const organizationId = firstOrganizationId([
+    goalRows,
+    projectRows,
+    repositoryRows,
+    workItemRows,
+    runRows,
+    attemptRows,
+  ]);
+  const inCompany = (row: { organizationId: string }) =>
+    organizationId === null || row.organizationId === organizationId;
+  const companyGoals = goalRows.filter(inCompany);
+  const companyProjects = projectRows.filter(inCompany);
+  const companyRepositories = repositoryRows.filter(inCompany);
+  const companyRevisions = revisionRows.filter(inCompany);
+  const companyWorkItems = workItemRows.filter(inCompany);
+  const companyRuns = runRows.filter(inCompany);
+  const companyAttempts = attemptRows.filter(inCompany);
+  const companyApprovals = approvalRows.filter(inCompany);
+  const companyVerifications = verificationRows.filter(inCompany);
+  const companyOutputs = outputRows.filter(inCompany);
+  const companyGovernance = governanceRows.filter(inCompany);
+  const companyBudgets = budgetRows.filter(inCompany);
+  const projectById = new Map(companyProjects.map((project) => [project.id, project]));
+  const repositoryById = new Map(
+    companyRepositories.map((repository) => [repository.id, repository]),
+  );
+  const workItemById = new Map(companyWorkItems.map((item) => [item.id, item]));
+  const attemptById = new Map(companyAttempts.map((attempt) => [attempt.id, attempt]));
+  const dependenciesByWorkItem = new Map<string, typeof dependencyRows>();
+  for (const dependency of dependencyRows.filter(
+    (row) => organizationId === null || row.organizationId === organizationId,
+  )) {
+    const current = dependenciesByWorkItem.get(dependency.workItemId) ?? [];
+    current.push(dependency);
+    dependenciesByWorkItem.set(dependency.workItemId, current);
+  }
+  const evidenceByAttempt = new Map<string, number>();
+  const artifactsByAttempt = new Map<string, number>();
+  const artifactRows = await db.select().from(artifacts);
+  for (const artifact of artifactRows.filter(inCompany)) {
+    artifactsByAttempt.set(
+      artifact.attemptId,
+      (artifactsByAttempt.get(artifact.attemptId) ?? 0) + 1,
+    );
+  }
+  for (const verification of companyVerifications) {
+    const evidenceIds = parseJsonList(verification.evidenceIdsJson);
+    evidenceByAttempt.set(
+      verification.makerAttemptId,
+      Array.isArray(evidenceIds) ? evidenceIds.length : 0,
+    );
+  }
+  const goalProgress = companyGoals.map((goal) => {
+    const items = companyWorkItems.filter((item) => item.goalId === goal.id);
+    const completed = items.filter((item) => item.status === "completed").length;
+    return {
+      id: goal.id,
+      title: goal.title,
+      description: goal.description,
+      status: goal.status,
+      total: items.length,
+      completed,
+      active: items.filter((item) => ["claimed", "in_progress"].includes(item.status)).length,
+      ready: items.filter((item) => item.status === "ready").length,
+      blocked: items.filter((item) => item.status === "blocked").length,
+      waiting: items.filter((item) => item.status === "proposed").length,
+      failed: items.filter((item) => item.status === "failed").length,
+      percent: items.length === 0 ? 0 : Math.round((completed / items.length) * 100),
+    };
+  });
+  const workItems = companyWorkItems.map((item) => {
+    const dependencies = dependenciesByWorkItem.get(item.id) ?? [];
+    const ownerAttempt = item.claimedByAttemptId
+      ? attemptById.get(item.claimedByAttemptId)
+      : undefined;
+    const project = projectById.get(item.projectId);
+    const repository = repositoryById.get(item.repositoryId);
+    const governance = safeJson(item.governanceJson) as Record<string, unknown> | null;
+    const approval = isRecordValue(governance?.approval) ? governance.approval : {};
+    const verification = isRecordValue(governance?.verification) ? governance.verification : {};
+    return {
+      id: item.id,
+      title: item.title,
+      description: item.description,
+      status: item.status,
+      priority: item.priority,
+      goalId: item.goalId,
+      projectId: item.projectId,
+      projectTitle: project?.title ?? null,
+      repositoryId: item.repositoryId,
+      repositoryTitle: repository?.purpose ?? null,
+      branchName: item.branchName,
+      owner: ownerAttempt?.agentId ?? null,
+      harness: ownerAttempt?.harness ?? null,
+      blockedReason: item.blockedReason,
+      dependencyIds: dependencies.map((dependency) => dependency.dependsOnWorkItemId),
+      dependencyTitles: dependencies.map(
+        (dependency) =>
+          workItemById.get(dependency.dependsOnWorkItemId)?.title ?? dependency.dependsOnWorkItemId,
+      ),
+      approvalRequired: approval.required === true,
+      verificationRequired: verification.required === true,
+      evidenceCount:
+        companyOutputs.filter((output) => output.workItemId === item.id).length +
+        (ownerAttempt ? (evidenceByAttempt.get(ownerAttempt.id) ?? 0) : 0) +
+        (ownerAttempt ? (artifactsByAttempt.get(ownerAttempt.id) ?? 0) : 0),
+      updatedAt: item.updatedAt,
+    };
+  });
+  const attempts = companyAttempts.map((attempt) => ({
+    id: attempt.id,
+    status: attempt.status,
+    agentId: attempt.agentId,
+    harness: attempt.harness,
+    workflowRunId: attempt.workflowRunId,
+    workItemId: attempt.workItemId,
+    harnessSessionId: attempt.harnessSessionId,
+    createdAt: attempt.createdAt,
+    startedAt: attempt.startedAt,
+    finishedAt: attempt.finishedAt,
+  }));
+  const attemptCountByRun = new Map<string, number>();
+  for (const attempt of companyAttempts) {
+    attemptCountByRun.set(
+      attempt.workflowRunId,
+      (attemptCountByRun.get(attempt.workflowRunId) ?? 0) + 1,
+    );
+  }
+
+  return {
+    organizationId,
+    workspace: workspaceRoot(),
+    goals: goalProgress,
+    projects: companyProjects.map((project) => ({
+      id: project.id,
+      goalId: project.goalId,
+      title: project.title,
+      description: project.description,
+      status: project.status,
+      repositoryCount: companyRepositories.filter(
+        (repository) => repository.projectId === project.id,
+      ).length,
+    })),
+    repositories: companyRepositories.map((repository) => ({
+      id: repository.id,
+      projectId: repository.projectId,
+      purpose: repository.purpose,
+      provider: repository.provider,
+      localPath: repository.localPath,
+      remoteUrl: repository.remoteUrl,
+      defaultBranch: repository.defaultBranch,
+    })),
+    revisions: companyRevisions.map((revision) => ({
+      id: revision.id,
+      repositoryId: revision.repositoryId,
+      commitSha: revision.commitSha,
+      sourcePath: revision.sourcePath,
+      dirty: revision.dirty,
+      createdAt: revision.createdAt,
+    })),
+    workItems,
+    approvals: companyApprovals.map((approval) => ({
+      id: approval.id,
+      workItemId: approval.workItemId,
+      workItemTitle: workItemById.get(approval.workItemId)?.title ?? null,
+      status: approval.status,
+      actorType: approval.actorType,
+      reason: approval.reason,
+      requestedAt: approval.requestedAt,
+      expiresAt: approval.expiresAt,
+    })),
+    runs: companyRuns.slice(0, 20).map((run) => ({
+      id: run.id,
+      goalId: run.goalId,
+      status: run.status,
+      sourceType: run.sourceType,
+      sourceId: run.sourceId,
+      createdAt: run.createdAt,
+      attemptCount: attemptCountByRun.get(run.id) ?? 0,
+    })),
+    attempts: attempts.slice(0, 20),
+    evidence: companyOutputs.slice(0, 20).map((output) => ({
+      id: output.id,
+      title: output.title,
+      body: output.body,
+      kind: output.kind,
+      severity: output.severity,
+      workItemId: output.workItemId,
+      workflowRunId: output.workflowRunId,
+      createdAt: output.createdAt,
+    })),
+    agents: await listAgents(),
+    governance: companyGovernance.slice(0, 30).map((event) => ({
+      id: event.id,
+      action: event.action,
+      decision: event.decision,
+      reason: event.reason,
+      workItemId: event.workItemId,
+      attemptId: event.attemptId,
+      occurredAt: event.occurredAt,
+    })),
+    budget: {
+      reservedCostUsd: companyBudgets.reduce((sum, row) => sum + row.reservedCostUsd, 0),
+      actualCostUsd: companyBudgets.reduce((sum, row) => sum + row.actualCostUsd, 0),
+      reservedTokens: companyBudgets.reduce((sum, row) => sum + row.reservedTokens, 0),
+      actualTokens: companyBudgets.reduce((sum, row) => sum + row.actualTokens, 0),
+    },
+    stats: {
+      completedWork: companyWorkItems.filter((item) => item.status === "completed").length,
+      activeWork: companyWorkItems.filter((item) =>
+        ["claimed", "in_progress"].includes(item.status),
+      ).length,
+      blockedWork: companyWorkItems.filter((item) => item.status === "blocked").length,
+      pendingApprovals: companyApprovals.filter((approval) => approval.status === "requested")
+        .length,
+      runningAttempts: companyAttempts.filter((attempt) =>
+        ["queued", "running"].includes(attempt.status),
+      ).length,
+      failedAttempts: companyAttempts.filter((attempt) => attempt.status === "failed").length,
+      totalAttempts: companyAttempts.length,
+      totalEvidence:
+        companyOutputs.length +
+        companyVerifications.reduce((sum, verification) => {
+          const ids = parseJsonList(verification.evidenceIdsJson);
+          return sum + (Array.isArray(ids) ? ids.length : 0);
+        }, 0),
+    },
+  };
+}
+
+function firstOrganizationId(groups: Array<Array<{ organizationId: string }>>): string | null {
+  for (const group of groups) {
+    if (group[0]?.organizationId) return group[0].organizationId;
+  }
+  return null;
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseJsonList(value: string | null | undefined): unknown[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }

@@ -3,7 +3,7 @@
 import {
   Bot,
   Database,
-  Home,
+  Goal,
   ListTree,
   MessagesSquare,
   ScrollText,
@@ -15,7 +15,7 @@ import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const nav = [
-  { href: "/", label: "Dashboard", icon: Home },
+  { href: "/company", label: "Command center", icon: Goal },
   { href: "/agents", label: "Agents", icon: ListTree },
   { href: "/sessions", label: "Sessions", icon: ScrollText },
   { href: "/execution", label: "Execution", icon: Workflow },
