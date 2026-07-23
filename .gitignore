@@ -21,6 +21,7 @@ coverage/
 
 study/
 workspace/
+test/
 
 # aaspai runtime (agent state, knowledge, scratch — never committed)
 .aaspai/
