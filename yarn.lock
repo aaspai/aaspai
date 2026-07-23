@@ -15,6 +15,7 @@ __metadata:
     "@aaspai/db": "workspace:*"
     "@aaspai/execution": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
+    "@aaspai/git": "workspace:*"
     "@aaspai/observability": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@hono/node-server": "npm:^1.19.9"
@@ -81,6 +82,7 @@ __metadata:
   dependencies:
     "@aaspai/contracts": "workspace:*"
     "@aaspai/db": "workspace:*"
+    "@aaspai/git": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@types/node": "npm:^24.0.0"
     rimraf: "npm:^6.1.3"
