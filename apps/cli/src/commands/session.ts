@@ -70,7 +70,7 @@ export function sessionCommand(): Command {
         budget: {},
         idempotencyKey: randomUUID(),
       });
-      console.log(pc.green(`✓ Session ${result.sessionId}`));
+      console.log(pc.green(`✓ Session ${result.logRef ?? result.sessionId}`));
       console.log(`  status:  ${result.status}`);
       console.log(`  summary: ${result.summary ?? "(no summary)"}`);
       // Stop the underlying sources so the process exits.

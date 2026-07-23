@@ -51,7 +51,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     skillRegistry: undefined as never,
   });
 
-  const sessionId = `chat_${randomUUID()}`;
+  const requestId = `chat_${randomUUID()}`;
 
   // Send the single-turn message; the dry-run adapter responds based
   // on the agent's role. Real adapters would do the full agentic loop.
@@ -64,14 +64,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     config: {},
     skills: [],
     budget: {},
-    idempotencyKey: sessionId,
-    wakeupId: sessionId,
-    traceId: sessionId,
+    idempotencyKey: requestId,
+    wakeupId: requestId,
+    traceId: requestId,
   });
 
   // Pull the response text from the result.
   const r = result as {
     status?: string;
+    sessionId?: string;
+    logRef?: string;
     resultJson?: { text?: string; response?: string };
     summary?: string;
     errorMessage?: string;
@@ -95,7 +97,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   return NextResponse.json({
     reply,
-    sessionId,
+    sessionId: r.logRef ?? r.sessionId,
+    providerSessionId: r.sessionId,
     status: r.status ?? "completed",
   });
 }
