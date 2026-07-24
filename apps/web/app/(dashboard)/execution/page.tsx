@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RunReadyWork } from "@/components/run-ready-work";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isAaspaiWorkspace, listExecutionAttempts, listExecutionGoalProgress } from "@/lib/aaspai";
@@ -43,6 +44,11 @@ export default async function ExecutionPage() {
                     {goal.percent}% · {goal.completed}/{goal.total} completed
                   </span>
                 </div>
+                {goal.ready > 0 && (
+                  <div className="pt-2">
+                    <RunReadyWork goalId={goal.id} />
+                  </div>
+                )}
                 <div className="h-2 overflow-hidden rounded-full bg-muted">
                   <div
                     className="h-full rounded-full bg-primary transition-all"
