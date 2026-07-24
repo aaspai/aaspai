@@ -14,6 +14,7 @@ import {
   Timer,
 } from "lucide-react";
 import Link from "next/link";
+import { GoalBuilder } from "@/components/goal-builder";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getCompanyOverview, isAaspaiWorkspace } from "@/lib/aaspai";
@@ -65,6 +66,18 @@ export default async function CompanyCommandCenterPage() {
           <div className="mt-0.5 truncate max-w-[260px]">{overview.workspace}</div>
         </div>
       </header>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Create a goal pipeline</CardTitle>
+          <CardDescription>
+            Define the outcome and the ordered work your agents will execute.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <GoalBuilder />
+        </CardContent>
+      </Card>
 
       {overview.health && (
         <section className="grid gap-3 rounded-lg border bg-card p-4 sm:grid-cols-2 xl:grid-cols-4">

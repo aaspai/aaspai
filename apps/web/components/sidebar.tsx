@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LogoutButton } from "@/components/logout-button";
 import { cn } from "@/lib/utils";
 
 const nav = [
@@ -93,6 +94,7 @@ export function Sidebar() {
         <div className="font-medium text-foreground">aaspai</div>
         <div>Self-hosted control plane</div>
         <div className="mt-1 text-muted-foreground/70">AGPL-3.0 · MIT-style</div>
+        <LogoutButton />
       </div>
     </aside>
   );

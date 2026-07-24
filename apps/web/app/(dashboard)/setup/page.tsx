@@ -116,11 +116,11 @@ export default async function SetupPage() {
           <CardContent className="space-y-3 text-sm">
             <div className="flex items-center gap-2 text-amber-700">
               <CircleAlert className="h-4 w-4" />
-              Frontend login is not configured.
+              Local owner login is active.
             </div>
             <p className="text-muted-foreground">
-              Keep the web process bound to localhost. Remote or shared access is not safe until the
-              authentication composition root is connected.
+              This development flow stores a signed-in local owner session inside the workspace.
+              Keep the web process bound to localhost until a hosted identity provider is connected.
             </p>
           </CardContent>
         </Card>

@@ -1,7 +1,10 @@
+import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { Sidebar } from "@/components/sidebar";
+import { currentUser } from "@/lib/local-auth";
 
-export default function DashboardLayout({ children }: { children: ReactNode }) {
+export default async function DashboardLayout({ children }: { children: ReactNode }) {
+  if (!(await currentUser())) redirect("/login");
   return (
     <div className="flex min-h-screen w-full">
       <Sidebar />
