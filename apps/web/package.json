@@ -7,6 +7,7 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start",
+    "test": "node --test lib/next-dist-dir.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "clean": "rimraf .next .turbo"

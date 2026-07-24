@@ -1,5 +1,7 @@
 # Next.js build artifacts
 .next/
+.next-dev-*/
+.next-dev-*.tsconfig.json
 out/
 build/
 

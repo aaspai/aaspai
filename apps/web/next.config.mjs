@@ -1,3 +1,7 @@
+import { writeFileSync } from "node:fs";
+
+import { nextDevTsconfig, nextDistDir } from "./lib/next-dist-dir.mjs";
+
 /** @type {import("next").NextConfig} */
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -21,10 +25,19 @@ const aaspaiPackages = [
   "@aaspai/knowledge",
 ];
 
+const distDir = nextDistDir();
+const devTsconfig = nextDevTsconfig(distDir);
+if (devTsconfig) {
+  writeFileSync(new URL(devTsconfig.path, import.meta.url), devTsconfig.contents);
+}
+
 const nextConfig = {
   reactStrictMode: true,
-  distDir: process.env.NEXT_DIST_DIR || ".next",
-  typescript: { ignoreBuildErrors: false },
+  distDir,
+  typescript: {
+    ignoreBuildErrors: false,
+    ...(devTsconfig ? { tsconfigPath: devTsconfig.path } : {}),
+  },
   // Tell Next.js to transpile workspace packages that use
   // TypeScript ESM `.js` import paths.
   transpilePackages: aaspaiPackages,
