@@ -1,29 +1,15 @@
-import { getAdapter, listAdapters } from "@aaspai/harness";
 import { CheckCircle2, CircleAlert, CircleX, Terminal } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { isAaspaiWorkspace, workspaceRoot } from "@/lib/aaspai";
+import { listFrontendProviders } from "@/lib/provider-status";
 
 export const dynamic = "force-dynamic";
 
-const adapterTypes = ["codex_local", "claude_local", "opencode_cli"] as const;
-
 export default async function SetupPage() {
-  const adapters = await Promise.all(
-    adapterTypes.map(async (type) => {
-      const info = listAdapters().find((adapter) => adapter.type === type);
-      const environment = await getAdapter(type).testEnvironment({
-        config: {},
-        cwd: workspaceRoot(),
-      });
-      const installed = !environment.checks.some(
-        (check) => check.name.endsWith("_cli") && /not found|enoent/i.test(check.message),
-      );
-      return { type, label: info?.label ?? type, installed, ready: environment.ok, environment };
-    }),
-  );
+  const adapters = await listFrontendProviders();
   const workspaceReady = isAaspaiWorkspace();
 
   return (

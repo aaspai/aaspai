@@ -38,6 +38,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     agentId: agent.id,
     adapter: agent.adapter,
     runtime: { kind: "local" },
+    cwd: root,
     prompt: `Work item: ${item.title}\n\nGoal: ${goal.title}\n\nReport what you did, what you could not do, and the next action.`,
     config: {},
     skills: [],

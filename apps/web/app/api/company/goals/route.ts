@@ -1,8 +1,6 @@
-import { getDefaultDb, runMigrations } from "@aaspai/db";
-import { ExecutionStore } from "@aaspai/execution";
 import { NextResponse } from "next/server";
+import { createFrontendGoal } from "@/lib/company-goals";
 import { currentUser } from "@/lib/local-auth";
-import { ensureFrontendWorkspace } from "@/lib/workspace-bootstrap";
 
 export async function POST(request: Request) {
   const user = await currentUser();
@@ -19,68 +17,13 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  await ensureFrontendWorkspace(user.companyName);
-  const db = getDefaultDb();
-  runMigrations(db);
-  const store = new ExecutionStore(db.db);
-  const goal = await store.createGoal({
+  const result = await createFrontendGoal({
     organizationId: user.organizationId,
+    companyName: user.companyName,
     title: body.title.trim(),
     description: typeof body.description === "string" ? body.description : undefined,
+    projectTitle: typeof body.projectTitle === "string" ? body.projectTitle : undefined,
+    steps,
   });
-  const project = await store.createProject({
-    organizationId: user.organizationId,
-    goalId: goal.id,
-    title:
-      typeof body.projectTitle === "string" && body.projectTitle.trim()
-        ? body.projectTitle.trim()
-        : `${goal.title} delivery`,
-  });
-  const repository = await store.createRepository({
-    organizationId: user.organizationId,
-    projectId: project.id,
-    purpose: "project",
-    provider: "local",
-    localPath: `projects/${project.id}`,
-  });
-  await ensureFrontendWorkspace(user.companyName);
-  const revision = await store.createDefinitionRevision({
-    organizationId: user.organizationId,
-    repositoryId: repository.id,
-    commitSha: "frontend-definition",
-    sourcePath: ".",
-    dirty: true,
-    contentHash: "frontend-definition",
-  });
-  const run = await store.createWorkflowRun({
-    organizationId: user.organizationId,
-    goalId: goal.id,
-    definitionRevisionId: revision.id,
-    sourceType: "frontend",
-    sourceId: goal.id,
-    idempotencyKey: `frontend:${goal.id}`,
-  });
-  const workItems: Awaited<ReturnType<ExecutionStore["createWorkItem"]>>[] = [];
-  let previous: string | undefined;
-  for (const [index, step] of steps.entries()) {
-    const item = await store.createWorkItem({
-      organizationId: user.organizationId,
-      goalId: goal.id,
-      projectId: project.id,
-      repositoryId: repository.id,
-      workflowRunId: run.id,
-      title: step.trim(),
-      status: index === 0 ? "ready" : "proposed",
-      priority: steps.length - index,
-      idempotencyKey: `frontend:${goal.id}:${index}`,
-      metadata: { ownerAgentId: "agent/developer", validationOwnerAgentId: "agent/tester" },
-    });
-    if (previous) await store.addWorkItemDependency(user.organizationId, item.id, previous);
-    workItems.push(item);
-    previous = item.id;
-  }
-  return NextResponse.json(
-    { data: { goal, project, repository, run, workItems } },
-    { status: 201 },
-  );
+  return NextResponse.json({ data: result }, { status: 201 });
 }

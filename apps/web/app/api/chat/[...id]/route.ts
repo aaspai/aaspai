@@ -5,16 +5,19 @@ import { Sessions } from "@aaspai/sessions";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getAgent, isAaspaiWorkspace, workspaceRoot } from "@/lib/aaspai";
+import { currentUser } from "@/lib/local-auth";
 
 const bodySchema = z.object({
   message: z.string().min(1).max(1_048_576),
   adapter: z.string().optional(),
-  model: z.string().optional(),
+  model: z.string().nullable().optional(),
 });
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string[] }> }) {
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   if (!isAaspaiWorkspace()) {
     return NextResponse.json({ error: "no aaspai workspace" }, { status: 404 });
   }
@@ -56,10 +59,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Send the single-turn message; the dry-run adapter responds based
   // on the agent's role. Real adapters would do the full agentic loop.
   const result = await sessions.execute({
-    organizationId: "default",
+    organizationId: user.organizationId,
     agentId,
     adapter,
     runtime: { kind: "local" },
+    cwd: root,
     prompt: body.message,
     config: {},
     skills: [],
