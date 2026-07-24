@@ -25,7 +25,7 @@ export function AuthForm() {
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Authentication failed");
-      router.push("/company");
+      router.push(signupMode ? "/onboarding" : "/company");
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Authentication failed");
