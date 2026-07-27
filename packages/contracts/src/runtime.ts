@@ -51,6 +51,20 @@ export const runProcessResultSchema = z
     finishedAt: isoTimestampSchema,
     durationMs: nonNegativeIntegerSchema,
     pid: positiveIntegerSchema.optional(),
+    /** Identity of the runtime that actually executed the process. */
+    runtimeIdentity: z
+      .object({
+        kind: executionTargetKindSchema,
+        cwd: z.string().trim().min(1).max(8_192),
+        pid: positiveIntegerSchema.optional(),
+        containerId: z.string().trim().min(1).max(256).optional(),
+        host: z.string().trim().min(1).max(256).optional(),
+        remotePid: positiveIntegerSchema.optional(),
+        remoteCwd: z.string().trim().min(1).max(8_192).optional(),
+        connectionIdentity: z.string().trim().min(1).max(512).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type RunProcessResult = z.infer<typeof runProcessResultSchema>;

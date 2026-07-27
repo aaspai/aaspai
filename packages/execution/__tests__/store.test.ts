@@ -109,6 +109,39 @@ describe("ExecutionStore", () => {
     await expect(store.listArtifacts(attempt.id)).resolves.toEqual([artifact]);
   });
 
+  it("keeps raw evidence separate and sequences it monotonically", async () => {
+    const attemptId = `attempt_raw_${randomUUID()}`;
+    await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: `run_${attemptId}`,
+      workItemId: `work_${attemptId}`,
+      agentId: "agent_test",
+      harness: "dry_run_local",
+      id: attemptId,
+    });
+    await store.appendRawOutput({
+      organizationId: "org_test",
+      attemptId,
+      ts: new Date().toISOString(),
+      stream: "stdout",
+      chunk: "raw provider line",
+      seq: 1,
+    });
+    await expect(
+      store.appendRawOutput({
+        organizationId: "org_test",
+        attemptId,
+        ts: new Date().toISOString(),
+        stream: "stderr",
+        chunk: "out of order",
+        seq: 1,
+      }),
+    ).rejects.toThrow("sequence must increase");
+    await expect(store.listRawOutputs(attemptId)).resolves.toMatchObject([
+      { stream: "stdout", chunk: "raw provider line", seq: 1 },
+    ]);
+  });
+
   it("builds an isolated cross-project company health projection", async () => {
     const organizationId = "org_health_a";
     const goal = await store.createGoal({

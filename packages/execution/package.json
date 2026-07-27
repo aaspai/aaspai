@@ -14,6 +14,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",
+    "test:real": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-layer-two.ts",
+    "test:real:workitem": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-big-workitem.ts",
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
@@ -22,7 +24,8 @@
     "@aaspai/file-loader": "workspace:*",
     "@aaspai/git": "workspace:*",
     "@aaspai/harness": "workspace:*",
-    "@aaspai/runtime": "workspace:*"
+    "@aaspai/runtime": "workspace:*",
+    "@aaspai/sessions": "workspace:*"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.1.1",

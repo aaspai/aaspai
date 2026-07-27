@@ -307,13 +307,44 @@ export const executionPlanSchema = z
     sourceSnapshot: sourceSnapshotSchema,
     target: executionTargetSchema,
     harness: z.string().trim().min(1).max(128),
+    agentId: identifierSchema.default("unknown"),
+    idempotencyKey: idempotencyKeySchema.default("plan-unknown"),
     prompt: z.string().max(131_072),
     timeoutMs: positiveIntegerSchema.nullable().default(null),
+    harnessConfig: jsonObjectSchema.default({}),
+    workspacePolicy: z
+      .object({
+        restore: z.enum(["none", "changes", "all"]).default("changes"),
+        cleanup: z.enum(["always", "retain_on_failure"]).default("always"),
+      })
+      .strict()
+      .default({ restore: "changes", cleanup: "always" }),
     runtimeConfig: jsonObjectSchema.default({}),
     createdAt: isoTimestampSchema,
   })
   .strict();
-export type ExecutionPlan = z.infer<typeof executionPlanSchema>;
+type ParsedExecutionPlan = z.infer<typeof executionPlanSchema>;
+/** Optional in source literals for compatibility; persistence fills every pin. */
+export type ExecutionPlan = Omit<
+  ParsedExecutionPlan,
+  "agentId" | "idempotencyKey" | "harnessConfig" | "workspacePolicy"
+> &
+  Partial<
+    Pick<ParsedExecutionPlan, "agentId" | "idempotencyKey" | "harnessConfig" | "workspacePolicy">
+  >;
+
+export const executionRawOutputSchema = z
+  .object({
+    id: positiveIntegerSchema,
+    organizationId: identifierSchema,
+    attemptId: identifierSchema,
+    ts: isoTimestampSchema,
+    stream: z.enum(["stdout", "stderr"]),
+    chunk: z.string().max(16 * 1024 * 1024),
+    seq: positiveIntegerSchema,
+  })
+  .strict();
+export type ExecutionRawOutput = z.infer<typeof executionRawOutputSchema>;
 
 export const executionEventSchema = z
   .object({

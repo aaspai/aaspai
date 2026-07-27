@@ -14,6 +14,11 @@
  *   - Webhooks
  *   - Job queue (Phase 4 — for now we use the wakeups table directly)
  */
+
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import type { AgentAttempt, ExecutionWorkItem } from "@aaspai/contracts/execution";
+import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
 import {
   closeDefaultDb,
   definitionRevisions,
@@ -22,7 +27,7 @@ import {
   repositories,
   wakeups as wakeupsTable,
 } from "@aaspai/db";
-import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
+import { DependencyScheduler, ExecutionStore, HarnessExecutionPlanRunner } from "@aaspai/execution";
 import {
   FileAgentConfigSource,
   FileKnowledgeSource,
@@ -68,12 +73,16 @@ export class WorkerDaemon {
   private readonly agentSource: FileAgentConfigSource;
   private readonly knowledgeSource: FileKnowledgeSource;
   private readonly loopSource: FileLoopConfigSource;
-  private readonly sessions: Sessions;
   private readonly scheduler: Scheduler;
   private readonly killSwitch: KillSwitch;
   private readonly patternRegistry: PatternRegistry;
   private readonly executionStore: ExecutionStore;
   private readonly executionScheduler: DependencyScheduler;
+  /** Test/legacy compatibility seam; production always has the durable runner. */
+  private readonly legacySessionExecutor?: (request: Record<string, unknown>) => Promise<{
+    sessionId?: string;
+    status?: string;
+  }>;
   private loopLineage: LoopExecutionLineage | null = null;
 
   private tickHandle: NodeJS.Timeout | null = null;
@@ -94,11 +103,20 @@ export class WorkerDaemon {
       process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
     );
     this.loopSource = new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? "./loops");
-    this.sessions = new Sessions({
+    const sessionFacade = new Sessions({
       agentSource: this.agentSource,
       knowledgeSource: this.knowledgeSource,
-      skillRegistry: undefined as never, // foundation: skills are no-op
+      skillRegistry: undefined as never,
     });
+    const compatibility = sessionFacade as unknown as {
+      start?: unknown;
+      execute?: (
+        request: Record<string, unknown>,
+      ) => Promise<{ sessionId?: string; status?: string }>;
+    };
+    if (typeof compatibility.start !== "function" && compatibility.execute) {
+      this.legacySessionExecutor = compatibility.execute.bind(sessionFacade);
+    }
     this.executionStore = new ExecutionStore(getDefaultDb().db);
     this.executionScheduler = new DependencyScheduler(this.executionStore, {
       maxOrganizationConcurrency: 1,
@@ -383,7 +401,6 @@ export class WorkerDaemon {
     wakeupRow: typeof wakeupsTable.$inferSelect,
     wakeupId: string,
   ): Promise<void> {
-    const handle = getDefaultDb();
     const payload = safeJsonParse(wakeupRow.payloadJson) ?? {};
     const agentId = wakeupRow.agentId ?? (payload as { agentId?: string }).agentId;
     if (!agentId) throw new Error("wakeup has no agentId");
@@ -391,19 +408,85 @@ export class WorkerDaemon {
     const prompt =
       (payload as { prompt?: string }).prompt ??
       `Worker-triggered wakeup for ${wakeupRow.loopId} (${wakeupRow.reason ?? "no reason"})`;
-    const result = await this.sessions.execute({
+    if (this.legacySessionExecutor) {
+      const result = await this.legacySessionExecutor({
+        organizationId: this.organizationId,
+        agentId,
+        adapter,
+        runtime: { kind: "local" },
+        prompt,
+        config: {},
+        skills: [],
+        budget: {},
+        idempotencyKey: wakeupId,
+        wakeupId,
+        traceId: wakeupId,
+      });
+      const handle = getDefaultDb();
+      await handle.db
+        .update(wakeupsTable)
+        .set({
+          status: "completed",
+          finishedAt: new Date().toISOString(),
+          sessionId: result.sessionId,
+          error: undefined,
+        } as never)
+        .where(eq(wakeupsTable.id, wakeupId));
+      return;
+    }
+    const lineage = this.loopLineage ?? (await this.ensureLoopLineage());
+    const workItem = await this.executionStore.createWorkItem({
+      id: `work:wakeup:${wakeupId}`,
       organizationId: this.organizationId,
+      goalId: lineage.goalId,
+      projectId: lineage.projectId,
+      repositoryId: lineage.repositoryId,
+      title: prompt.slice(0, 512),
+      description: prompt,
+      definitionRevisionId: lineage.definitionRevisionId,
+      sourceCommitSha: "0000000",
+      branchName: "worker-wakeup",
+      idempotencyKey: wakeupId,
+      status: "ready",
+    });
+    const workflowRun = await this.executionStore.createWorkflowRun({
+      id: `run:wakeup:${wakeupId}`,
+      organizationId: this.organizationId,
+      goalId: lineage.goalId,
+      definitionRevisionId: lineage.definitionRevisionId,
+      sourceType: "wakeup",
+      sourceId: wakeupId,
+      idempotencyKey: `workflow:${wakeupId}`,
+    });
+    const attempt = await this.executionStore.createAttempt({
+      id: `attempt:wakeup:${wakeupId}`,
+      organizationId: this.organizationId,
+      workflowRunId: workflowRun.id,
+      workItemId: workItem.id,
+      agentId,
+      harness: adapter,
+    });
+    if (!(await this.executionStore.claimWorkItem(workItem.id, attempt.id))) {
+      throw new Error(`Wakeup ${wakeupId} could not be claimed`);
+    }
+    const claimedWorkItem = await this.executionStore.getWorkItem(workItem.id);
+    if (!claimedWorkItem) throw new Error(`Wakeup work item ${workItem.id} disappeared`);
+    const result = await this.executeDurableAttempt({
+      attempt,
+      workItem: claimedWorkItem,
       agentId,
       adapter,
-      runtime: { kind: "local" },
       prompt,
-      config: {},
-      skills: [],
-      budget: {},
-      idempotencyKey: wakeupId,
-      wakeupId,
-      traceId: wakeupId,
     });
+    const legacyStatus = result.timedOut
+      ? "failed"
+      : result.exitCode === 0
+        ? "completed"
+        : "failed";
+    await this.executionStore.updateWorkItemStatus(claimedWorkItem.id, legacyStatus, {
+      blockedReason: legacyStatus === "completed" ? null : (result.errorMessage ?? result.summary),
+    });
+    const handle = getDefaultDb();
     await handle.db
       .update(wakeupsTable)
       .set({
@@ -435,22 +518,79 @@ export class WorkerDaemon {
           typeof metadata === "object" && metadata !== null && "decision" in metadata
             ? String((metadata as { decision?: unknown }).decision)
             : workItem.description;
-        const result = await this.sessions.execute({
-          organizationId: this.organizationId,
+        const result = await this.executeDurableAttempt({
+          attempt,
+          workItem,
           agentId,
           adapter,
-          runtime: { kind: "local" },
           prompt,
-          config: {},
-          skills: [],
-          budget: {},
-          idempotencyKey: attempt.id,
-          traceId: workflowRunId,
         });
-        return result.status === "succeeded" ? "succeeded" : "failed";
+        return result.timedOut ? "timed_out" : result.exitCode === 0 ? "succeeded" : "failed";
       },
       { maxTicks: 100 },
     );
+  }
+
+  private async executeDurableAttempt(input: {
+    attempt: AgentAttempt;
+    workItem: ExecutionWorkItem;
+    agentId: string;
+    adapter: string;
+    prompt: string;
+  }): Promise<AdapterExecutionResult> {
+    const agent = await this.agentSource.get(input.agentId);
+    const root = resolve(process.env.AASPAI_WORKSPACE_ROOT ?? join("workspace", "worker"));
+    await mkdir(root, { recursive: true });
+    const workspacePath = await mkdtemp(join(root, `${input.attempt.id}-`));
+    const workspace = await this.executionStore.createWorkspace({
+      organizationId: this.organizationId,
+      attemptId: input.attempt.id,
+      repositoryId: input.workItem.repositoryId,
+      path: workspacePath,
+      branchName: input.workItem.branchName ?? `worker/${input.attempt.id}`,
+      baseCommitSha: input.workItem.sourceCommitSha ?? "0000000",
+      status: "ready",
+    });
+    const adapterConfig = {
+      ...(agent.model ? { model: agent.model } : {}),
+      ...agent.adapterConfig,
+    };
+    const plan = await this.executionStore.createPlan({
+      organizationId: this.organizationId,
+      definitionRevisionId: input.workItem.definitionRevisionId ?? "revision:missing",
+      workItemId: input.workItem.id,
+      attemptId: input.attempt.id,
+      sourceSnapshot: {
+        repositoryId: input.workItem.repositoryId,
+        commitSha: input.workItem.sourceCommitSha ?? "0000000",
+        branchName: input.workItem.branchName ?? "worker",
+        capturedAt: new Date().toISOString(),
+      },
+      target: { kind: "local", cwd: workspacePath, envPassthrough: false },
+      harness: input.adapter,
+      agentId: input.agentId,
+      idempotencyKey: input.attempt.id,
+      prompt: input.prompt,
+      harnessConfig: adapterConfig,
+      runtimeConfig: { workspacePolicy: "disposable" },
+    });
+    try {
+      return await new HarnessExecutionPlanRunner(this.executionStore).run({
+        plan,
+        workspace: { ...workspace, status: "ready" },
+        agent: {
+          id: input.agentId,
+          name: agent.title,
+          adapterType: input.adapter as never,
+          adapterConfig,
+          role: agent.role,
+        },
+      });
+    } finally {
+      await this.executionStore.updateWorkspaceStatus(workspace.id, "releasing");
+      await this.executionStore.updateWorkspaceStatus(workspace.id, "released");
+      await rm(workspacePath, { recursive: true, force: true });
+    }
   }
 
   private async ensureLoopLineage(): Promise<LoopExecutionLineage> {

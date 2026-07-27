@@ -6,6 +6,7 @@ import type {
   AttemptRole,
   AttemptStatus,
   ExecutionEvent,
+  ExecutionRawOutput,
   ExecutionWorkItem,
   ExecutionWorkItemDependency,
   ExecutionWorkspace,
@@ -22,6 +23,7 @@ import {
   assertValidAttemptTransition,
   executionEventSchema,
   executionPlanSchema,
+  executionRawOutputSchema,
   executionWorkItemDependencySchema,
   executionWorkItemSchema,
   executionWorkspaceSchema,
@@ -60,6 +62,7 @@ import {
   executionEvents,
   executionGovernanceEvents,
   executionPlans,
+  executionRawOutputs,
   executionVerifications,
   executionWorkItemDependencies,
   executionWorkItems,
@@ -148,6 +151,7 @@ export interface DispatchWorkItemInput {
   projectConcurrency?: number;
   repositoryConcurrency?: number;
   agentConcurrency?: number;
+  parentAttemptId?: string | null;
 }
 
 export interface CreateWorkflowRunInput {
@@ -226,8 +230,15 @@ export interface CreatePlanInput {
   sourceSnapshot: SourceSnapshot;
   target: ExecutionTarget;
   harness: string;
+  agentId?: string;
+  idempotencyKey?: string;
   prompt: string;
   timeoutMs?: number | null;
+  harnessConfig?: Record<string, unknown>;
+  workspacePolicy?: {
+    restore?: "none" | "changes" | "all";
+    cleanup?: "always" | "retain_on_failure";
+  };
   runtimeConfig?: Record<string, unknown>;
 }
 
@@ -696,6 +707,7 @@ export class ExecutionStore {
         harness: input.harness,
         attemptNumber,
         timeoutMs: input.timeoutMs,
+        parentAttemptId: input.parentAttemptId ?? null,
       });
       created = agentAttemptSchema.parse(row);
     } catch (error) {
@@ -779,6 +791,21 @@ export class ExecutionStore {
       await this.releaseSchedulerLocks(current.id);
       const existingWorkItem = await this.getWorkItem(current.workItemId);
       if (!existingWorkItem) throw new Error(`Work item ${current.workItemId} not found`);
+      if (["claimed", "in_progress"].includes(existingWorkItem.status)) {
+        const workItemStatus =
+          current.status === "succeeded"
+            ? "completed"
+            : current.status === "cancelled"
+              ? "cancelled"
+              : "failed";
+        const settled = await this.updateWorkItemStatus(current.workItemId, workItemStatus, {
+          blockedReason:
+            workItemStatus === "completed"
+              ? null
+              : (input.error ?? `${current.status} without retry eligibility`),
+        });
+        return { attempt: current, workItem: settled };
+      }
       return { attempt: current, workItem: existingWorkItem };
     }
     if (current.status === "queued" || current.status === "preparing") {
@@ -1690,6 +1717,14 @@ export class ExecutionStore {
     });
   }
 
+  async listHarnessSessionEvents(sessionId: string) {
+    return await this.db
+      .select()
+      .from(harnessSessionEvents)
+      .where(eq(harnessSessionEvents.sessionId, sessionId))
+      .orderBy(asc(harnessSessionEvents.seq));
+  }
+
   async completeHarnessSession(
     sessionId: string,
     result: AdapterExecutionResult,
@@ -1797,16 +1832,34 @@ export class ExecutionStore {
     if (["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(current.status)) {
       return current;
     }
-    if (current.status === "queued") await this.transitionAttempt(attemptId, "cancelled");
-    else if (current.status === "preparing" || current.status === "running") {
-      await this.transitionAttempt(attemptId, "cancelling");
-      await this.transitionAttempt(attemptId, "cancelled");
-    } else if (current.status === "cancelling") {
-      await this.transitionAttempt(attemptId, "cancelled");
-    }
+    await this.requestCancelAttempt(attemptId);
     const cancelled = await this.getAttempt(attemptId);
     if (!cancelled) throw new Error(`Agent attempt ${attemptId} disappeared during cancellation`);
     return cancelled;
+  }
+
+  /** Persist intent first; the live runner moves cancelling to cancelled after process exit. */
+  async requestCancelAttempt(attemptId: string): Promise<AgentAttempt> {
+    const current = await this.getAttempt(attemptId);
+    if (!current) throw new Error(`Agent attempt ${attemptId} not found`);
+    if (isTerminalAttemptStatus(current.status)) return current;
+    if (current.status === "queued") {
+      await this.transitionAttempt(attemptId, "cancelled");
+    } else if (current.status === "preparing" || current.status === "running") {
+      await this.db
+        .update(agentAttempts)
+        .set({ cancelRequestedAt: now() })
+        .where(eq(agentAttempts.id, attemptId));
+      await this.transitionAttempt(attemptId, "cancelling");
+    } else if (current.status === "cancelling") {
+      await this.db
+        .update(agentAttempts)
+        .set({ cancelRequestedAt: current.cancelRequestedAt ?? now() })
+        .where(eq(agentAttempts.id, attemptId));
+    }
+    const requested = await this.getAttempt(attemptId);
+    if (!requested) throw new Error(`Agent attempt ${attemptId} disappeared during cancellation`);
+    return requested;
   }
 
   async acquireResourceLock(input: AcquireResourceLockInput): Promise<ResourceLock | null> {
@@ -1903,6 +1956,20 @@ export class ExecutionStore {
     workspaceId: string,
     status: ExecutionWorkspace["status"],
   ): Promise<ExecutionWorkspace> {
+    const currentRow = await this.getWorkspace(workspaceId);
+    if (!currentRow) throw new Error(`Execution workspace ${workspaceId} not found`);
+    const current = executionWorkspaceSchema.parse(currentRow);
+    const allowed: Record<ExecutionWorkspace["status"], readonly ExecutionWorkspace["status"][]> = {
+      pending: ["creating", "failed", "ready"],
+      creating: ["ready", "failed"],
+      ready: ["releasing", "failed"],
+      releasing: ["released", "failed"],
+      released: [],
+      failed: [],
+    };
+    if (current.status !== status && !allowed[current.status].includes(status)) {
+      throw new Error(`Invalid execution workspace transition: ${current.status} -> ${status}`);
+    }
     const releasedAt = status === "released" ? now() : null;
     await this.db
       .update(executionWorkspaces)
@@ -1914,6 +1981,41 @@ export class ExecutionStore {
   }
 
   async createPlan(input: CreatePlanInput) {
+    const attempt = await this.getAttempt(input.attemptId);
+    if (!attempt) throw new Error(`Agent attempt ${input.attemptId} not found`);
+    if (attempt.organizationId !== input.organizationId) {
+      throw new Error("Execution plan organization does not match its attempt");
+    }
+    const existing = await this.db
+      .select()
+      .from(executionPlans)
+      .where(eq(executionPlans.attemptId, input.attemptId))
+      .limit(1);
+    if (existing[0]) {
+      const existingPlan = parsePlan(existing[0]);
+      const requested = executionPlanSchema.parse({
+        id: existingPlan.id,
+        organizationId: input.organizationId,
+        definitionRevisionId: input.definitionRevisionId,
+        workItemId: input.workItemId,
+        attemptId: input.attemptId,
+        sourceSnapshot: input.sourceSnapshot,
+        target: input.target,
+        harness: input.harness,
+        agentId: input.agentId ?? "unknown",
+        idempotencyKey: input.idempotencyKey ?? `plan-${input.attemptId}`,
+        prompt: input.prompt,
+        timeoutMs: input.timeoutMs ?? null,
+        harnessConfig: input.harnessConfig ?? {},
+        workspacePolicy: input.workspacePolicy ?? { restore: "changes", cleanup: "always" },
+        runtimeConfig: input.runtimeConfig ?? {},
+        createdAt: existingPlan.createdAt,
+      });
+      if (JSON.stringify(existingPlan) !== JSON.stringify(requested)) {
+        throw new Error(`Execution plan ${existingPlan.id} is immutable`);
+      }
+      return existingPlan;
+    }
     const row = {
       id: input.id ?? makeId("plan"),
       organizationId: input.organizationId,
@@ -1923,27 +2025,45 @@ export class ExecutionStore {
       sourceSnapshotJson: JSON.stringify(input.sourceSnapshot),
       targetJson: JSON.stringify(input.target),
       harness: input.harness,
+      agentId: input.agentId ?? "unknown",
+      idempotencyKey: input.idempotencyKey ?? `plan-${input.attemptId}`,
       prompt: input.prompt,
       timeoutMs: input.timeoutMs ?? null,
+      harnessConfigJson: JSON.stringify(input.harnessConfig ?? {}),
+      workspacePolicyJson: JSON.stringify(
+        input.workspacePolicy ?? { restore: "changes", cleanup: "always" },
+      ),
       runtimeConfigJson: JSON.stringify(input.runtimeConfig ?? {}),
       createdAt: now(),
     } satisfies typeof executionPlans.$inferInsert;
     await this.db.insert(executionPlans).values(row);
-    const {
-      sourceSnapshotJson: _sourceSnapshotJson,
-      targetJson: _targetJson,
-      runtimeConfigJson: _runtimeConfigJson,
-      ...plan
-    } = row;
-    return executionPlanSchema.parse({
-      ...plan,
-      sourceSnapshot: input.sourceSnapshot,
-      target: input.target,
-      runtimeConfig: input.runtimeConfig ?? {},
-    });
+    return parsePlan(row);
+  }
+
+  async getPlan(planId: string): Promise<ReturnType<typeof executionPlanSchema.parse> | null> {
+    const rows = await this.db
+      .select()
+      .from(executionPlans)
+      .where(eq(executionPlans.id, planId))
+      .limit(1);
+    return rows[0] ? parsePlan(rows[0]) : null;
   }
 
   async appendEvent(input: AppendEventInput): Promise<ExecutionEvent> {
+    const attempt = await this.getAttempt(input.attemptId);
+    if (!attempt) throw new Error(`Agent attempt ${input.attemptId} not found`);
+    if (attempt.organizationId !== input.organizationId) {
+      throw new Error("Execution event organization does not match its attempt");
+    }
+    const previous = await this.db
+      .select({ seq: executionEvents.seq })
+      .from(executionEvents)
+      .where(eq(executionEvents.attemptId, input.attemptId))
+      .orderBy(desc(executionEvents.seq))
+      .limit(1);
+    if (previous[0] && input.seq <= previous[0].seq) {
+      throw new Error(`Execution event sequence must increase: ${input.seq} <= ${previous[0].seq}`);
+    }
     const row = {
       organizationId: input.organizationId,
       attemptId: input.attemptId,
@@ -1977,6 +2097,50 @@ export class ExecutionStore {
       const { payloadJson, ...event } = row;
       return executionEventSchema.parse({ ...event, payload: JSON.parse(payloadJson) });
     });
+  }
+
+  async appendRawOutput(input: Omit<ExecutionRawOutput, "id">): Promise<ExecutionRawOutput> {
+    const attempt = await this.getAttempt(input.attemptId);
+    if (!attempt) throw new Error(`Agent attempt ${input.attemptId} not found`);
+    if (attempt.organizationId !== input.organizationId) {
+      throw new Error("Raw output organization does not match its attempt");
+    }
+    const previous = await this.db
+      .select({ seq: executionRawOutputs.seq })
+      .from(executionRawOutputs)
+      .where(eq(executionRawOutputs.attemptId, input.attemptId))
+      .orderBy(desc(executionRawOutputs.seq))
+      .limit(1);
+    if (previous[0] && input.seq <= previous[0].seq) {
+      throw new Error(`Raw output sequence must increase: ${input.seq} <= ${previous[0].seq}`);
+    }
+    const row = {
+      ...input,
+      ts: input.ts ?? now(),
+    } satisfies typeof executionRawOutputs.$inferInsert;
+    await this.db.insert(executionRawOutputs).values(row);
+    const created = await this.db
+      .select()
+      .from(executionRawOutputs)
+      .where(
+        and(
+          eq(executionRawOutputs.attemptId, input.attemptId),
+          eq(executionRawOutputs.seq, input.seq),
+        ),
+      )
+      .limit(1);
+    if (!created[0])
+      throw new Error(`Raw output ${input.attemptId}/${input.seq} was not persisted`);
+    return executionRawOutputSchema.parse(created[0]);
+  }
+
+  async listRawOutputs(attemptId: string): Promise<ExecutionRawOutput[]> {
+    const rows = await this.db
+      .select()
+      .from(executionRawOutputs)
+      .where(eq(executionRawOutputs.attemptId, attemptId))
+      .orderBy(asc(executionRawOutputs.seq));
+    return rows.map((row) => executionRawOutputSchema.parse(row));
   }
 
   async createArtifact(input: CreateArtifactInput): Promise<Artifact> {
@@ -2033,6 +2197,25 @@ function parseWorkItem(row: typeof executionWorkItems.$inferSelect): ExecutionWo
     repositoryIds,
     metadata: JSON.parse(metadataJson),
     governance: executionGovernanceSchema.parse(JSON.parse(governanceJson)),
+  });
+}
+
+function parsePlan(row: typeof executionPlans.$inferSelect) {
+  const {
+    sourceSnapshotJson,
+    targetJson,
+    harnessConfigJson,
+    workspacePolicyJson,
+    runtimeConfigJson,
+    ...plan
+  } = row;
+  return executionPlanSchema.parse({
+    ...plan,
+    sourceSnapshot: JSON.parse(sourceSnapshotJson),
+    target: JSON.parse(targetJson),
+    harnessConfig: JSON.parse(harnessConfigJson),
+    workspacePolicy: JSON.parse(workspacePolicyJson),
+    runtimeConfig: JSON.parse(runtimeConfigJson),
   });
 }
 

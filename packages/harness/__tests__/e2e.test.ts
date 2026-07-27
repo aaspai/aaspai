@@ -18,7 +18,7 @@
  *   - registry / capabilitiesFor
  *   - the DB write / session_events persistence path
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -2400,14 +2400,15 @@ describe("e2e: opencode_cli driver", () => {
  */
 describe("e2e: opencode_cli driver (real CLI smoke)", () => {
   const hasRealCli = (() => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { execSync } = require("node:child_process") as typeof import("node:child_process");
-      execSync(isWin ? "where opencode" : "which opencode", { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
+    if (process.env.OPENCODE_CLI && existsSync(process.env.OPENCODE_CLI)) return true;
+    if (isWin) {
+      return [
+        "C:\\Program Files\\nodejs\\opencode",
+        "C:\\Program Files\\nodejs\\opencode.cmd",
+        `${process.env.APPDATA ?? ""}\\npm\\opencode.cmd`,
+      ].some((candidate) => existsSync(candidate));
     }
+    return true;
   })();
 
   it.skipIf(!hasRealCli)(

@@ -6,6 +6,7 @@ import {
   nonNegativeIntegerSchema,
   positiveIntegerSchema,
 } from "./primitives";
+import type { RunProcessOptions, RunProcessResult } from "./runtime";
 
 /**
  * Version of the harness (adapter) contract.
@@ -50,9 +51,16 @@ export const adapterRuntimeSchema = z
     sessionParams: jsonObjectSchema.optional(),
     sessionDisplayId: z.string().trim().min(1).max(256).optional(),
     taskKey: z.string().trim().min(1).max(256).optional(),
+    runtimeIdentity: jsonObjectSchema.optional(),
   })
   .strict();
 export type AdapterRuntime = z.infer<typeof adapterRuntimeSchema>;
+
+/** Runtime-owned process boundary used by provider adapters. */
+export interface AdapterRuntimeExecution {
+  run(options: RunProcessOptions): Promise<RunProcessResult>;
+  identity?: Record<string, unknown>;
+}
 
 /** Token accounting for a run. */
 export const usageSummarySchema = z
@@ -146,6 +154,7 @@ export const adapterExecutionResultSchema = z
     biller: z.string().trim().min(1).max(128).optional(),
     billingType: adapterBillingTypeSchema.optional(),
     model: z.string().trim().min(1).max(256).optional(),
+    runtimeIdentity: jsonObjectSchema.optional(),
     costUsd: z.number().nonnegative().optional(),
     runtimeServices: z.array(adapterRuntimeServiceReportSchema).max(32).optional(),
     resultJson: jsonObjectSchema.optional(),
@@ -194,6 +203,11 @@ export const adapterExecutionContextSchema = z
     signal: z
       .custom<AbortSignal>((v) => typeof v === "object" && v !== null, {
         message: "signal must be an AbortSignal",
+      })
+      .optional(),
+    execution: z
+      .custom<AdapterRuntimeExecution>((v) => typeof v === "object" && v !== null, {
+        message: "execution must be a runtime process boundary",
       })
       .optional(),
     onLog: z.custom<(stream: "stdout" | "stderr", chunk: string) => Promise<void> | void>(

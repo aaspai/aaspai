@@ -13,10 +13,18 @@ export const localTarget: RuntimeTarget = {
       throw new Error(`localTarget cannot run a ${target.kind} target.`);
     }
     const { runProcess } = await import("@aaspai/harness");
-    return await runProcess({
+    const result = await runProcess({
       ...options,
       cwd: target.cwd ?? options.cwd ?? process.cwd(),
     });
+    return {
+      ...result,
+      runtimeIdentity: {
+        kind: "local",
+        cwd: target.cwd ?? options.cwd ?? process.cwd(),
+        ...(result.pid ? { pid: result.pid } : {}),
+      },
+    };
   },
   async prepareWorkspace(target, { localDir, remoteDir }) {
     if (target.kind !== "local") throw new Error("localTarget only.");

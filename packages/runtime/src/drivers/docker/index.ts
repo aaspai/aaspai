@@ -39,6 +39,7 @@ export interface DockerEnvironmentProviderOptions {
 }
 
 export interface DockerEnvironmentProvider {
+  readiness(): Promise<{ ready: boolean; reason?: string }>;
   provision(
     target: DockerExecutionTarget,
     workspacePath: string,
@@ -84,6 +85,14 @@ export function createDockerEnvironmentProvider(
   };
 
   const provider: DockerEnvironmentProvider = {
+    async readiness() {
+      try {
+        await docker(["version", "--format", "{{.Server.Version}}"]);
+        return { ready: true };
+      } catch (error) {
+        return { ready: false, reason: error instanceof Error ? error.message : String(error) };
+      }
+    },
     async provision(target, workspacePath, signal) {
       const remoteCwd = target.remoteCwd ?? DEFAULT_REMOTE_CWD;
       const args = [
@@ -99,7 +108,18 @@ export function createDockerEnvironmentProvider(
       if (target.memoryMb !== undefined) args.push("--memory", `${target.memoryMb}m`);
       if (target.cpuShares !== undefined) args.push("--cpu-shares", String(target.cpuShares));
       args.push(target.image, "tail", "-f", "/dev/null");
-      const created = await docker(args, { signal });
+      const created = await commandRunner.run({ command, args, signal });
+      if (created.exitCode !== 0 || created.signal || created.timedOut) {
+        const partialContainerId = created.stdout.trim().split(/\s+/)[0];
+        if (partialContainerId) {
+          try {
+            await docker(["rm", "--force", "--volumes", partialContainerId]);
+          } catch {
+            // Startup reconciliation remains authoritative for an interrupted create.
+          }
+        }
+        throw new DockerRuntimeError("create", created.stderr || created.stdout);
+      }
       const containerId = created.stdout.trim().split(/\s+/)[0];
       if (!containerId) throw new DockerRuntimeError("create", "Docker returned no container ID");
       const lease = {
@@ -135,24 +155,50 @@ export function createDockerEnvironmentProvider(
         "--env",
         `${key}=${value}`,
       ]);
-      return await docker(
-        [
-          "exec",
-          "--workdir",
-          target.remoteCwd ?? lease.remoteCwd,
-          ...envArgs,
-          lease.containerId,
-          options.command,
-          ...options.args,
-        ],
-        {
+      const terminateContainer = (): void => {
+        void docker(["kill", lease.containerId]).catch(() => undefined);
+      };
+      options.signal?.addEventListener("abort", terminateContainer, { once: true });
+      const timeoutHandle =
+        options.timeoutMs === undefined
+          ? undefined
+          : setTimeout(terminateContainer, options.timeoutMs);
+      let result: RunProcessResult;
+      try {
+        result = await commandRunner.run({
+          command,
+          args: [
+            "exec",
+            "--workdir",
+            target.remoteCwd ?? lease.remoteCwd,
+            ...envArgs,
+            lease.containerId,
+            options.command,
+            ...options.args,
+          ],
           stdin: options.stdin,
           signal: options.signal,
           timeoutMs: options.timeoutMs,
           onLog: options.onLog,
           onSpawn: options.onSpawn,
-        },
-      );
+        });
+      } finally {
+        if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+        options.signal?.removeEventListener("abort", terminateContainer);
+      }
+      if (options.signal?.aborted || result.timedOut) {
+        try {
+          await docker(["kill", lease.containerId]);
+        } catch {
+          // The container may have exited with the exec process.
+        }
+        try {
+          await docker(["wait", lease.containerId]);
+        } catch {
+          // Release/reconciliation remains authoritative if it vanished.
+        }
+      }
+      return result;
     },
 
     async finalize(lease) {
@@ -221,6 +267,10 @@ export function createDockerTarget(options: DockerEnvironmentProviderOptions = {
   const provider = createDockerEnvironmentProvider(options);
   return {
     info: { kind: "docker", label: "Docker isolated environment", status: "ready" },
+    async readiness(target) {
+      if (target.kind !== "docker") return { ready: false, reason: "wrong target kind" };
+      return provider.readiness();
+    },
     async run(target, runOptions) {
       if (target.kind !== "docker")
         throw new Error(`dockerTarget cannot run a ${target.kind} target.`);
@@ -231,7 +281,15 @@ export function createDockerTarget(options: DockerEnvironmentProviderOptions = {
         await provider.prepare(lease);
         const result = await provider.execute(lease, target, runOptions);
         await provider.finalize(lease);
-        return result;
+        return {
+          ...result,
+          runtimeIdentity: {
+            kind: "docker",
+            cwd: target.remoteCwd ?? lease.remoteCwd,
+            containerId: lease.containerId,
+            ...(result.pid ? { pid: result.pid } : {}),
+          },
+        };
       } finally {
         await provider.release(lease);
       }

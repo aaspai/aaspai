@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Layer Two execution evidence** (`packages/execution`, `packages/runtime`,
+  `packages/harness`, `packages/sessions`) — plan-backed WorkItems now execute
+  through real local, Docker, SSH, and Daytona runtime boundaries with durable
+  raw output, canonical events, provider session lineage, resume/recovery, and
+  truthful pause/cancel cleanup evidence.
 - **M14 control-plane boundary and capability truth** — legacy session and loop
   APIs now fail closed and scope reads/writes to the authenticated company;
   harness/runtime registries expose normalized capability metadata through the

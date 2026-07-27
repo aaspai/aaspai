@@ -7,8 +7,9 @@ import type {
   RunProcessResult,
   SshExecutionTarget,
 } from "@aaspai/contracts/runtime";
+import { runProcess } from "@aaspai/harness";
 import type { RuntimeTarget } from "../../shared/execution-target.js";
-import { preferredShellForSandbox, shellCommandArgs, shellQuote } from "../../shared/shell.js";
+import { shellQuote } from "../../shared/shell.js";
 
 /**
  * Resolve the path to the `ssh` and `scp` binaries on the host.
@@ -55,8 +56,25 @@ function buildSshArgs(target: SshExecutionTarget, command: string): string[] {
   }
   args.push("-o", "BatchMode=yes", "-o", "LogLevel=ERROR");
   args.push(`${target.username}@${target.host}`);
-  args.push(...shellCommandArgs(command));
+  // Everything after the destination is the remote command. Do not pass
+  // `-c`; OpenSSH parses it as its own cipher option even after the host.
+  args.push(command);
   return args;
+}
+
+function buildScpSecurityArgs(target: SshExecutionTarget): string[] {
+  return [
+    "-P",
+    String(target.port),
+    ...(target.privateKey ? ["-i", target.privateKey] : []),
+    ...(target.strictHostKeyChecking === false
+      ? ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+      : target.knownHosts
+        ? ["-o", `UserKnownHostsFile=${target.knownHosts}`]
+        : []),
+    "-o",
+    "BatchMode=yes",
+  ];
 }
 
 /**
@@ -70,13 +88,15 @@ async function runOverSsh(
   target: SshExecutionTarget,
   options: RunProcessOptions,
 ): Promise<RunProcessResult> {
-  if (!isSshConfigured()) throw new SshNotConfiguredError();
   const sshBin = resolveSshBinary("ssh");
   const scpBin = resolveSshBinary("scp");
   const startedAt = new Date();
 
   // 1. Create a fresh remote workspace dir
-  const mkTmpCmd = `mktemp -d ${shellQuote(`aaspai-ssh-XXXXXX`)}`;
+  const remoteBase = target.remoteCwd ?? "/tmp/aaspai";
+  const mkTmpCmd =
+    `mkdir -p ${shellQuote(remoteBase)} && ` +
+    `mktemp -d ${shellQuote(`${remoteBase.replace(/\/+$/, "")}/aaspai-ssh-XXXXXX`)}`;
   const mkArgs = buildSshArgs(target, mkTmpCmd);
   const mkChild = spawn(sshBin, mkArgs, {
     stdio: ["ignore", "pipe", "pipe"],
@@ -103,18 +123,23 @@ async function runOverSsh(
     };
   }
   const remoteWorkdir = Buffer.concat(mkOut).toString("utf8").trim();
+  if (!remoteWorkdir) {
+    return {
+      exitCode: 1,
+      timedOut: false,
+      stdout: "",
+      stderr: "ssh returned an empty remote workspace path",
+      startedAt: startedAt.toISOString(),
+      finishedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt.getTime(),
+    };
+  }
 
   try {
     // 2. If `options.cwd` is set, sync it to remoteWorkdir (best effort)
     if (options.cwd) {
       const scpArgs = [
-        "-P",
-        String(target.port),
-        ...(target.privateKey ? ["-i", target.privateKey] : []),
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=no",
+        ...buildScpSecurityArgs(target),
         "-r",
         `${options.cwd}/.`,
         `${target.username}@${target.host}:${remoteWorkdir}/`,
@@ -131,13 +156,13 @@ async function runOverSsh(
     }
 
     // 3. Run the actual command remotely
-    const shell = preferredShellForSandbox(target.shellCommand);
     const cmd =
       options.args.length === 0
         ? options.command
         : `${options.command} ${options.args.map(shellQuote).join(" ")}`;
-    const wrapped = `cd ${shellQuote(remoteWorkdir)} && exec ${cmd}`;
-    const runArgs = buildSshArgs(target, wrapped);
+    const remotePidFile = `${remoteWorkdir}/.aaspai-remote-pid`;
+    const tracked = `cd ${shellQuote(remoteWorkdir)} && printf '%s' "$$" > ${shellQuote(remotePidFile)} && exec ${cmd}`;
+    const runArgs = buildSshArgs(target, tracked);
 
     return await new Promise<RunProcessResult>((resolve) => {
       const child = spawn(sshBin, runArgs, {
@@ -175,22 +200,50 @@ async function runOverSsh(
         closed = true;
         if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
         const finishedAt = new Date();
-        resolve({
-          exitCode: code,
-          signal: signal ?? undefined,
-          timedOut: signal === "SIGTERM",
-          stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-          stderr: Buffer.concat(stderrChunks).toString("utf8"),
-          startedAt: startedAt.toISOString(),
-          finishedAt: finishedAt.toISOString(),
-          durationMs: finishedAt.getTime() - startedAt.getTime(),
+        void runProcess({
+          command: sshBin,
+          args: buildSshArgs(target, `cat ${shellQuote(remotePidFile)}`),
+          timeoutMs: 5_000,
+        }).then((pidResult) => {
+          const remotePid = Number.parseInt(pidResult.stdout.trim(), 10);
+          resolve({
+            exitCode: code,
+            signal: signal ?? undefined,
+            timedOut: signal === "SIGTERM",
+            stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+            stderr: Buffer.concat(stderrChunks).toString("utf8"),
+            startedAt: startedAt.toISOString(),
+            finishedAt: finishedAt.toISOString(),
+            durationMs: finishedAt.getTime() - startedAt.getTime(),
+            runtimeIdentity: {
+              kind: "ssh",
+              cwd: remoteWorkdir,
+              host: target.host,
+              remoteCwd: remoteWorkdir,
+              connectionIdentity: `${target.username}@${target.host}:${target.port}`,
+              ...(Number.isInteger(remotePid) && remotePid > 0 ? { remotePid } : {}),
+            },
+          });
         });
       });
       void closed;
-      void shell;
     });
   } finally {
-    // 4. Clean up the remote tempdir (best effort)
+    // 4. Restore the assigned workspace before removing the remote lease.
+    if (options.cwd) {
+      const restoreArgs = [
+        ...buildScpSecurityArgs(target),
+        "-r",
+        `${target.username}@${target.host}:${remoteWorkdir}/.`,
+        `${options.cwd}/`,
+      ];
+      await new Promise<void>((resolve) => {
+        const c = spawn(scpBin, restoreArgs, { stdio: "ignore", windowsHide: true });
+        c.on("close", () => resolve());
+        c.on("error", () => resolve());
+      });
+    }
+    // 5. Clean up the remote tempdir (best effort)
     const cleanupArgs = buildSshArgs(target, `rm -rf ${shellQuote(remoteWorkdir)}`);
     spawn(sshBin, cleanupArgs, { stdio: "ignore", windowsHide: true }).on("error", () => undefined);
   }
@@ -240,6 +293,17 @@ export const sshTarget: RuntimeTarget = {
       artifacts: true,
     },
   },
+  async readiness(target) {
+    if (target.kind !== "ssh") return { ready: false, reason: "wrong target kind" };
+    const result = await runProcess({
+      command: resolveSshBinary("ssh"),
+      args: buildSshArgs(target, "true"),
+      timeoutMs: 10_000,
+    });
+    return result.exitCode === 0
+      ? { ready: true }
+      : { ready: false, reason: result.stderr || "SSH connectivity check failed" };
+  },
   async run(target, options) {
     if (target.kind !== "ssh") {
       throw new Error(`sshTarget cannot run a ${target.kind} target.`);
@@ -248,18 +312,12 @@ export const sshTarget: RuntimeTarget = {
   },
   async prepareWorkspace(target, { localDir, remoteDir }) {
     if (target.kind !== "ssh") throw new Error("sshTarget only.");
-    if (!isSshConfigured()) throw new SshNotConfiguredError();
-    const sshTarget = sshTargetFromEnv();
     const scpBin = resolveSshBinary("scp");
     const args = [
-      "-P",
-      String(sshTarget.port),
-      ...(sshTarget.privateKey ? ["-i", sshTarget.privateKey] : []),
-      "-o",
-      "BatchMode=yes",
+      ...buildScpSecurityArgs(target),
       "-r",
       `${localDir}/.`,
-      `${sshTarget.username}@${sshTarget.host}:${remoteDir}/`,
+      `${target.username}@${target.host}:${remoteDir}/`,
     ];
     return await new Promise<void>((res, rej) => {
       const c = spawn(scpBin, args, { stdio: "ignore", windowsHide: true });
@@ -269,17 +327,11 @@ export const sshTarget: RuntimeTarget = {
   },
   async restoreWorkspace(target, { localDir, remoteDir }) {
     if (target.kind !== "ssh") throw new Error("sshTarget only.");
-    if (!isSshConfigured()) throw new SshNotConfiguredError();
-    const sshTarget = sshTargetFromEnv();
     const scpBin = resolveSshBinary("scp");
     const args = [
-      "-P",
-      String(sshTarget.port),
-      ...(sshTarget.privateKey ? ["-i", sshTarget.privateKey] : []),
-      "-o",
-      "BatchMode=yes",
+      ...buildScpSecurityArgs(target),
       "-r",
-      `${sshTarget.username}@${sshTarget.host}:${remoteDir}/.`,
+      `${target.username}@${target.host}:${remoteDir}/.`,
       `${localDir}/`,
     ];
     return await new Promise<void>((res, rej) => {
