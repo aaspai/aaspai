@@ -5,6 +5,7 @@ import type {
   Artifact,
   AttemptRole,
   AttemptStatus,
+  DefinitionRevision,
   ExecutionEvent,
   ExecutionRawOutput,
   ExecutionWorkItem,
@@ -21,6 +22,7 @@ import type {
 import {
   agentAttemptSchema,
   assertValidAttemptTransition,
+  definitionRevisionSchema,
   executionEventSchema,
   executionPlanSchema,
   executionRawOutputSchema,
@@ -48,6 +50,7 @@ import {
   executionVerificationSchema,
 } from "@aaspai/contracts/governance";
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
+import type { ResolvedAgentProfile } from "@aaspai/contracts/profile";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
   agentAttempts,
@@ -240,6 +243,7 @@ export interface CreatePlanInput {
     cleanup?: "always" | "retain_on_failure";
   };
   runtimeConfig?: Record<string, unknown>;
+  profile?: ResolvedAgentProfile;
 }
 
 export interface AppendEventInput {
@@ -332,6 +336,15 @@ export class ExecutionStore {
     } satisfies typeof definitionRevisions.$inferInsert;
     await this.db.insert(definitionRevisions).values(row);
     return row;
+  }
+
+  async getDefinitionRevision(id: string): Promise<DefinitionRevision | null> {
+    const rows = await this.db
+      .select()
+      .from(definitionRevisions)
+      .where(eq(definitionRevisions.id, id))
+      .limit(1);
+    return rows[0] ? definitionRevisionSchema.parse(rows[0]) : null;
   }
 
   async createWorkItem(input: CreateWorkItemInput) {
@@ -495,7 +508,7 @@ export class ExecutionStore {
     return parseWorkItem(row);
   }
 
-  async createWorkflowRun(input: CreateWorkflowRunInput) {
+  async createWorkflowRun(input: CreateWorkflowRunInput): Promise<WorkflowRun> {
     const existing = await this.db
       .select()
       .from(workflowRuns)
@@ -506,7 +519,7 @@ export class ExecutionStore {
         ),
       )
       .limit(1);
-    if (existing[0]) return existing[0];
+    if (existing[0]) return workflowRunSchema.parse(existing[0]);
     const row = {
       id: input.id ?? makeId("run"),
       organizationId: input.organizationId,
@@ -521,7 +534,7 @@ export class ExecutionStore {
       createdAt: now(),
     } satisfies typeof workflowRuns.$inferInsert;
     await this.db.insert(workflowRuns).values(row);
-    return row;
+    return workflowRunSchema.parse(row);
   }
 
   async getWorkflowRunByIdempotency(
@@ -2009,6 +2022,8 @@ export class ExecutionStore {
         harnessConfig: input.harnessConfig ?? {},
         workspacePolicy: input.workspacePolicy ?? { restore: "changes", cleanup: "always" },
         runtimeConfig: input.runtimeConfig ?? {},
+        profileHash: input.profile?.profileHash ?? "profile-unknown",
+        profileSnapshot: input.profile ?? {},
         createdAt: existingPlan.createdAt,
       });
       if (JSON.stringify(existingPlan) !== JSON.stringify(requested)) {
@@ -2034,6 +2049,8 @@ export class ExecutionStore {
         input.workspacePolicy ?? { restore: "changes", cleanup: "always" },
       ),
       runtimeConfigJson: JSON.stringify(input.runtimeConfig ?? {}),
+      profileHash: input.profile?.profileHash ?? "profile-unknown",
+      profileSnapshotJson: JSON.stringify(input.profile ?? {}),
       createdAt: now(),
     } satisfies typeof executionPlans.$inferInsert;
     await this.db.insert(executionPlans).values(row);
@@ -2045,6 +2062,17 @@ export class ExecutionStore {
       .select()
       .from(executionPlans)
       .where(eq(executionPlans.id, planId))
+      .limit(1);
+    return rows[0] ? parsePlan(rows[0]) : null;
+  }
+
+  async getPlanForAttempt(
+    attemptId: string,
+  ): Promise<ReturnType<typeof executionPlanSchema.parse> | null> {
+    const rows = await this.db
+      .select()
+      .from(executionPlans)
+      .where(eq(executionPlans.attemptId, attemptId))
       .limit(1);
     return rows[0] ? parsePlan(rows[0]) : null;
   }
@@ -2207,6 +2235,7 @@ function parsePlan(row: typeof executionPlans.$inferSelect) {
     harnessConfigJson,
     workspacePolicyJson,
     runtimeConfigJson,
+    profileSnapshotJson,
     ...plan
   } = row;
   return executionPlanSchema.parse({
@@ -2216,6 +2245,7 @@ function parsePlan(row: typeof executionPlans.$inferSelect) {
     harnessConfig: JSON.parse(harnessConfigJson),
     workspacePolicy: JSON.parse(workspacePolicyJson),
     runtimeConfig: JSON.parse(runtimeConfigJson),
+    profileSnapshot: JSON.parse(profileSnapshotJson),
   });
 }
 

@@ -7,6 +7,7 @@ import type {
 } from "@aaspai/contracts/harness";
 import { adapterTypeSchema, HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
 import type { JsonObject } from "@aaspai/contracts/primitives";
+import { type ResolvedAgentProfile, resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
 import { getAdapter } from "@aaspai/harness";
 import { resolveTarget } from "@aaspai/runtime";
 import { assertHarnessExecutable, assertRuntimeReady } from "./capabilities.js";
@@ -26,7 +27,8 @@ export interface HarnessAgentInput {
 export interface ExecuteHarnessPlanInput {
   plan: ExecutionPlan;
   workspace: ExecutionWorkspace;
-  agent: HarnessAgentInput;
+  agent?: HarnessAgentInput;
+  profile?: ResolvedAgentProfile;
   signal?: AbortSignal;
 }
 
@@ -36,6 +38,28 @@ export class HarnessExecutionPlanRunner {
 
   async run(input: ExecuteHarnessPlanInput): Promise<AdapterExecutionResult> {
     this.assertWorkspace(input);
+    const profile =
+      input.profile ??
+      (input.plan.profileHash !== "profile-unknown" &&
+      input.plan.profileSnapshot &&
+      Object.keys(input.plan.profileSnapshot).length > 0
+        ? resolvedAgentProfileSchema.parse(input.plan.profileSnapshot)
+        : undefined);
+    if (profile && profile.profileHash !== input.plan.profileHash) {
+      throw new Error("Persisted execution profile hash does not match the execution plan");
+    }
+    const agent: HarnessAgentInput = profile
+      ? {
+          id: profile.agent.id,
+          name: profile.agent.title,
+          adapterType: profile.harness.adapter as AdapterType,
+          adapterConfig: profile.inputs.adapterConfig,
+          role: profile.agent.role,
+        }
+      : (input.agent ??
+        (() => {
+          throw new Error("Execution requires a resolved profile");
+        })());
     const adapterType = adapterTypeSchema.parse(input.plan.harness);
     assertHarnessExecutable(adapterType);
     await assertRuntimeReady(input.plan.target);
@@ -45,10 +69,10 @@ export class HarnessExecutionPlanRunner {
       cwd: input.workspace.path,
     } as ExecutionPlan["target"];
     const adapter = getAdapter(adapterType);
-    const adapterConfig = { ...input.agent.adapterConfig, ...input.plan.harnessConfig };
+    const adapterConfig = { ...agent.adapterConfig, ...input.plan.harnessConfig };
     const session = await this.store.createHarnessSession({
       organizationId: input.plan.organizationId,
-      agentId: input.agent.id,
+      agentId: agent.id,
       adapter: adapterType,
       prompt: input.plan.prompt,
       runtime: { cwd: input.workspace.path },
@@ -104,17 +128,17 @@ export class HarnessExecutionPlanRunner {
         runId: input.plan.attemptId,
         organizationId: input.plan.organizationId,
         agent: {
-          id: input.agent.id,
+          id: agent.id,
           organizationId: input.plan.organizationId,
-          name: input.agent.name,
+          name: agent.name,
           adapterType,
           adapterConfig,
         },
         runtime: {
-          sessionId: input.agent.resumeSessionId,
+          sessionId: agent.resumeSessionId,
           sessionParams: {
-            resume: Boolean(input.agent.resumeSessionId),
-            fork: input.agent.forkSession === true,
+            resume: Boolean(agent.resumeSessionId),
+            fork: agent.forkSession === true,
           },
           runtimeIdentity: {
             kind: input.plan.target.kind,
@@ -126,7 +150,7 @@ export class HarnessExecutionPlanRunner {
         context: {
           cwd: input.workspace.path,
           prompt: input.plan.prompt,
-          role: input.agent.role,
+          role: agent.role,
         },
         execution: {
           identity: {
@@ -192,7 +216,7 @@ export class HarnessExecutionPlanRunner {
           }
         },
         onMeta: async (meta) => recordSessionEvent("system", { meta }),
-        tools: input.agent.tools,
+        tools: agent.tools,
       });
     } catch (error) {
       result = {

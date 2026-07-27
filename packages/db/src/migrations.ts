@@ -269,6 +269,8 @@ const SQLITE_STATEMENTS = [
     harness_config_json TEXT NOT NULL DEFAULT '{}',
     workspace_policy_json TEXT NOT NULL DEFAULT '{"restore":"changes","cleanup":"always"}',
     runtime_config_json TEXT NOT NULL DEFAULT '{}',
+    profile_hash TEXT NOT NULL DEFAULT 'profile-unknown',
+    profile_snapshot_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS execution_artifacts (
@@ -624,6 +626,15 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
     check:
       "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'workspace_policy_json'",
     sql: 'ALTER TABLE execution_plans ADD COLUMN workspace_policy_json TEXT NOT NULL DEFAULT \'{"restore":"changes","cleanup":"always"}\'',
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'profile_hash'",
+    sql: "ALTER TABLE execution_plans ADD COLUMN profile_hash TEXT NOT NULL DEFAULT 'profile-unknown'",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'profile_snapshot_json'",
+    sql: "ALTER TABLE execution_plans ADD COLUMN profile_snapshot_json TEXT NOT NULL DEFAULT '{}'",
   },
   // session_events.seq was added after the initial scaffold. Older
   // DBs need it added; we back-fill with the row id so the order

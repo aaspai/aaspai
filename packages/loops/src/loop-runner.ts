@@ -6,10 +6,9 @@
  * are executed later by the dependency scheduler.
  */
 
-import type { ExecutionWorkItem, LoopOutput } from "@aaspai/contracts/execution";
+import type { ExecutionWorkItem, LoopOutput, WorkflowRun } from "@aaspai/contracts/execution";
 import type { ExecutionGovernanceInput } from "@aaspai/contracts/governance";
 import type { LoopConfigSource, LoopPattern, WorkItem } from "@aaspai/contracts/phase2";
-import type { ExecutionStore } from "@aaspai/execution";
 import { getLogger } from "@aaspai/observability";
 import type { KillSwitch } from "./kill-switch.js";
 import type { DecideResult, ResolvedLoopPattern } from "./pattern.js";
@@ -28,10 +27,59 @@ export interface LoopRunnerOptions {
   /** Kept as a compatibility seam for file-backed loop sources. */
   loopSource?: LoopConfigSource;
   execution: {
-    store: ExecutionStore;
+    store: LoopPersistence;
     lineage: LoopExecutionLineage;
   };
   killSwitch?: KillSwitch;
+}
+
+/** Application-owned persistence port. Loop decisions do not depend on a DB or runner package. */
+export interface LoopPersistence {
+  getWorkflowRunByIdempotency(
+    organizationId: string,
+    idempotencyKey: string,
+  ): Promise<WorkflowRun | null>;
+  createWorkflowRun(input: {
+    organizationId: string;
+    goalId: string;
+    definitionRevisionId: string;
+    sourceType?: string | null;
+    sourceId?: string | null;
+    idempotencyKey: string;
+  }): Promise<WorkflowRun>;
+  updateWorkflowRunStatus(runId: string, status: WorkflowRun["status"]): Promise<WorkflowRun>;
+  createLoopOutput(input: {
+    organizationId: string;
+    loopId: string;
+    workflowRunId: string;
+    kind: LoopOutput["kind"];
+    sourceRef: string;
+    title: string;
+    body: string;
+    severity?: LoopOutput["severity"];
+    workItemId?: string | null;
+  }): Promise<LoopOutput>;
+  createWorkItem(input: {
+    organizationId: string;
+    goalId: string;
+    projectId: string;
+    repositoryId: string;
+    workflowRunId: string;
+    definitionRevisionId: string;
+    title: string;
+    description: string;
+    branchName: string | null;
+    sourceCommitSha: string | null;
+    priority: number;
+    deadlineAt: string | null;
+    maxAttempts: number;
+    idempotencyKey: string;
+    metadata: Record<string, unknown>;
+    governance: ExecutionGovernanceInput;
+  }): Promise<Pick<ExecutionWorkItem, "id">>;
+  getWorkItem(id: string): Promise<ExecutionWorkItem | null>;
+  listWorkItems(organizationId: string): Promise<ExecutionWorkItem[]>;
+  listLoopOutputs(organizationId: string, loopId?: string): Promise<LoopOutput[]>;
 }
 
 export interface RunOptions {
@@ -198,9 +246,7 @@ export class LoopRunner {
 
   private async replayExisting(
     pattern: LoopPattern,
-    run: Awaited<ReturnType<ExecutionStore["getWorkflowRun"]>> extends infer T
-      ? Exclude<T, null>
-      : never,
+    run: WorkflowRun,
     startedAt: number,
   ): Promise<RunOutcome> {
     const workItems = (

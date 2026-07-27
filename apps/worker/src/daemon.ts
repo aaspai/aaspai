@@ -19,6 +19,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { AgentAttempt, ExecutionWorkItem } from "@aaspai/contracts/execution";
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
+import { resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
 import {
   closeDefaultDb,
   definitionRevisions,
@@ -27,7 +28,12 @@ import {
   repositories,
   wakeups as wakeupsTable,
 } from "@aaspai/db";
-import { DependencyScheduler, ExecutionStore, HarnessExecutionPlanRunner } from "@aaspai/execution";
+import {
+  compileProfile,
+  DependencyScheduler,
+  ExecutionStore,
+  HarnessExecutionPlanRunner,
+} from "@aaspai/execution";
 import {
   FileAgentConfigSource,
   FileKnowledgeSource,
@@ -43,6 +49,8 @@ import {
 } from "@aaspai/loops";
 import { getLogger } from "@aaspai/observability";
 import { Sessions } from "@aaspai/sessions";
+import { loadSkillDirectory, SkillRegistry } from "@aaspai/skills";
+import { createBuiltInRegistry } from "@aaspai/tools";
 import { and, eq } from "drizzle-orm";
 
 const log = getLogger("worker.daemon");
@@ -106,7 +114,8 @@ export class WorkerDaemon {
     const sessionFacade = new Sessions({
       agentSource: this.agentSource,
       knowledgeSource: this.knowledgeSource,
-      skillRegistry: undefined as never,
+      // Legacy wakeups are compatibility-only; autonomous work uses compileProfile below.
+      skillRegistry: new SkillRegistry(),
     });
     const compatibility = sessionFacade as unknown as {
       start?: unknown;
@@ -538,7 +547,18 @@ export class WorkerDaemon {
     adapter: string;
     prompt: string;
   }): Promise<AdapterExecutionResult> {
-    const agent = await this.agentSource.get(input.agentId);
+    const persistedPlan = await this.executionStore.getPlanForAttempt(input.attempt.id);
+    const profile = persistedPlan
+      ? resolvedAgentProfileSchema.parse(persistedPlan.profileSnapshot)
+      : await this.compileAutonomousProfile({
+          agentId: input.agentId,
+          adapter: input.adapter,
+          prompt: input.prompt,
+          definitionRevisionId: input.workItem.definitionRevisionId ?? "",
+        });
+    const skillRegistry = persistedPlan
+      ? null
+      : await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
     const root = resolve(process.env.AASPAI_WORKSPACE_ROOT ?? join("workspace", "worker"));
     await mkdir(root, { recursive: true });
     const workspacePath = await mkdtemp(join(root, `${input.attempt.id}-`));
@@ -551,46 +571,85 @@ export class WorkerDaemon {
       baseCommitSha: input.workItem.sourceCommitSha ?? "0000000",
       status: "ready",
     });
-    const adapterConfig = {
-      ...(agent.model ? { model: agent.model } : {}),
-      ...agent.adapterConfig,
-    };
-    const plan = await this.executionStore.createPlan({
-      organizationId: this.organizationId,
-      definitionRevisionId: input.workItem.definitionRevisionId ?? "revision:missing",
-      workItemId: input.workItem.id,
-      attemptId: input.attempt.id,
-      sourceSnapshot: {
-        repositoryId: input.workItem.repositoryId,
-        commitSha: input.workItem.sourceCommitSha ?? "0000000",
-        branchName: input.workItem.branchName ?? "worker",
-        capturedAt: new Date().toISOString(),
-      },
-      target: { kind: "local", cwd: workspacePath, envPassthrough: false },
-      harness: input.adapter,
-      agentId: input.agentId,
-      idempotencyKey: input.attempt.id,
-      prompt: input.prompt,
-      harnessConfig: adapterConfig,
-      runtimeConfig: { workspacePolicy: "disposable" },
-    });
+    try {
+      const materialization = await (skillRegistry ?? new SkillRegistry()).materialize(
+        profile.skills.map((entry) => entry.skill),
+        {
+          adapterType: input.adapter,
+          runtimeBaseDir: workspacePath,
+          sharedHome: false,
+          autonomous: true,
+        },
+      );
+      if (materialization.errors.length > 0)
+        throw new Error(`Skill materialization failed: ${materialization.errors.join("; ")}`);
+    } catch (error) {
+      await this.executionStore.updateWorkspaceStatus(workspace.id, "releasing");
+      await this.executionStore.updateWorkspaceStatus(workspace.id, "released");
+      await rm(workspacePath, { recursive: true, force: true });
+      throw error;
+    }
+    const adapterConfig = profile.inputs.adapterConfig;
+    const plan =
+      persistedPlan ??
+      (await this.executionStore.createPlan({
+        organizationId: this.organizationId,
+        definitionRevisionId: input.workItem.definitionRevisionId ?? "revision:missing",
+        workItemId: input.workItem.id,
+        attemptId: input.attempt.id,
+        sourceSnapshot: {
+          repositoryId: input.workItem.repositoryId,
+          commitSha: input.workItem.sourceCommitSha ?? "0000000",
+          branchName: input.workItem.branchName ?? "worker",
+          capturedAt: new Date().toISOString(),
+        },
+        target: {
+          ...profile.runtime.target,
+          ...(profile.runtime.target.kind === "local" ? { cwd: workspacePath } : {}),
+        },
+        harness: input.adapter,
+        agentId: input.agentId,
+        idempotencyKey: input.attempt.id,
+        prompt: input.prompt,
+        harnessConfig: adapterConfig,
+        runtimeConfig: { workspacePolicy: "disposable" },
+        profile,
+      }));
     try {
       return await new HarnessExecutionPlanRunner(this.executionStore).run({
         plan,
         workspace: { ...workspace, status: "ready" },
-        agent: {
-          id: input.agentId,
-          name: agent.title,
-          adapterType: input.adapter as never,
-          adapterConfig,
-          role: agent.role,
-        },
+        profile,
       });
     } finally {
       await this.executionStore.updateWorkspaceStatus(workspace.id, "releasing");
       await this.executionStore.updateWorkspaceStatus(workspace.id, "released");
       await rm(workspacePath, { recursive: true, force: true });
     }
+  }
+
+  private async compileAutonomousProfile(input: {
+    agentId: string;
+    adapter: string;
+    prompt: string;
+    definitionRevisionId: string;
+  }) {
+    const definitionRevision = await this.executionStore.getDefinitionRevision(
+      input.definitionRevisionId,
+    );
+    if (!definitionRevision) throw new Error("Definition revision missing");
+    const skillRegistry = await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
+    return compileProfile({
+      organizationId: this.organizationId,
+      agentId: input.agentId,
+      definitionRevision,
+      agentSource: this.agentSource,
+      knowledgeSource: this.knowledgeSource,
+      skillRegistry,
+      toolRegistry: createBuiltInRegistry(),
+      adapter: input.adapter,
+      prompt: input.prompt,
+    });
   }
 
   private async ensureLoopLineage(): Promise<LoopExecutionLineage> {

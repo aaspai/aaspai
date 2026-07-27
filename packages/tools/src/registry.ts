@@ -10,7 +10,11 @@ const log = getLogger("tools.registry");
 
 export interface ToolResolution {
   tool: Tool;
+  allowed: boolean;
+  ready: boolean;
   requiresApproval: boolean;
+  denialReason?: string;
+  readinessReason?: string;
 }
 
 export class ToolRegistry {
@@ -36,6 +40,22 @@ export class ToolRegistry {
     return [...this.byName.values()];
   }
 
+  describe() {
+    return {
+      kind: "memory" as const,
+      label: "memory:tool-registry",
+      detail: { tools: this.byName.size },
+    };
+  }
+
+  readiness(name: string): { ready: boolean; reason?: string } {
+    const tool = this.byName.get(name);
+    if (!tool) return { ready: false, reason: "tool not registered" };
+    return tool.available === false
+      ? { ready: false, reason: tool.unavailableReason ?? "tool unavailable" }
+      : { ready: true };
+  }
+
   /**
    * Resolve the set of tools an agent can use, given the agent's
    * tools.yaml config. Respects allow/deny/require_approval_for.
@@ -53,9 +73,13 @@ export class ToolRegistry {
     for (const tool of this.byName.values()) {
       if (deny.has(tool.name)) continue;
       if (allow.size > 0 && !allow.has(tool.name)) continue;
+      const readiness = this.readiness(tool.name);
       out.push({
         tool,
+        allowed: true,
+        ready: readiness.ready,
         requiresApproval: requireApproval.has(tool.name),
+        ...(readiness.reason ? { readinessReason: readiness.reason } : {}),
       });
     }
     log.debug("resolved tools", { count: out.length, allow: allow.size, deny: deny.size });
@@ -66,9 +90,18 @@ export class ToolRegistry {
    * Invoke a tool by name. The caller's gate layer must have already
    * checked permissions.
    */
-  async call(name: string, input: unknown, ctx: unknown): Promise<unknown> {
+  async call(
+    name: string,
+    input: unknown,
+    ctx: unknown,
+    options: { allowed?: boolean; approved?: boolean } = {},
+  ): Promise<unknown> {
     const tool = this.byName.get(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
+    if (tool.available === false)
+      throw new Error(`Tool "${name}" is unavailable: ${tool.unavailableReason ?? "not ready"}`);
+    if (options.allowed === false) throw new Error(`Tool "${name}" is denied by policy`);
+    if (options.approved === false) throw new Error(`Tool "${name}" requires approval`);
     return await tool.execute(input, ctx);
   }
 }

@@ -320,6 +320,8 @@ export const executionPlanSchema = z
       .strict()
       .default({ restore: "changes", cleanup: "always" }),
     runtimeConfig: jsonObjectSchema.default({}),
+    profileHash: z.string().trim().min(1).max(128).default("profile-unknown"),
+    profileSnapshot: jsonObjectSchema.default({}),
     createdAt: isoTimestampSchema,
   })
   .strict();
@@ -327,10 +329,23 @@ type ParsedExecutionPlan = z.infer<typeof executionPlanSchema>;
 /** Optional in source literals for compatibility; persistence fills every pin. */
 export type ExecutionPlan = Omit<
   ParsedExecutionPlan,
-  "agentId" | "idempotencyKey" | "harnessConfig" | "workspacePolicy"
+  | "agentId"
+  | "idempotencyKey"
+  | "harnessConfig"
+  | "workspacePolicy"
+  | "profileHash"
+  | "profileSnapshot"
 > &
   Partial<
-    Pick<ParsedExecutionPlan, "agentId" | "idempotencyKey" | "harnessConfig" | "workspacePolicy">
+    Pick<
+      ParsedExecutionPlan,
+      | "agentId"
+      | "idempotencyKey"
+      | "harnessConfig"
+      | "workspacePolicy"
+      | "profileHash"
+      | "profileSnapshot"
+    >
   >;
 
 export const executionRawOutputSchema = z

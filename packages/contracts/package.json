@@ -20,6 +20,7 @@
     "./memory": "./src/memory.ts",
     "./observability": "./src/observability.ts",
     "./phase2": "./src/phase2.ts",
+    "./profile": "./src/profile.ts",
     "./primitives": "./src/primitives.ts",
     "./runtime": "./src/runtime.ts"
   },

@@ -24,8 +24,11 @@
     "@aaspai/file-loader": "workspace:*",
     "@aaspai/git": "workspace:*",
     "@aaspai/harness": "workspace:*",
+    "@aaspai/knowledge": "workspace:*",
     "@aaspai/runtime": "workspace:*",
-    "@aaspai/sessions": "workspace:*"
+    "@aaspai/sessions": "workspace:*",
+    "@aaspai/skills": "workspace:*",
+    "@aaspai/tools": "workspace:*"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.1.1",
