@@ -2,12 +2,12 @@ import { existsSync } from "node:fs";
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Command } from "commander";
-import { ensureDir, pc, SCAFFOLD_TEMPLATES, shortPath, writeText } from "./_shared.js";
+import { pc, SCAFFOLD_TEMPLATES, shortPath, writeText } from "./_shared.js";
 
 export function initCommand(): Command {
   return new Command("init")
     .description("Scaffold a new aaspai project in the current directory")
-    .action(async (opts) => {
+    .action(async () => {
       const cwd = process.cwd();
       console.log(pc.cyan(`Scaffolding aaspai project in ${cwd}...`));
 

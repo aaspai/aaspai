@@ -43,7 +43,7 @@ const nextConfig = {
   transpilePackages: aaspaiPackages,
   // better-sqlite3 is a native module — keep webpack from trying to
   // bundle it.
-  serverExternalPackages: ["better-sqlite3"],
+  serverExternalPackages: ["better-sqlite3", "e2b"],
   webpack(config) {
     // Allow `.js` import paths inside transpiled workspace packages
     // to resolve to their `.ts` source. ESM-friendly TypeScript

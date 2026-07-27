@@ -66,8 +66,13 @@ __metadata:
   dependencies:
     "@aaspai/db": "workspace:*"
     "@aaspai/execution": "workspace:*"
+    "@aaspai/file-loader": "workspace:*"
     "@aaspai/harness": "workspace:*"
+    "@aaspai/loops": "workspace:*"
     "@aaspai/runtime": "workspace:*"
+    "@aaspai/sessions": "workspace:*"
+    "@aaspai/skills": "workspace:*"
+    "@aaspai/tools": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@types/node": "npm:^24.0.0"
     better-sqlite3: "npm:^12.11.1"
@@ -369,7 +374,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@aaspai/tools@workspace:packages/tools":
+"@aaspai/tools@workspace:*, @aaspai/tools@workspace:packages/tools":
   version: 0.0.0-use.local
   resolution: "@aaspai/tools@workspace:packages/tools"
   dependencies:

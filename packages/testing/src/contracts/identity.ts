@@ -1,6 +1,5 @@
 import type { IdentityVerifier } from "@aaspai/identity/port";
 import { describe, expect, it } from "vitest";
-import { createActorFixture } from "../fixtures";
 
 /**
  * Shared contract test suite for IdentityVerifier implementations.

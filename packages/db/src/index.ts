@@ -44,3 +44,4 @@ export {
   type WakeupRow,
   wakeups,
 } from "./schema/phase2";
+export * as sqliteSchema from "./schema/sqlite";
