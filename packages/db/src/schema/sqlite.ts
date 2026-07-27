@@ -1,3 +1,4 @@
+export * from "./company-control";
 export * from "./company-operations";
 export * from "./execution";
 export * from "./knowledge";

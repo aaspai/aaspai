@@ -542,6 +542,69 @@ const SQLITE_STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS autonomy_change_requests_org_status_idx
     ON autonomy_change_requests (organization_id, status)`,
+  `CREATE TABLE IF NOT EXISTS authority_edges (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    from_agent_id TEXT NOT NULL,
+    to_agent_id TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (organization_id, from_agent_id, to_agent_id, relation)
+  )`,
+  `CREATE INDEX IF NOT EXISTS authority_edges_org_relation_idx
+    ON authority_edges (organization_id, relation)`,
+  `CREATE TABLE IF NOT EXISTS routing_decisions (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    selected_agent_id TEXT,
+    department_id TEXT,
+    authority_path_json TEXT NOT NULL DEFAULT '[]',
+    escalation_id TEXT,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (organization_id, idempotency_key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS routing_decisions_org_status_idx
+    ON routing_decisions (organization_id, status)`,
+  `CREATE TABLE IF NOT EXISTS delegations (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    requested_by_agent_id TEXT,
+    target_agent_id TEXT NOT NULL,
+    work_item_id TEXT,
+    authority_path_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (organization_id, idempotency_key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS delegations_org_status_idx
+    ON delegations (organization_id, status)`,
+  `CREATE TABLE IF NOT EXISTS escalations (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    subject_type TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    requested_by_agent_id TEXT,
+    target_agent_id TEXT,
+    risk TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    context_json TEXT NOT NULL DEFAULT '{}',
+    authority_path_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL,
+    resolved_by TEXT,
+    resolution TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (organization_id, subject_type, subject_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS escalations_org_status_idx
+    ON escalations (organization_id, status)`,
 ];
 
 /**

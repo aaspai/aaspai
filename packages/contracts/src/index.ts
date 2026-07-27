@@ -2,6 +2,7 @@ export * from "./audit";
 export * from "./auth";
 export * from "./capabilities";
 export * from "./company";
+export * from "./company-control";
 export * from "./company-operations";
 export * from "./errors";
 export * from "./event";
