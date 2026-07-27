@@ -269,11 +269,11 @@ export const dryRunLocal: ServerAdapterModule = {
     if (ctx.onLog) {
       await ctx.onLog(
         "stdout",
-        JSON.stringify({
+        `${JSON.stringify({
           kind: "assistant",
           ts: new Date().toISOString(),
           text: response,
-        }) + "\n",
+        })}\n`,
       );
     }
     if (ctx.onMeta) {

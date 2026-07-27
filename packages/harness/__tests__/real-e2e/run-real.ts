@@ -1,29 +1,12 @@
-/**
- * Real-CLI end-to-end smoke for the opencode-cli adapter.
- *
- * Runs against the user's installed `opencode` binary (path
- * `OPENCODE_CLI` env or `which opencode` default). Every scenario
- * writes its full input + output to a per-scenario subfolder so the
- * run can be reviewed after the fact.
- *
- * Scenarios:
- *   01-happy              - simplest call; captures the JSON event stream
- *   02-resume             - continues a prior session via --session
- *   03-flags              - exercises --variant, --agent, --thinking, -c, --share, --pure, --auto
- *   04-mcp                - per-call mcp.json injection; verifies the CLI sees the servers
- *   05-tools              - tool_use dispatch through ctx.tools.invoke
- *   06-thinking-stream    - --thinking + --print-logs; captures the onLog event stream verbatim
- */
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { closeDefaultDb, runMigrations, getDefaultDb, schema } from "@aaspai/db";
-import { eq } from "drizzle-orm";
+import { closeDefaultDb, getDefaultDb, runMigrations, schema } from "@aaspai/db";
 import { opencodeCli } from "@aaspai/harness";
 import { Sessions } from "@aaspai/sessions";
-import { SkillRegistry, SkillCatalog } from "@aaspai/skills";
+import { SkillCatalog, SkillRegistry } from "@aaspai/skills";
+import { eq } from "drizzle-orm";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const ROOT = join(__dirname, "..", "..", "..", ".aaspai-e2e");
@@ -150,7 +133,7 @@ console.log(`[setup] registered ${registry.list().length} skills into the regist
 //  A real-tool dispatcher
 // ─────────────────────────────────────────────────────────────────
 const toolCalls: Array<{ scenario: string; name: string; input: unknown; output: string }> = [];
-const toolDispatcher = {
+const _toolDispatcher = {
   invoke: async (name: string, input: unknown, ctx: unknown) => {
     const tag = (ctx as { scenario?: string })?.scenario ?? "?";
     let output: string;
@@ -257,7 +240,7 @@ function dumpJsonl(path: string, lines: Array<unknown>) {
 function dumpText(path: string, text: string) {
   writeFileSync(path, text, "utf8");
 }
-function dumpFile(path: string, content: string) {
+function _dumpFile(path: string, content: string) {
   writeFileSync(path, content, "utf8");
 }
 
@@ -341,10 +324,7 @@ async function runScenario(args: {
   // Pull the session_events from the DB
   const db = getDefaultDb();
   const row = (
-    await db.db
-      .select()
-      .from(schema.sessions)
-      .where(eq(schema.sessions.id, result.logRef!))
+    await db.db.select().from(schema.sessions).where(eq(schema.sessions.id, result.logRef!))
   )[0]!;
   const events = await db.db
     .select()
@@ -386,7 +366,10 @@ async function runScenario(args: {
     cliSessionId: (result.sessionParams as { cliSessionId?: string } | undefined)?.cliSessionId,
     sessionParams: result.sessionParams as Record<string, unknown> | undefined,
     resultJson: row.resultJson
-      ? (JSON.parse(row.resultJson) as Record<string, unknown>).resultJson as Record<string, unknown>
+      ? ((JSON.parse(row.resultJson) as Record<string, unknown>).resultJson as Record<
+          string,
+          unknown
+        >)
       : undefined,
     toolDispatcherCalls,
     dispatcherCalls,
@@ -402,18 +385,12 @@ async function runScenario(args: {
   dumpText(join(dir, "03-resultJson.json"), JSON.stringify(out.resultJson ?? {}, null, 2));
   dumpText(join(dir, "04-sessionParams.json"), JSON.stringify(out.sessionParams ?? {}, null, 2));
   dumpText(join(dir, "05-session_events.jsonl"), logLines.join("\n"));
-  dumpText(
-    join(dir, "06-text-events.jsonl"),
-    textEvents.map((e) => JSON.stringify(e)).join("\n"),
-  );
+  dumpText(join(dir, "06-text-events.jsonl"), textEvents.map((e) => JSON.stringify(e)).join("\n"));
   dumpText(
     join(dir, "07-thinking-events.jsonl"),
     thinkingEvents.map((e) => JSON.stringify(e)).join("\n"),
   );
-  dumpText(
-    join(dir, "08-tool-events.jsonl"),
-    toolEvents.map((e) => JSON.stringify(e)).join("\n"),
-  );
+  dumpText(join(dir, "08-tool-events.jsonl"), toolEvents.map((e) => JSON.stringify(e)).join("\n"));
   dumpText(
     join(dir, "09-tool-dispatcher-calls.jsonl"),
     toolDispatcherCalls.map((e) => JSON.stringify(e)).join("\n"),
@@ -452,7 +429,7 @@ async function listDir(dir: string, depth: number, prefix = ""): Promise<string>
   }
   for (const e of entries) {
     const path = join(dir, e.name);
-    let s;
+    let s: ReturnType<typeof statSync>;
     try {
       s = statSync(path);
     } catch {
@@ -521,7 +498,11 @@ allResults.push(
     config: {
       xdgConfigHome: xdgDir,
       mcpServers: {
-        filesystem: { type: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", SCRATCH] },
+        filesystem: {
+          type: "stdio",
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", SCRATCH],
+        },
         notion: { type: "http", url: "https://mcp.notion.example.com" },
       },
       dangerouslySkipPermissions: true,
@@ -544,7 +525,8 @@ allResults.push(
 allResults.push(
   await runScenario({
     scenario: "06-thinking-stream",
-    prompt: 'You have a "verify-change" skill available. Use it to think step-by-step, then reply with exactly "PONG-VERIFY".',
+    prompt:
+      'You have a "verify-change" skill available. Use it to think step-by-step, then reply with exactly "PONG-VERIFY".',
     skillKeys: ["verify-change"],
     config: { thinking: true, printLogs: true },
     toolDispatcherScenario: "06-thinking-stream",
@@ -600,9 +582,7 @@ allResults.push(
 // sessions created earlier in this run.
 {
   const dir = newScenarioDir("08-session-list");
-  const { opencodeSessionList } = await import(
-    "../../src/drivers/opencode-cli/index.js"
-  );
+  const { opencodeSessionList } = await import("../../src/drivers/opencode-cli/index.js");
   const list = await opencodeSessionList({});
   dumpJsonl(join(dir, "00-input.jsonl"), [
     { timestamp: new Date().toISOString(), note: "opencode session list" },
@@ -626,9 +606,7 @@ allResults.push(
 // resolved/merged opencode.json.
 {
   const dir = newScenarioDir("09-debug-config");
-  const { debugOpencodeConfig } = await import(
-    "../../src/drivers/opencode-cli/index.js"
-  );
+  const { debugOpencodeConfig } = await import("../../src/drivers/opencode-cli/index.js");
   const r = await debugOpencodeConfig({});
   dumpJsonl(join(dir, "00-input.jsonl"), [
     { timestamp: new Date().toISOString(), note: "opencode debug config" },
@@ -655,16 +633,18 @@ allResults.push(
 // opencode actually discovers.
 {
   const dir = newScenarioDir("10-debug-skill");
-  const { debugOpencodeSkills } = await import(
-    "../../src/drivers/opencode-cli/index.js"
-  );
+  const { debugOpencodeSkills } = await import("../../src/drivers/opencode-cli/index.js");
   const skills = await debugOpencodeSkills({});
   dumpJsonl(join(dir, "00-input.jsonl"), [
     { timestamp: new Date().toISOString(), note: "opencode debug skill" },
   ]);
   writeFileSync(
     join(dir, "debug-skills.json"),
-    JSON.stringify(skills.map((s) => ({ name: s.name, location: s.location })), null, 2),
+    JSON.stringify(
+      skills.map((s) => ({ name: s.name, location: s.location })),
+      null,
+      2,
+    ),
   );
   allResults.push({
     scenario: "10-debug-skill",
@@ -688,12 +668,12 @@ allResults.push(
     "../../src/drivers/opencode-cli/index.js"
   );
   const r = await opencodeDbPath({});
-  let rowCount = 0;
+  let _rowCount = 0;
   let sessionRowCount = 0;
   if (r.exitCode === 0 && r.path) {
     try {
       const tsv = await queryOpencodeDb("SELECT count(*) FROM session", { format: "tsv" });
-      rowCount = tsv.rows.length;
+      _rowCount = tsv.rows.length;
       // Parse the first row's count column.
       const m = tsv.rows[0]?.match(/^(\d+)/);
       if (m) sessionRowCount = Number(m[1]);
@@ -823,7 +803,8 @@ allResults.push(
       snapshot: true,
       smallModel: "opencode-go/mimo-v2.5",
       defaultAgent: "build",
-      shell: process.platform === "win32" ? "C:\\Program Files\\Git\\usr\\bin\\bash.exe" : "/bin/bash",
+      shell:
+        process.platform === "win32" ? "C:\\Program Files\\Git\\usr\\bin\\bash.exe" : "/bin/bash",
       instructions: ["AGENTS.md"],
       skillsPaths: [".opencode/skills"],
       skillsUrls: [],
@@ -902,4 +883,6 @@ dumpText(join(ROOT, "SUMMARY.json"), JSON.stringify(summary, null, 2));
 console.log("\n=== REAL-CLI E2E SUMMARY ===");
 console.log(JSON.stringify(summary, null, 2));
 console.log(`\nDumps written to: ${ROOT}`);
-console.log(`Scenarios: ${allResults.length} | Succeeded: ${summary.succeeded} | Failed: ${summary.failed} | Total: ${(summary.totalDurationMs / 1000).toFixed(1)}s`);
+console.log(
+  `Scenarios: ${allResults.length} | Succeeded: ${summary.succeeded} | Failed: ${summary.failed} | Total: ${(summary.totalDurationMs / 1000).toFixed(1)}s`,
+);

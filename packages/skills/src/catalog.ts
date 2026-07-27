@@ -26,7 +26,9 @@
  *                                   body is fetched on first access.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
+
 const fs = { existsSync, readFileSync, statSync };
+
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import type { Skill } from "@aaspai/contracts/phase2";
@@ -426,11 +428,13 @@ export class SkillCatalog {
   /** Look up a catalog entry by id, key, or unique slug. */
   resolve(ref: string): CatalogSkill | null {
     ref = ref.trim();
-    if (this.byId.has(ref)) return this.byId.get(ref)!;
-    if (this.byKey.has(ref)) return this.byKey.get(ref)!;
+    const byId = this.byId.get(ref);
+    if (byId) return byId;
+    const byKey = this.byKey.get(ref);
+    if (byKey) return byKey;
     // Unique slug match
     const matches = this.list().filter((s) => s.slug === ref);
-    return matches.length === 1 ? matches[0]! : null;
+    return matches.length === 1 ? (matches[0] ?? null) : null;
   }
 
   /**
@@ -483,7 +487,8 @@ async function walkFiles(dir: string): Promise<string[]> {
   const out: string[] = [];
   const stack: string[] = [dir];
   while (stack.length > 0) {
-    const cur = stack.pop()!;
+    const cur = stack.pop();
+    if (cur === undefined) continue;
     const entries = await fs.readdir(cur, { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
       if (e.isSymbolicLink()) continue; // never follow symlinks in the catalog

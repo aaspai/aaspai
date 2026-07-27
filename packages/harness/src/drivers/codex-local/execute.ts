@@ -10,12 +10,7 @@ import { buildAgentEnv } from "../../shared/env.js";
 import { redactCommandText, redactHomePath } from "../../shared/redact.js";
 import { runProcess } from "../../shared/run-process.js";
 import type { CodexStreamEvent } from "./config.js";
-import {
-  type CodexLocalConfig,
-  codexLocalConfigSchema,
-  codexLocalInfo,
-  parseCodexLocalConfig,
-} from "./config.js";
+import { type CodexLocalConfig, codexLocalInfo, parseCodexLocalConfig } from "./config.js";
 import { parseCodexStreamLine } from "./parse.js";
 
 /**
@@ -68,7 +63,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const collectedUsage: UsageSummary = {};
   let sessionId: string | undefined = ctx.runtime.sessionId;
   const model: string | undefined = config.model;
-  let stopReason: string | undefined;
+  let _stopReason: string | undefined;
   let timedOut = false;
 
   const onLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
@@ -85,7 +80,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           } else if (entry.kind === "init") {
             if (entry.sessionId) sessionId = entry.sessionId;
           } else if (entry.kind === "result") {
-            if (entry.stopReason) stopReason = entry.stopReason;
+            if (entry.stopReason) _stopReason = entry.stopReason;
           }
         }
         await ctx.onLog(stream, line);

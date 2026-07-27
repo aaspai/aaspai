@@ -410,7 +410,10 @@ describe("SkillRegistry.uninstall / search / execute / policy", () => {
       const { existsSync } = await import("node:fs");
       const dir = join(tmp, ".opencode_cli", "skills", "to-remove");
       expect(existsSync(dir)).toBe(true);
-      const r = await reg.uninstall("to-remove", { adapterType: "opencode_cli", runtimeBaseDir: tmp });
+      const r = await reg.uninstall("to-remove", {
+        adapterType: "opencode_cli",
+        runtimeBaseDir: tmp,
+      });
       expect(r.removed.length).toBeGreaterThan(0);
       expect(existsSync(dir)).toBe(false);
     } finally {
@@ -472,7 +475,11 @@ describe("SkillRegistry.uninstall / search / execute / policy", () => {
   it("checkPolicy respects allow/deny lists", async () => {
     const { SkillRegistry } = await import("../src/registry");
     const reg = new SkillRegistry();
-    reg.setPolicy("dangerous", { allow: ["agent/ops"], deny: ["agent/random"], defaultAllowed: false });
+    reg.setPolicy("dangerous", {
+      allow: ["agent/ops"],
+      deny: ["agent/random"],
+      defaultAllowed: false,
+    });
     expect(reg.checkPolicy("dangerous", "agent/ops").allowed).toBe(true);
     const r = reg.checkPolicy("dangerous", "agent/random");
     expect(r.allowed).toBe(false);

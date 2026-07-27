@@ -49,7 +49,7 @@ export const BUILT_IN_TOOLS: readonly Tool[] = [
       required: ["path"],
       properties: { path: { type: "string" } },
     },
-    execute: async (input) => {
+    execute: async (_input) => {
       throw new Error("Wire to harness file reader in Phase 3.");
     },
   },

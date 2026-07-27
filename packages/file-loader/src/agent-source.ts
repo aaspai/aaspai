@@ -175,7 +175,7 @@ export class FileAgentConfigSource implements AgentConfigSource {
     if (rel.startsWith("..")) return null;
     const parts = rel.split(/[\\/]/);
     if (parts.length < 2) return null;
-    return join(this.agentsDir, parts[0]!);
+    return join(this.agentsDir, parts[0] ?? "");
   }
 
   private async loadAgentDir(dir: string): Promise<Readonly<AgentConfig> | null> {

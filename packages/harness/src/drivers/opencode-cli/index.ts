@@ -197,7 +197,10 @@ interface ResolvedConfig {
   shell?: string;
   disabledProviders?: string[];
   enabledProviders?: string[];
-  references?: Record<string, { path?: string; repository?: string; branch?: string; description?: string; hidden?: boolean }>;
+  references?: Record<
+    string,
+    { path?: string; repository?: string; branch?: string; description?: string; hidden?: boolean }
+  >;
   skillsPaths?: string[];
   skillsUrls?: string[];
   /** Env escape hatches. */
@@ -436,11 +439,18 @@ function buildOpencodeJson(config: ResolvedConfig): Record<string, unknown> {
     exp.mcp_timeout = config.mcpTimeoutMs;
     out.experimental = exp;
   }
-  if (typeof config.toolOutputMaxLines === "number" || typeof config.toolOutputMaxBytes === "number") {
+  if (
+    typeof config.toolOutputMaxLines === "number" ||
+    typeof config.toolOutputMaxBytes === "number"
+  ) {
     out.tool_output = {
       ...((out.tool_output as Record<string, unknown> | undefined) ?? {}),
-      ...(typeof config.toolOutputMaxLines === "number" ? { max_lines: config.toolOutputMaxLines } : {}),
-      ...(typeof config.toolOutputMaxBytes === "number" ? { max_bytes: config.toolOutputMaxBytes } : {}),
+      ...(typeof config.toolOutputMaxLines === "number"
+        ? { max_lines: config.toolOutputMaxLines }
+        : {}),
+      ...(typeof config.toolOutputMaxBytes === "number"
+        ? { max_bytes: config.toolOutputMaxBytes }
+        : {}),
     };
   }
   if (config.shareMode) out.share = config.shareMode;
@@ -667,7 +677,8 @@ async function runOpencodeCli(
   if (typeof config.port === "number") args.push("--port", String(config.port));
   if (config.mini) args.push("--mini");
   if (config.noReplay) args.push("--no-replay");
-  if (typeof config.replayLimit === "number") args.push("--replay-limit", String(config.replayLimit));
+  if (typeof config.replayLimit === "number")
+    args.push("--replay-limit", String(config.replayLimit));
   // `--prompt <s>` (alternative to positional). When set, it replaces
   // the positional <prompt>. We still include the positional for
   // back-compat unless the caller explicitly opts in via promptArg.
@@ -2106,9 +2117,7 @@ export async function logoutOpencodeMcp(
 /* ── agent ────────────────────────────────────────────────────────── */
 
 /** List all installed opencode agents. */
-export async function listOpencodeAgents(
-  opts: SubcommandOpts = {},
-): Promise<{ rows: string[] }> {
+export async function listOpencodeAgents(opts: SubcommandOpts = {}): Promise<{ rows: string[] }> {
   const { stdout } = await runOpencodeSubcommand(["agent", "list"], opts);
   return { rows: stdout.split(/\r?\n/).filter((l) => l.trim().length > 0) };
 }
@@ -2139,9 +2148,7 @@ export async function debugOpencodeConfig(
 /** List all skills the opencode CLI actually discovers (not what we materialized). */
 export async function debugOpencodeSkills(
   opts: SubcommandOpts = {},
-): Promise<
-  Array<{ name: string; description?: string; location?: string; content?: string }>
-> {
+): Promise<Array<{ name: string; description?: string; location?: string; content?: string }>> {
   const { stdout, exitCode } = await runOpencodeSubcommand(["debug", "skill"], opts);
   if (exitCode !== 0) return [];
   try {
@@ -2158,15 +2165,23 @@ export async function debugOpencodeSkills(
 }
 
 /** Print all opencode global paths (home/data/bin/log/cache/config/state/tmp). */
-export async function debugOpencodePaths(
-  opts: SubcommandOpts = {},
-): Promise<{ home?: string; data?: string; bin?: string; log?: string; repos?: string; cache?: string; config?: string; state?: string; tmp?: string }> {
+export async function debugOpencodePaths(opts: SubcommandOpts = {}): Promise<{
+  home?: string;
+  data?: string;
+  bin?: string;
+  log?: string;
+  repos?: string;
+  cache?: string;
+  config?: string;
+  state?: string;
+  tmp?: string;
+}> {
   const { stdout, exitCode } = await runOpencodeSubcommand(["debug", "paths"], opts);
   const out: Record<string, string> = {};
   if (exitCode === 0) {
     for (const line of stdout.split(/\r?\n/)) {
       const m = line.match(/^\s*(\w+)\s+(.+)$/);
-      if (m) out[m[1]!] = m[2]!.trim();
+      if (m) out[m[1] ?? ""] = m[2]?.trim();
     }
   }
   return out as {
@@ -2542,11 +2557,7 @@ export const opencodeCli: ServerAdapterModule = {
    * temp XDG_CONFIG_HOME, then spawn a no-op session continuation.
    * Returns `compacted: false` for non-resumable sessions.
    */
-  async compact(req: {
-    sessionId: string;
-    tailTurns?: number;
-    force?: boolean;
-  }): Promise<{
+  async compact(req: { sessionId: string; tailTurns?: number; force?: boolean }): Promise<{
     compacted: boolean;
     sessionId: string;
     tokensBefore?: number;

@@ -48,7 +48,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 function emit(event) {
-  process.stdout.write(JSON.stringify(event) + "\n");
+  process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
 function parsePrompt(rawPrompt) {
@@ -71,7 +71,7 @@ function pickSessionId(prompt) {
   const m = /<e2e:session:([^>]+)>/.exec(prompt);
   if (m) return m[1];
   if (/<e2e:no_session>/.test(prompt)) return null;
-  return "ses_test_" + Math.random().toString(36).slice(2, 10);
+  return `ses_test_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function pickText(prompt) {
@@ -108,8 +108,8 @@ function part(type, extra) {
   return Object.assign(
     {
       type,
-      id: "prt_" + Math.random().toString(36).slice(2, 10),
-      messageID: "msg_" + Math.random().toString(36).slice(2, 10),
+      id: `prt_${Math.random().toString(36).slice(2, 10)}`,
+      messageID: `msg_${Math.random().toString(36).slice(2, 10)}`,
     },
     extra || {},
   );
@@ -159,7 +159,7 @@ function toolUseEvent(sessionID, name) {
     sessionID,
     part: part("tool", {
       tool: name,
-      callID: "call_" + Math.random().toString(36).slice(2, 10),
+      callID: `call_${Math.random().toString(36).slice(2, 10)}`,
       state: { status: "completed", output: "ok" },
     }),
   };
@@ -203,13 +203,13 @@ async function runSuccessStream(prompt) {
   }
 
   if (/<e2e:thinking>/.test(prompt)) {
-    emit(thinkingEvent(sessionID, "reasoning about " + text.slice(0, 30)));
+    emit(thinkingEvent(sessionID, `reasoning about ${text.slice(0, 30)}`));
   }
 
   if (/<e2e:success:multi>/.test(prompt)) {
-    emit(textEvent(sessionID, text + " (1/3)"));
-    emit(textEvent(sessionID, text + " (2/3)"));
-    emit(textEvent(sessionID, text + " (3/3)"));
+    emit(textEvent(sessionID, `${text} (1/3)`));
+    emit(textEvent(sessionID, `${text} (2/3)`));
+    emit(textEvent(sessionID, `${text} (3/3)`));
   } else {
     const longMatch = /<e2e:success:long:(\d+)>/.exec(prompt);
     if (longMatch) {
@@ -242,7 +242,6 @@ function runErrorStream(prompt, kind) {
     case "refusal":
       message = "content policy refusal";
       break;
-    case "generic":
     default:
       message = "an unspecified error occurred";
   }
@@ -308,13 +307,13 @@ async function main() {
   }
 
   if (process.env.AASPAI_FAKE_OPENCODE_STDERR) {
-    process.stderr.write(process.env.AASPAI_FAKE_OPENCODE_STDERR + "\n");
+    process.stderr.write(`${process.env.AASPAI_FAKE_OPENCODE_STDERR}\n`);
     if (process.stderr._handle && typeof process.stderr._handle.flushSync === "function") {
       process.stderr._handle.flushSync();
     }
   }
   if (process.env.AASPAI_FAKE_OPENCODE_STDOUT) {
-    process.stdout.write(process.env.AASPAI_FAKE_OPENCODE_STDOUT + "\n");
+    process.stdout.write(`${process.env.AASPAI_FAKE_OPENCODE_STDOUT}\n`);
   }
 
   if (/<e2e:hang>/.test(prompt)) {
@@ -337,13 +336,15 @@ async function main() {
   }
   if (/<e2e:models_dump>/.test(prompt)) {
     // Print a fake "opencode models" style response: one model per line.
-    process.stdout.write([
-      "opencode-go/mimo-v2.5",
-      "opencode-go/mimo-v2.5-pro",
-      "opencode-go/deepseek-v4-flash",
-      "opencode-go/glm-5.2",
-      "opencode-go/kimi-k3",
-    ].join("\n") + "\n");
+    process.stdout.write(
+      `${[
+        "opencode-go/mimo-v2.5",
+        "opencode-go/mimo-v2.5-pro",
+        "opencode-go/deepseek-v4-flash",
+        "opencode-go/glm-5.2",
+        "opencode-go/kimi-k3",
+      ].join("\n")}\n`,
+    );
     process.exit(0);
     return;
   }
@@ -361,7 +362,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fake-opencode: ${err && err.message ? err.message : String(err)}\n`);
+  process.stderr.write(`fake-opencode: ${err?.message ? err.message : String(err)}\n`);
   process.exit(2);
 });
 

@@ -189,9 +189,7 @@ export class SkillRegistry {
               await writeFile(fp, file.content, "utf8");
             }
           } catch (err) {
-            errors.push(
-              `${skill.key}@${skill.version} agents-home: ${(err as Error).message}`,
-            );
+            errors.push(`${skill.key}@${skill.version} agents-home: ${(err as Error).message}`);
           }
         }
       } catch (err) {
@@ -280,16 +278,27 @@ export class SkillRegistry {
    * Full-text search across all registered skills. Returns matching
    * skills + the line where the match occurred.
    */
-  search(query: string, opts: { caseSensitive?: boolean; limit?: number } = {}): Array<{
+  search(
+    query: string,
+    opts: { caseSensitive?: boolean; limit?: number } = {},
+  ): Array<{
     skill: Skill;
-    matches: Array<{ field: "name" | "description" | "instructions" | "files"; line: number; text: string }>;
+    matches: Array<{
+      field: "name" | "description" | "instructions" | "files";
+      line: number;
+      text: string;
+    }>;
   }> {
     const caseSensitive = opts.caseSensitive ?? false;
     const limit = opts.limit ?? 20;
     const needle = caseSensitive ? query : query.toLowerCase();
     const results: Array<{
       skill: Skill;
-      matches: Array<{ field: "name" | "description" | "instructions" | "files"; line: number; text: string }>;
+      matches: Array<{
+        field: "name" | "description" | "instructions" | "files";
+        line: number;
+        text: string;
+      }>;
     }> = [];
     for (const skill of this.list()) {
       const matches: Array<{
@@ -301,19 +310,19 @@ export class SkillRegistry {
         field: "name" | "description" | "instructions" | "files",
         text: string,
       ): void => {
-        const haystack = caseSensitive ? text : text.toLowerCase();
         const lines = text.split(/\r?\n/);
         for (let i = 0; i < lines.length; i += 1) {
-          const line = caseSensitive ? lines[i]! : lines[i]!.toLowerCase();
+          const sourceLine = lines[i] ?? "";
+          const line = caseSensitive ? sourceLine : sourceLine.toLowerCase();
           if (line.includes(needle)) {
-            matches.push({ field, line: i + 1, text: lines[i]! });
+            matches.push({ field, line: i + 1, text: sourceLine });
           }
         }
       };
       check("name", skill.name);
       check("description", skill.description);
       check("instructions", skill.instructions);
-      for (const file of skill.files) check("files", file.path + "\n" + file.content);
+      for (const file of skill.files) check("files", `${file.path}\n${file.content}`);
       if (matches.length > 0) {
         results.push({ skill, matches });
         this.auditLog.push({
@@ -337,7 +346,11 @@ export class SkillRegistry {
    * real agent. We expose it so the audit log captures the
    * invocation intent.)
    */
-  execute(key: string, version?: string, opts: { agentId?: string; sessionId?: string } = {}): {
+  execute(
+    key: string,
+    version?: string,
+    opts: { agentId?: string; sessionId?: string } = {},
+  ): {
     skill: Skill;
     steps: Array<{ number: number; body: string }>;
   } {
@@ -353,9 +366,9 @@ export class SkillRegistry {
           current.body = current.body.trim();
           steps.push(current);
         }
-        current = { number: Number(m[1]), body: m[2]! };
+        current = { number: Number(m[1]), body: m[2] ?? "" };
       } else if (current) {
-        current.body += "\n" + line;
+        current.body += `\n${line}`;
       }
     }
     if (current) {
@@ -378,18 +391,19 @@ export class SkillRegistry {
    * permitted to use the skill. The default policy is "allow" —
    * callers can register policies via `setPolicy()`.
    */
-  checkPolicy(
-    key: string,
-    agentId: string,
-  ): { allowed: boolean; reason?: string } {
+  checkPolicy(key: string, agentId: string): { allowed: boolean; reason?: string } {
     const policy = this.policies.get(key);
     if (!policy) return { allowed: true };
     if (policy.allow?.includes(agentId)) return { allowed: true };
-    if (policy.deny?.includes(agentId)) return { allowed: false, reason: `agent ${agentId} is in deny list` };
+    if (policy.deny?.includes(agentId))
+      return { allowed: false, reason: `agent ${agentId} is in deny list` };
     return { allowed: policy.defaultAllowed ?? true };
   }
 
-  private readonly policies = new Map<string, { allow?: string[]; deny?: string[]; defaultAllowed?: boolean }>();
+  private readonly policies = new Map<
+    string,
+    { allow?: string[]; deny?: string[]; defaultAllowed?: boolean }
+  >();
 
   /** Register an access policy for a skill. */
   setPolicy(
