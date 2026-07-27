@@ -1828,7 +1828,7 @@ describe("e2e: opencode_cli driver", () => {
         adapterConfig: { promptArg: "explicit-prompt" },
       });
       await opencodeCli.execute(ctx);
-      const { readFileSync, existsSync } = await import("node:fs");
+      const { readFileSync } = await import("node:fs");
       const argv = JSON.parse(readFileSync(argvDump, "utf8")) as string[];
       const idx = argv.indexOf("--prompt");
       expect(idx).toBeGreaterThan(-1);
@@ -1853,7 +1853,7 @@ describe("e2e: opencode_cli driver", () => {
         adapterConfig: { port: 5123, mini: true, noReplay: true, replayLimit: 20 },
       });
       await opencodeCli.execute(ctx);
-      const { readFileSync, existsSync } = await import("node:fs");
+      const { readFileSync } = await import("node:fs");
       const argv = JSON.parse(readFileSync(argvDump, "utf8")) as string[];
       const expectFlag = (name: string, value?: string): void => {
         const i = argv.indexOf(name);
