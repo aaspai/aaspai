@@ -1155,14 +1155,18 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
  * if it's stale (PID not running), we steal it. The lock is
  * blocking with a short retry loop (50ms × 200 = 10s max).
  */
-const LOCK_PATH = process.env.AASPAI_OPENCODE_LOCK_PATH ?? join(tmpdir(), "aaspai-opencode.lock");
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_WAIT_MS = 10_000;
 let lockChain: Promise<void> = Promise.resolve();
 const PROCESS_LOCK_NONCE = randomUUID();
 
+function getLockPath(): string {
+  return process.env.AASPAI_OPENCODE_LOCK_PATH ?? join(tmpdir(), "aaspai-opencode.lock");
+}
+
 async function acquireLock(): Promise<() => void> {
   const myId = `${process.pid}@${hostname()}@${PROCESS_LOCK_NONCE}`;
+  const lockPath = getLockPath();
   const startedAt = Date.now();
   // Queue our turn behind any other process waiting on the same
   // per-process promise chain.
@@ -1171,9 +1175,9 @@ async function acquireLock(): Promise<() => void> {
       if (Date.now() - startedAt > LOCK_MAX_WAIT_MS) {
         throw new Error(`opencode_cli cross-process lock timeout after ${LOCK_MAX_WAIT_MS}ms`);
       }
-      if (!existsSync(LOCK_PATH)) {
+      if (!existsSync(lockPath)) {
         try {
-          const fd = openSync(LOCK_PATH, "wx");
+          const fd = openSync(lockPath, "wx");
           writeSync(fd, myId);
           closeSync(fd);
           return;
@@ -1183,7 +1187,7 @@ async function acquireLock(): Promise<() => void> {
       }
       // Lock file exists. Check if it's stale (PID not running).
       try {
-        const holder = readFileSync(LOCK_PATH, "utf8").trim();
+        const holder = readFileSync(lockPath, "utf8").trim();
         const m = /^(\d+)@/.exec(holder);
         if (m) {
           const holderPid = Number(m[1]);
@@ -1194,7 +1198,7 @@ async function acquireLock(): Promise<() => void> {
           ) {
             // Stale lock — steal it.
             try {
-              unlinkSync(LOCK_PATH);
+              unlinkSync(lockPath);
             } catch {
               /* race: another process stole it first */
             }
@@ -1213,8 +1217,8 @@ async function acquireLock(): Promise<() => void> {
     // Only delete the lock if we still own it (the holder string
     // starts with our pid).
     try {
-      const current = readFileSync(LOCK_PATH, "utf8").trim();
-      if (current === myId) unlinkSync(LOCK_PATH);
+      const current = readFileSync(lockPath, "utf8").trim();
+      if (current === myId) unlinkSync(lockPath);
     } catch {
       /* already gone */
     }
