@@ -1,7 +1,9 @@
 import type { ProviderCapabilities } from "@aaspai/contracts/capabilities";
 import type { RuntimeTargetInfo, SandboxExecutionTarget } from "@aaspai/contracts/runtime";
 import type { RuntimeTarget } from "./execution-target.js";
+
 export type { RuntimeTarget } from "./execution-target.js";
+
 import { LocalSandboxDriver } from "./sandbox-driver.js";
 
 /**
@@ -34,9 +36,7 @@ export interface CreateSandboxTargetOptions {
  * `info` with the provider's identity, and `run` / `prepareWorkspace`
  * / `restoreWorkspace` that acquire a lease, execute, and release.
  */
-export function createLocalSandboxTarget(
-  options: CreateSandboxTargetOptions,
-): RuntimeTarget {
+export function createLocalSandboxTarget(options: CreateSandboxTargetOptions): RuntimeTarget {
   const driver = options.driver ?? new LocalSandboxDriver(options.providerKey);
   const capabilities = options.capabilities ?? DEFAULT_SANDBOX_CAPABILITIES;
   const status = options.status ?? "ready";
@@ -51,7 +51,9 @@ export function createLocalSandboxTarget(
     } as RuntimeTargetInfo,
     async run(target, runOptions) {
       if (target.kind !== "sandbox") {
-        throw new Error(`sandboxTarget(${options.providerKey}) cannot run a ${target.kind} target.`);
+        throw new Error(
+          `sandboxTarget(${options.providerKey}) cannot run a ${target.kind} target.`,
+        );
       }
       const sandboxTarget = target as SandboxExecutionTarget;
       const remoteCwd = sandboxTarget.remoteCwd ?? "/workspace";

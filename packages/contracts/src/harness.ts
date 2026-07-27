@@ -446,7 +446,9 @@ export const resultJsonSchema = z
       .optional(),
     toolsInvoked: z.array(z.string()).optional(),
     /** Per-step usage entries. */
-    stepUsage: z.array(usageSchema.extend({ step: nonNegativeIntegerSchema.optional() })).optional(),
+    stepUsage: z
+      .array(usageSchema.extend({ step: nonNegativeIntegerSchema.optional() }))
+      .optional(),
     /** Session events that were forwarded to the adapter. */
     sessionEvents: z
       .array(

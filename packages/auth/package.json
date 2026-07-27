@@ -21,10 +21,10 @@
   },
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
-    "@aaspai/observability": "workspace:*",
-    "@aaspai/testing": "workspace:*"
+    "@aaspai/observability": "workspace:*"
   },
   "devDependencies": {
+    "@aaspai/testing": "workspace:*",
     "@biomejs/biome": "^2.1.1",
     "rimraf": "^6.1.3",
     "typescript": "^5.8.3",

@@ -1232,7 +1232,11 @@ describe("e2e: real opencode CLI smoke (skipped if not installed)", () => {
     const skillRegistry = new SkillRegistry();
     const { Sessions } = await import("../src/sessions.js");
     try {
-      const sessions = new Sessions({ agentSource, knowledgeSource: buildKnowledgeSource(), skillRegistry });
+      const sessions = new Sessions({
+        agentSource,
+        knowledgeSource: buildKnowledgeSource(),
+        skillRegistry,
+      });
       // First, run a session to create a row (the fake CLI is fast
       // — cancellation here is the "post-completion" path).
       const req = {
@@ -1279,7 +1283,11 @@ describe("e2e: real opencode CLI smoke (skipped if not installed)", () => {
     const { SkillRegistry } = await import("@aaspai/skills");
     const skillRegistry = new SkillRegistry();
     const { Sessions } = await import("../src/sessions.js");
-    const sessions = new Sessions({ agentSource, knowledgeSource: buildKnowledgeSource(), skillRegistry });
+    const sessions = new Sessions({
+      agentSource,
+      knowledgeSource: buildKnowledgeSource(),
+      skillRegistry,
+    });
     try {
       // First, run a real session to create a row.
       const req = {
@@ -1321,7 +1329,11 @@ describe("e2e: real opencode CLI smoke (skipped if not installed)", () => {
     const { SkillRegistry } = await import("@aaspai/skills");
     const skillRegistry = new SkillRegistry();
     const { Sessions } = await import("../src/sessions.js");
-    const sessions = new Sessions({ agentSource, knowledgeSource: buildKnowledgeSource(), skillRegistry });
+    const sessions = new Sessions({
+      agentSource,
+      knowledgeSource: buildKnowledgeSource(),
+      skillRegistry,
+    });
     try {
       const req = {
         organizationId: "org_test",

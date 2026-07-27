@@ -35,7 +35,7 @@ export function describeAuditStoreContract(label: string, factory: () => AuditSt
       await store.append(event);
       const found = await store.get(event.id);
       expect(found).not.toBeNull();
-      expect(found!.id).toBe(event.id);
+      expect(found?.id).toBe(event.id);
     });
 
     it("queries by organization", async () => {

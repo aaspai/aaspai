@@ -3,8 +3,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runProcess } from "@aaspai/harness";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
+import { runProcess } from "@aaspai/harness";
 import type { SandboxClient, SandboxDriver, SandboxLease } from "./sandbox-client.js";
 
 /**
@@ -33,7 +33,7 @@ export interface DockerSandboxConfig {
   homeDir?: string;
 }
 
-const DEFAULT_IMAGE = "aaspai-opencode-test:latest";
+const _DEFAULT_IMAGE = "aaspai-opencode-test:latest";
 const DEFAULT_HOME = "/root";
 
 /**
@@ -82,21 +82,33 @@ export class DockerSandboxDriver implements SandboxDriver {
 
     // Copy the auth.json if a source path was configured
     if (this.config.authSourcePath && existsSync(this.config.authSourcePath)) {
-      copyFile(this.config.authSourcePath, join(authDir, ".local", "share", "opencode", "auth.json"));
+      copyFile(
+        this.config.authSourcePath,
+        join(authDir, ".local", "share", "opencode", "auth.json"),
+      );
     }
 
     const args: string[] = [
       "create",
       "--init",
-      "--label", `aaspai-sandbox-provider=${this.providerKey}`,
-      "--label", `aaspai-sandbox-lease=${providerLeaseId}`,
-      "--network", this.config.network,
-      "--mount", `type=bind,source=${baseDir},target=/workspace`,
-      "--mount", `type=bind,source=${authDir},target=${homeDir}`,
-      "--env", `HOME=${homeDir}`,
-      "--env", `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
-      "--env", `LANG=C.UTF-8`,
-      "--workdir", "/workspace",
+      "--label",
+      `aaspai-sandbox-provider=${this.providerKey}`,
+      "--label",
+      `aaspai-sandbox-lease=${providerLeaseId}`,
+      "--network",
+      this.config.network,
+      "--mount",
+      `type=bind,source=${baseDir},target=/workspace`,
+      "--mount",
+      `type=bind,source=${authDir},target=${homeDir}`,
+      "--env",
+      `HOME=${homeDir}`,
+      "--env",
+      `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`,
+      "--env",
+      `LANG=C.UTF-8`,
+      "--workdir",
+      "/workspace",
     ];
     if (this.config.memoryMb !== undefined) {
       args.push("--memory", `${this.config.memoryMb}m`);
@@ -119,7 +131,9 @@ export class DockerSandboxDriver implements SandboxDriver {
 
     const started = await runProcess({ command: "docker", args: ["start", containerId] });
     if (started.exitCode !== 0) {
-      await runProcess({ command: "docker", args: ["rm", "-f", containerId] }).catch(() => undefined);
+      await runProcess({ command: "docker", args: ["rm", "-f", containerId] }).catch(
+        () => undefined,
+      );
       throw new Error(
         `DockerSandboxDriver(${this.providerKey}): docker start failed. stderr: ${started.stderr}`,
       );
@@ -179,7 +193,9 @@ export class DockerSandboxDriver implements SandboxDriver {
     const rec = this.activeLeases.get(lease.providerLeaseId);
     if (!rec) return;
     this.activeLeases.delete(lease.providerLeaseId);
-    await runProcess({ command: "docker", args: ["rm", "-f", rec.containerId] }).catch(() => undefined);
+    await runProcess({ command: "docker", args: ["rm", "-f", rec.containerId] }).catch(
+      () => undefined,
+    );
   }
 
   /** Force-destroy, ignoring `reuseLease`. */
@@ -187,7 +203,9 @@ export class DockerSandboxDriver implements SandboxDriver {
     const rec = this.activeLeases.get(providerLeaseId);
     if (!rec) return;
     this.activeLeases.delete(providerLeaseId);
-    await runProcess({ command: "docker", args: ["rm", "-f", rec.containerId] }).catch(() => undefined);
+    await runProcess({ command: "docker", args: ["rm", "-f", rec.containerId] }).catch(
+      () => undefined,
+    );
   }
 
   /**
@@ -202,8 +220,11 @@ export class DockerSandboxDriver implements SandboxDriver {
       );
     }
     const containerId = rec.containerId;
-    const homeDir = rec.homeDir;
-    const execIn = (cmd: string, args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> =>
+    const _homeDir = rec.homeDir;
+    const execIn = (
+      cmd: string,
+      args: string[],
+    ): Promise<{ exitCode: number; stdout: string; stderr: string }> =>
       runProcess({
         command: "docker",
         args: ["exec", "--workdir", rec.remoteCwd, containerId, cmd, ...args],
@@ -222,10 +243,13 @@ export class DockerSandboxDriver implements SandboxDriver {
         command: "docker",
         args: [
           "exec",
-          "--workdir", rec.remoteCwd,
+          "--workdir",
+          rec.remoteCwd,
           ...envArgs,
           containerId,
-          "bash", "-lc", cmdString,
+          "bash",
+          "-lc",
+          cmdString,
         ],
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
@@ -274,7 +298,7 @@ export class DockerSandboxDriver implements SandboxDriver {
           });
       },
       async remove(remotePath, options) {
-        const r = await execIn("rm", [options?.recursive ?? true ? "-rf" : "-f", remotePath]);
+        const r = await execIn("rm", [(options?.recursive ?? true) ? "-rf" : "-f", remotePath]);
         if (r.exitCode !== 0) throw new Error(`remove failed: ${r.stderr}`);
       },
       run,

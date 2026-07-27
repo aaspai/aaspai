@@ -16,14 +16,21 @@ interface CloudflareBridgeConfig {
   authToken?: string;
 }
 
-function resolveBridgeConfig(input: { bridgeUrl?: string | null; authToken?: string | null }): CloudflareBridgeConfig {
+function resolveBridgeConfig(input: {
+  bridgeUrl?: string | null;
+  authToken?: string | null;
+}): CloudflareBridgeConfig {
   const bridgeUrl = input.bridgeUrl?.trim() || process.env.AASPAI_CF_BRIDGE_URL?.trim() || "";
-  const authToken = input.authToken?.trim() || process.env.AASPAI_CF_BRIDGE_TOKEN?.trim() || undefined;
+  const authToken =
+    input.authToken?.trim() || process.env.AASPAI_CF_BRIDGE_TOKEN?.trim() || undefined;
   return { bridgeUrl, ...(authToken ? { authToken } : {}) };
 }
 
 class CloudflareBridgeError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
     super(message);
     this.name = "CloudflareBridgeError";
   }
@@ -47,7 +54,10 @@ export class CloudflareSandboxDriver extends SdkSandboxDriver<{ providerLeaseId:
 
   constructor(options: { bridgeUrl?: string | null; authToken?: string | null } = {}) {
     super("cloudflare");
-    this.config = resolveBridgeConfig({ bridgeUrl: options.bridgeUrl, authToken: options.authToken });
+    this.config = resolveBridgeConfig({
+      bridgeUrl: options.bridgeUrl,
+      authToken: options.authToken,
+    });
   }
 
   private async call(path: string, body: Record<string, unknown>): Promise<unknown> {
@@ -76,7 +86,11 @@ export class CloudflareSandboxDriver extends SdkSandboxDriver<{ providerLeaseId:
   protected override async createSandbox(input: {
     remoteCwd: string;
     timeoutMs?: number;
-  }): Promise<{ raw: { providerLeaseId: string }; remoteCwd: string; metadata: Record<string, unknown> }> {
+  }): Promise<{
+    raw: { providerLeaseId: string };
+    remoteCwd: string;
+    metadata: Record<string, unknown>;
+  }> {
     const data = (await this.call("/api/aaspai-sandbox/v1/acquire", {
       remoteCwd: input.remoteCwd,
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
@@ -88,14 +102,19 @@ export class CloudflareSandboxDriver extends SdkSandboxDriver<{ providerLeaseId:
     };
   }
 
-  protected override async reconnect(providerLeaseId: string): Promise<{ providerLeaseId: string } | null> {
+  protected override async reconnect(
+    providerLeaseId: string,
+  ): Promise<{ providerLeaseId: string } | null> {
     try {
       const data = (await this.call("/api/aaspai-sandbox/v1/resume", {
         providerLeaseId,
       })) as { providerLeaseId: string };
       return { providerLeaseId: data.providerLeaseId };
     } catch (error) {
-      if (error instanceof CloudflareBridgeError && (error.status === 404 || error.status === 409)) {
+      if (
+        error instanceof CloudflareBridgeError &&
+        (error.status === 404 || error.status === 409)
+      ) {
         return null;
       }
       throw error;
@@ -103,9 +122,9 @@ export class CloudflareSandboxDriver extends SdkSandboxDriver<{ providerLeaseId:
   }
 
   protected override async destroySandbox(raw: { providerLeaseId: string }): Promise<void> {
-    await this.call("/api/aaspai-sandbox/v1/destroy", { providerLeaseId: raw.providerLeaseId }).catch(
-      () => undefined,
-    );
+    await this.call("/api/aaspai-sandbox/v1/destroy", {
+      providerLeaseId: raw.providerLeaseId,
+    }).catch(() => undefined);
   }
 
   protected override leaseId(raw: { providerLeaseId: string }): string {
@@ -127,7 +146,13 @@ export class CloudflareSandboxDriver extends SdkSandboxDriver<{ providerLeaseId:
         cwd: options.cwd ?? lease.remoteCwd,
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
         ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
-      })) as { exitCode: number | null; stdout: string; stderr: string; signal?: string; timedOut?: boolean };
+      })) as {
+        exitCode: number | null;
+        stdout: string;
+        stderr: string;
+        signal?: string;
+        timedOut?: boolean;
+      };
       return toRunResult({
         exitCode: data.exitCode,
         stdout: data.stdout,
@@ -139,7 +164,10 @@ export class CloudflareSandboxDriver extends SdkSandboxDriver<{ providerLeaseId:
     };
 
     const fsCall = async (op: string, payload: Record<string, unknown>): Promise<unknown> => {
-      return await this.call(`/api/aaspai-sandbox/v1/fs/${op}`, { providerLeaseId: leaseId, ...payload });
+      return await this.call(`/api/aaspai-sandbox/v1/fs/${op}`, {
+        providerLeaseId: leaseId,
+        ...payload,
+      });
     };
 
     return {

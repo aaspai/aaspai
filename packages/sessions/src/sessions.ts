@@ -11,10 +11,10 @@
  */
 import { randomUUID } from "node:crypto";
 import type { TranscriptEntry } from "@aaspai/contracts/harness";
+import type { Skill } from "@aaspai/contracts/phase2";
 import {
   type AgentConfigSource,
   type KnowledgeSource,
-  type PendingQuestion,
   pendingQuestionSchema,
   type SessionRequest,
   type SessionResult,
@@ -34,7 +34,6 @@ import { type AdapterType, getAdapter } from "@aaspai/harness";
 import { KnowledgeLoader } from "@aaspai/knowledge";
 import { getLogger } from "@aaspai/observability";
 import type { SkillRegistry } from "@aaspai/skills";
-import type { Skill } from "@aaspai/contracts/phase2";
 
 const log = getLogger("sessions");
 
@@ -210,7 +209,7 @@ export class Sessions {
       : "";
     const fullPrompt = `${systemBlock}${cliBlock}${skillsBlock}${wakeupContextBlock}${req.prompt}${knowledgeBlock}`;
 
-    let result: SessionResult;
+    let result: SessionResult | undefined;
     const startedAtMs = Date.now();
     // Tier 4: retry policy for `transient_upstream` errors. Default:
     // 0 retries (caller opts in via `req.config.retry.transientMaxAttempts`).
@@ -277,11 +276,7 @@ export class Sessions {
               } catch {
                 // Not JSON — emit as a raw line
               }
-              await recordEvent(
-                stream,
-                { text: line },
-                stream === "stderr" ? "stderr" : "stdout",
-              );
+              await recordEvent(stream, { text: line }, stream === "stderr" ? "stderr" : "stdout");
             }
           },
           onMeta: async (meta) => {
@@ -295,136 +290,137 @@ export class Sessions {
           },
         });
 
-      const finishedAt = new Date().toISOString();
-      const durationMs = Date.now() - startedAtMs;
-      let status: SessionStatus = adapterResult.timedOut
-        ? "timed_out"
-        : adapterResult.exitCode === 0
-          ? "succeeded"
-          : "failed";
+        const finishedAt = new Date().toISOString();
+        const durationMs = Date.now() - startedAtMs;
+        let status: SessionStatus = adapterResult.timedOut
+          ? "timed_out"
+          : adapterResult.exitCode === 0
+            ? "succeeded"
+            : "failed";
 
-      // Reclassify the errorFamily on the success path too. The
-      // opencode-cli adapter (and any other non-throwing adapter)
-      // returns `errorFamily: "internal"` for every non-zero exit
-      // regardless of the underlying cause. We look at the
-      // adapter's errorMessage + the result's errorCode and
-      // upgrade "internal" → "auth" / "provider_quota" /
-      // "transient_upstream" when the keywords match. This is the
-      // mirror of the catch-path classification below.
-      const classifiedFamily =
-        status === "failed"
-          ? classifyErrorFamily(
-              adapterResult.errorFamily,
-              adapterResult.errorMessage,
-              adapterResult.errorCode,
-            )
-          : adapterResult.errorFamily;
+        // Reclassify the errorFamily on the success path too. The
+        // opencode-cli adapter (and any other non-throwing adapter)
+        // returns `errorFamily: "internal"` for every non-zero exit
+        // regardless of the underlying cause. We look at the
+        // adapter's errorMessage + the result's errorCode and
+        // upgrade "internal" → "auth" / "provider_quota" /
+        // "transient_upstream" when the keywords match. This is the
+        // mirror of the catch-path classification below.
+        const classifiedFamily =
+          status === "failed"
+            ? classifyErrorFamily(
+                adapterResult.errorFamily,
+                adapterResult.errorMessage,
+                adapterResult.errorCode,
+              )
+            : adapterResult.errorFamily;
 
-      // Budget enforcement (Priority 8): if the caller passed a
-      // `budget: { perRun: { tokens, costUsd, durationMs } }` and
-      // the run exceeded any hard limit, mark it failed with
-      // errorFamily="user_cancelled" so the UI can surface a
-      // "budget exceeded" banner. We don't kill the run — the
-      // adapter already produced output — we just label it
-      // post-hoc.
-      const budgetViolation = checkBudgetViolation(req.budget, {
-        tokens: (adapterResult.usage?.inputTokens ?? 0) + (adapterResult.usage?.outputTokens ?? 0),
-        costUsd: adapterResult.costUsd ?? 0,
-        durationMs,
-      });
-      if (budgetViolation) {
-        status = "failed";
-      }
-
-      // Handoff markdown (Priority 7): if the caller passed a
-      // handoffMarkdown, append it to the assistant's text in the
-      // persisted summary so the next session (or a human) sees
-      // the handoff note at the end of the run.
-      const summaryBase =
-        adapterResult.summary || adapterResult.errorMessage || adapterResult.errorCode || "";
-      const finalSummary = req.handoffMarkdown
-        ? summaryBase
-          ? `${summaryBase}\n\n---\n\n${req.handoffMarkdown}`
-          : req.handoffMarkdown
-        : summaryBase;
-
-      result = {
-        sessionId: adapterResult.sessionId ?? sessionId,
-        sessionDisplayId: adapterResult.sessionDisplayId,
-        sessionParams: adapterResult.sessionParams,
-        status,
-        exitCode: adapterResult.exitCode,
-        usage: adapterResult.usage,
-        costUsd: adapterResult.costUsd,
-        errorFamily: budgetViolation ? "user_cancelled" : classifiedFamily,
-        errorCode: budgetViolation
-          ? `budget_exceeded:${budgetViolation.field}`
-          : adapterResult.errorCode,
-        // Summary is the assistant's text (if any), falling back
-        // to the adapter's errorMessage for failed runs (where
-        // the assistant text is typically empty). Handoff markdown
-        // is appended here on success. The persisted
-        // errorMessage column uses a different fallback chain —
-        // see the update below.
-        summary: finalSummary,
-        logRef: sessionId,
-      };
-      await db.db
-        .update(sessionsTable)
-        .set({
-          status,
-          finishedAt,
+        // Budget enforcement (Priority 8): if the caller passed a
+        // `budget: { perRun: { tokens, costUsd, durationMs } }` and
+        // the run exceeded any hard limit, mark it failed with
+        // errorFamily="user_cancelled" so the UI can surface a
+        // "budget exceeded" banner. We don't kill the run — the
+        // adapter already produced output — we just label it
+        // post-hoc.
+        const budgetViolation = checkBudgetViolation(req.budget, {
+          tokens:
+            (adapterResult.usage?.inputTokens ?? 0) + (adapterResult.usage?.outputTokens ?? 0),
+          costUsd: adapterResult.costUsd ?? 0,
           durationMs,
-          sessionId: result.sessionId,
-          sessionParamsJson: result.sessionParams ? JSON.stringify(result.sessionParams) : null,
-          sessionDisplayId: result.sessionDisplayId,
-          resultJson: JSON.stringify(result),
-          usageJson: result.usage ? JSON.stringify(result.usage) : null,
-          costUsd: result.costUsd,
-          errorFamily: result.errorFamily,
-          errorCode: result.errorCode,
-          // Persisted errorMessage column preference:
-          //   1. adapter's errorMessage (the actual reason the run
-          //      failed — sourced from stderr or the JSON error
-          //      event by the adapter)
-          //   2. result.summary (the assistant's text — usually
-          //      empty for failures)
-          //   3. result.errorCode (a stable string identifier)
-          //   4. the literal "failed" so the column is never NULL
-          // Only set for actual failures — successful sessions
-          // leave the column NULL.
-          errorMessage:
-            status === "succeeded"
-              ? undefined
-              : budgetViolation
-                ? `Budget exceeded: ${budgetViolation.field} (limit ${budgetViolation.limit}, actual ${budgetViolation.actual})`
-                : adapterResult.errorMessage || result.summary || result.errorCode || "failed",
-        } as never)
-        .where(eqId(sessionsTable.id, sessionId));
-      log.info("session completed", { sessionId, status, durationMs, agent: agent.id });
-      // Tier 4: retry-on-transient decision. We retry if the run
-      // failed with errorFamily="transient_upstream" AND we have
-      // attempts left AND the budget was NOT exceeded (don't retry
-      // a budget burn).
-      const maxAttempts = (retryConfig.transientMaxAttempts ?? 0) + 1;
-      if (
-        status === "failed" &&
-        classifiedFamily === "transient_upstream" &&
-        !budgetViolation &&
-        attempt < maxAttempts
-      ) {
-        const backoff = retryConfig.transientBackoffMs ?? 500;
-        log.info("retrying after transient_upstream", {
-          sessionId,
-          attempt,
-          maxAttempts,
-          backoffMs: backoff,
         });
-        await new Promise((r) => setTimeout(r, backoff));
-        continue; // <- inside the while loop, runs the next attempt
-      }
-      didComplete = true;
-      return result;
+        if (budgetViolation) {
+          status = "failed";
+        }
+
+        // Handoff markdown (Priority 7): if the caller passed a
+        // handoffMarkdown, append it to the assistant's text in the
+        // persisted summary so the next session (or a human) sees
+        // the handoff note at the end of the run.
+        const summaryBase =
+          adapterResult.summary || adapterResult.errorMessage || adapterResult.errorCode || "";
+        const finalSummary = req.handoffMarkdown
+          ? summaryBase
+            ? `${summaryBase}\n\n---\n\n${req.handoffMarkdown}`
+            : req.handoffMarkdown
+          : summaryBase;
+
+        result = {
+          sessionId: adapterResult.sessionId ?? sessionId,
+          sessionDisplayId: adapterResult.sessionDisplayId,
+          sessionParams: adapterResult.sessionParams,
+          status,
+          exitCode: adapterResult.exitCode,
+          usage: adapterResult.usage,
+          costUsd: adapterResult.costUsd,
+          errorFamily: budgetViolation ? "user_cancelled" : classifiedFamily,
+          errorCode: budgetViolation
+            ? `budget_exceeded:${budgetViolation.field}`
+            : adapterResult.errorCode,
+          // Summary is the assistant's text (if any), falling back
+          // to the adapter's errorMessage for failed runs (where
+          // the assistant text is typically empty). Handoff markdown
+          // is appended here on success. The persisted
+          // errorMessage column uses a different fallback chain —
+          // see the update below.
+          summary: finalSummary,
+          logRef: sessionId,
+        };
+        await db.db
+          .update(sessionsTable)
+          .set({
+            status,
+            finishedAt,
+            durationMs,
+            sessionId: result.sessionId,
+            sessionParamsJson: result.sessionParams ? JSON.stringify(result.sessionParams) : null,
+            sessionDisplayId: result.sessionDisplayId,
+            resultJson: JSON.stringify(result),
+            usageJson: result.usage ? JSON.stringify(result.usage) : null,
+            costUsd: result.costUsd,
+            errorFamily: result.errorFamily,
+            errorCode: result.errorCode,
+            // Persisted errorMessage column preference:
+            //   1. adapter's errorMessage (the actual reason the run
+            //      failed — sourced from stderr or the JSON error
+            //      event by the adapter)
+            //   2. result.summary (the assistant's text — usually
+            //      empty for failures)
+            //   3. result.errorCode (a stable string identifier)
+            //   4. the literal "failed" so the column is never NULL
+            // Only set for actual failures — successful sessions
+            // leave the column NULL.
+            errorMessage:
+              status === "succeeded"
+                ? undefined
+                : budgetViolation
+                  ? `Budget exceeded: ${budgetViolation.field} (limit ${budgetViolation.limit}, actual ${budgetViolation.actual})`
+                  : adapterResult.errorMessage || result.summary || result.errorCode || "failed",
+          } as never)
+          .where(eqId(sessionsTable.id, sessionId));
+        log.info("session completed", { sessionId, status, durationMs, agent: agent.id });
+        // Tier 4: retry-on-transient decision. We retry if the run
+        // failed with errorFamily="transient_upstream" AND we have
+        // attempts left AND the budget was NOT exceeded (don't retry
+        // a budget burn).
+        const maxAttempts = (retryConfig.transientMaxAttempts ?? 0) + 1;
+        if (
+          status === "failed" &&
+          classifiedFamily === "transient_upstream" &&
+          !budgetViolation &&
+          attempt < maxAttempts
+        ) {
+          const backoff = retryConfig.transientBackoffMs ?? 500;
+          log.info("retrying after transient_upstream", {
+            sessionId,
+            attempt,
+            maxAttempts,
+            backoffMs: backoff,
+          });
+          await new Promise((r) => setTimeout(r, backoff));
+          continue; // <- inside the while loop, runs the next attempt
+        }
+        didComplete = true;
+        return result;
       }
     } catch (err) {
       // Tier 4: also retry when the adapter throws a transient-shaped
@@ -451,38 +447,39 @@ export class Sessions {
         // back to the while-loop condition check below.
       } else {
         const finishedAt = new Date().toISOString();
-      const durationMs = Date.now() - startedAtMs;
-      const errMessage = (err as Error).message ?? "";
-      const errorFamily = classifyErrorFamily(undefined, errMessage, "adapter_execution_failed");
-      result = {
-        sessionId,
-        status: "failed",
-        exitCode: 1,
-        errorCode: "adapter_execution_failed",
-        errorFamily,
-        summary: errMessage,
-        logRef: sessionId,
-      };
-      await db.db
-        .update(sessionsTable)
-        .set({
+        const durationMs = Date.now() - startedAtMs;
+        const errMessage = (err as Error).message ?? "";
+        const errorFamily = classifyErrorFamily(undefined, errMessage, "adapter_execution_failed");
+        result = {
+          sessionId,
           status: "failed",
-          finishedAt,
-          durationMs,
-          resultJson: JSON.stringify(result),
+          exitCode: 1,
+          errorCode: "adapter_execution_failed",
           errorFamily,
-          errorCode: result.errorCode,
-          errorMessage: (err as Error).message,
-        } as never)
-        .where(eqId(sessionsTable.id, sessionId));
-      log.error("session failed", { sessionId, err: (err as Error).message });
-      didComplete = true;
-      return result;
+          summary: errMessage,
+          logRef: sessionId,
+        };
+        await db.db
+          .update(sessionsTable)
+          .set({
+            status: "failed",
+            finishedAt,
+            durationMs,
+            resultJson: JSON.stringify(result),
+            errorFamily,
+            errorCode: result.errorCode,
+            errorMessage: (err as Error).message,
+          } as never)
+          .where(eqId(sessionsTable.id, sessionId));
+        log.error("session failed", { sessionId, err: (err as Error).message });
+        didComplete = true;
+        return result;
       }
     }
     // Tier 4: unregister from runningSessions on completion.
     this.runningSessions.delete(sessionId);
-    return result!;
+    if (!result) throw new Error(`session ${sessionId} completed without a result`);
+    return result;
   }
 
   async get(id: string): Promise<SessionState | null> {
@@ -598,7 +595,11 @@ export class Sessions {
       log.warn("adapter.compact not implemented", { sessionId, adapter: "unknown" });
       return { compacted: false, sessionId, summary: "adapter.compact not implemented" };
     }
-    const result = await adapter.compact({ sessionId, force: opts.force ?? false, tailTurns: opts.tailTurns });
+    const result = await adapter.compact({
+      sessionId,
+      force: opts.force ?? false,
+      tailTurns: opts.tailTurns,
+    });
     // Record a session event for the audit trail.
     try {
       const db = getDefaultDb();

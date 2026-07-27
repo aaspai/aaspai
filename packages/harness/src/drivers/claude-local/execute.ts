@@ -10,12 +10,7 @@ import { buildAgentEnv } from "../../shared/env.js";
 import { redactCommandText, redactHomePath } from "../../shared/redact.js";
 import { runProcess } from "../../shared/run-process.js";
 import type { ClaudeStreamEvent } from "./config.js";
-import {
-  type ClaudeLocalConfig,
-  claudeLocalConfigSchema,
-  claudeLocalInfo,
-  parseClaudeLocalConfig,
-} from "./config.js";
+import { type ClaudeLocalConfig, claudeLocalInfo, parseClaudeLocalConfig } from "./config.js";
 import { parseClaudeStreamLine } from "./parse.js";
 
 const REDACTED_TEXT_VALUE = "[REDACTED]";
@@ -64,7 +59,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const collectedUsage: UsageSummary = {};
   let sessionId: string | undefined = ctx.runtime.sessionId;
   let model: string | undefined = config.model;
-  let stopReason: string | undefined;
+  let _stopReason: string | undefined;
   let timedOut = false;
 
   const onLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
@@ -83,7 +78,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             if (entry.sessionId) sessionId = entry.sessionId;
             if (entry.model) model = entry.model;
           } else if (entry.kind === "result") {
-            if (entry.stopReason) stopReason = entry.stopReason;
+            if (entry.stopReason) _stopReason = entry.stopReason;
           }
         }
         await ctx.onLog(stream, line);

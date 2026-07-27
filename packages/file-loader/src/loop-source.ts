@@ -8,8 +8,6 @@ import {
   type SourceDescriptor,
 } from "@aaspai/contracts/phase2";
 import { getLogger } from "@aaspai/observability";
-import * as yaml from "js-yaml";
-import { z } from "zod";
 import { FileWatcher } from "./chokidar-watcher.js";
 import { parseOkfFile, sha256HexSync } from "./okf-parser.js";
 
@@ -153,7 +151,7 @@ export class FileLoopConfigSource implements LoopConfigSource {
   private dirOf(filePath: string): string | null {
     const parts = filePath.split(/[\\/]/);
     if (parts.length < 2) return null;
-    return join(this.loopsDir, parts[parts.length - 2]!);
+    return join(this.loopsDir, parts[parts.length - 2] ?? "");
   }
 
   private async loadLoopDir(dir: string): Promise<Readonly<LoopPattern> | null> {

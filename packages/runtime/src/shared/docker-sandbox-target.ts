@@ -1,7 +1,7 @@
 import type { ProviderCapabilities } from "@aaspai/contracts/capabilities";
 import type { RuntimeTargetInfo, SandboxExecutionTarget } from "@aaspai/contracts/runtime";
+import { type DockerSandboxConfig, DockerSandboxDriver } from "./docker-sandbox-driver.js";
 import type { RuntimeTarget } from "./execution-target.js";
-import { DockerSandboxDriver, type DockerSandboxConfig } from "./docker-sandbox-driver.js";
 
 /**
  * Build a `RuntimeTarget` backed by a real docker container
@@ -36,7 +36,9 @@ export function createDockerSandboxTarget(
     } as RuntimeTargetInfo,
     async run(target, runOptions) {
       if (target.kind !== "sandbox") {
-        throw new Error(`docker-sandbox(${options.providerKey}) cannot run a ${target.kind} target.`);
+        throw new Error(
+          `docker-sandbox(${options.providerKey}) cannot run a ${target.kind} target.`,
+        );
       }
       const sandboxTarget = target as SandboxExecutionTarget;
       const remoteCwd = sandboxTarget.remoteCwd ?? "/workspace";
@@ -49,10 +51,12 @@ export function createDockerSandboxTarget(
       }
     },
     async prepareWorkspace(target) {
-      if (target.kind !== "sandbox") throw new Error(`docker-sandbox(${options.providerKey}) only.`);
+      if (target.kind !== "sandbox")
+        throw new Error(`docker-sandbox(${options.providerKey}) only.`);
     },
     async restoreWorkspace(target) {
-      if (target.kind !== "sandbox") throw new Error(`docker-sandbox(${options.providerKey}) only.`);
+      if (target.kind !== "sandbox")
+        throw new Error(`docker-sandbox(${options.providerKey}) only.`);
     },
   };
 }

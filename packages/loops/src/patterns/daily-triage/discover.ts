@@ -4,7 +4,7 @@
  */
 
 import type { WorkItem } from "@aaspai/contracts/phase2";
-import { getDefaultDb, type SessionRow, sessions, type WakeupRow, wakeups } from "@aaspai/db";
+import { getDefaultDb, sessions, wakeups } from "@aaspai/db";
 import { desc, gte } from "drizzle-orm";
 
 const LOOKBACK_HOURS = 24;

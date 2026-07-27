@@ -1,10 +1,10 @@
-import { ModalClient } from "modal";
-import type { Sandbox as ModalSandbox, App, Image as ModalImage } from "modal";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
+import type { App, Image as ModalImage, Sandbox as ModalSandbox } from "modal";
+import { ModalClient } from "modal";
 import type { SandboxClient, SandboxLease } from "../sandbox-client.js";
 import {
-  SdkSandboxDriver,
   buildLoginShellScript,
+  SdkSandboxDriver,
   shellQuote,
   toRunResult,
 } from "../sdk-sandbox-driver.js";
@@ -43,14 +43,16 @@ export class ModalSandboxDriver extends SdkSandboxDriver<ModalSandbox> {
   private readonly workdir: string;
   private readonly sandboxTimeoutMs: number;
 
-  constructor(options: {
-    tokenId?: string | null;
-    tokenSecret?: string | null;
-    appName?: string;
-    image?: string;
-    workdir?: string;
-    sandboxTimeoutMs?: number;
-  } = {}) {
+  constructor(
+    options: {
+      tokenId?: string | null;
+      tokenSecret?: string | null;
+      appName?: string;
+      image?: string;
+      workdir?: string;
+      sandboxTimeoutMs?: number;
+    } = {},
+  ) {
     super("modal");
     // Defer the credential check to `acquire` so the module loads
     // cleanly even when MODAL_TOKEN_ID/SECRET are not set.
@@ -118,7 +120,7 @@ export class ModalSandboxDriver extends SdkSandboxDriver<ModalSandbox> {
   }
 
   protected override buildClient(raw: ModalSandbox, lease: SandboxLease): SandboxClient {
-    const remoteCwd = lease.remoteCwd;
+    const _remoteCwd = lease.remoteCwd;
     const execCommand = async (options: RunProcessOptions): Promise<RunProcessResult> => {
       const startedAt = new Date();
       // Modal's exec takes a pre-parsed argv, so we wrap the user's
@@ -165,11 +167,14 @@ export class ModalSandboxDriver extends SdkSandboxDriver<ModalSandbox> {
         return Buffer.from(bytes);
       },
       async listFiles(remotePath) {
-        const proc = await raw.exec([
-          "sh",
-          "-lc",
-          `cd ${shellQuote(remotePath)} && find . -mindepth 1 -maxdepth 1 -printf '%f|%s|%y\\n'`,
-        ], { mode: "text" });
+        const proc = await raw.exec(
+          [
+            "sh",
+            "-lc",
+            `cd ${shellQuote(remotePath)} && find . -mindepth 1 -maxdepth 1 -printf '%f|%s|%y\\n'`,
+          ],
+          { mode: "text" },
+        );
         await proc.wait();
         const text = await proc.stdout.readText();
         return text

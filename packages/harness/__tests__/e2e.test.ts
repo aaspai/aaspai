@@ -1048,7 +1048,7 @@ describe("e2e: opencode_cli driver", () => {
         adapterConfig: { disableProjectConfig: true },
       });
       await opencodeCli.execute(ctx);
-      const { readFileSync, existsSync } = await import("node:fs");
+      const { existsSync, readFileSync } = await import("node:fs");
       expect(existsSync(envProbe)).toBe(true);
       const probe = JSON.parse(readFileSync(envProbe, "utf8")) as Record<string, string>;
       expect(probe.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("1");
@@ -1070,7 +1070,7 @@ describe("e2e: opencode_cli driver", () => {
         adapterConfig: { xdgConfigHome: xdg, dangerouslySkipPermissions: true },
       });
       await opencodeCli.execute(ctx);
-      const { readFileSync, existsSync } = await import("node:fs");
+      const { existsSync, readFileSync } = await import("node:fs");
       const cfgPath = join(xdg, "opencode", "config.json");
       expect(existsSync(cfgPath)).toBe(true);
       const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
@@ -1457,6 +1457,7 @@ describe("e2e: opencode_cli driver", () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const cwd = makeScratchDir("no-mcp-");
     const envProbe = join(cwd, "probe.json");
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
     process.env.AASPAI_FAKE_OPENCODE_PROBE_FILE = envProbe;
     try {
       const ctx = buildAdapterContext({
@@ -1467,7 +1468,7 @@ describe("e2e: opencode_cli driver", () => {
       await opencodeCli.execute(ctx);
       const probe = JSON.parse(readFileSync(envProbe, "utf8")) as Record<string, string>;
       // No XDG_CONFIG_HOME was set because nothing required it.
-      expect(probe.XDG_CONFIG_HOME).toBeUndefined();
+      expect(probe.XDG_CONFIG_HOME).toBe(originalXdgConfigHome);
     } finally {
       delete process.env.AASPAI_FAKE_OPENCODE_PROBE_FILE;
       rmRf(cwd);
@@ -1828,7 +1829,7 @@ describe("e2e: opencode_cli driver", () => {
         adapterConfig: { promptArg: "explicit-prompt" },
       });
       await opencodeCli.execute(ctx);
-      const { readFileSync, existsSync } = await import("node:fs");
+      const { readFileSync } = await import("node:fs");
       const argv = JSON.parse(readFileSync(argvDump, "utf8")) as string[];
       const idx = argv.indexOf("--prompt");
       expect(idx).toBeGreaterThan(-1);
@@ -1853,7 +1854,7 @@ describe("e2e: opencode_cli driver", () => {
         adapterConfig: { port: 5123, mini: true, noReplay: true, replayLimit: 20 },
       });
       await opencodeCli.execute(ctx);
-      const { readFileSync, existsSync } = await import("node:fs");
+      const { readFileSync } = await import("node:fs");
       const argv = JSON.parse(readFileSync(argvDump, "utf8")) as string[];
       const expectFlag = (name: string, value?: string): void => {
         const i = argv.indexOf(name);
@@ -1888,7 +1889,9 @@ describe("e2e: opencode_cli driver", () => {
       await opencodeCli.execute(ctx);
       const probe = await readEnvProbe(cwd);
       expect(probe.OPENCODE_CONFIG).toBe("/abs/path/to/extra-config.json");
-      expect(probe.OPENCODE_CONFIG_CONTENT).toBe('{"$schema":"https://opencode.ai/config.json","model":"x"}');
+      expect(probe.OPENCODE_CONFIG_CONTENT).toBe(
+        '{"$schema":"https://opencode.ai/config.json","model":"x"}',
+      );
     } finally {
       delete process.env.AASPAI_FAKE_OPENCODE_PROBE_FILE;
       rmRf(cwd);
@@ -1962,7 +1965,7 @@ describe("e2e: opencode_cli driver", () => {
   it("deleteOpencodeSession invokes 'opencode session delete <id>'", async () => {
     const { deleteOpencodeSession } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       const r = await deleteOpencodeSession("ses_abc123", { cli: d.cli });
       expect(r.exitCode).toBe(0);
@@ -1970,14 +1973,13 @@ describe("e2e: opencode_cli driver", () => {
       expect(argv).toEqual(["session", "delete", "ses_abc123"]);
     } finally {
       d.cleanup();
-      
     }
   });
 
   it("listOpencodeSessionsWithLimit passes --max-count and --format json", async () => {
     const { listOpencodeSessionsWithLimit } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = JSON.stringify([{ id: "ses_x" }]);
       const r = await listOpencodeSessionsWithLimit({ cli: d.cli, maxCount: 7, format: "json" });
@@ -1987,14 +1989,13 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("addOpencodeMcp builds the right argv for a stdio server", async () => {
     const { addOpencodeMcp } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       const r = await addOpencodeMcp(
         "playwright",
@@ -2016,14 +2017,13 @@ describe("e2e: opencode_cli driver", () => {
       ]);
     } finally {
       d.cleanup();
-      
     }
   });
 
   it("addOpencodeMcp builds --url for an http server", async () => {
     const { addOpencodeMcp } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       await addOpencodeMcp(
         "remote",
@@ -2034,7 +2034,6 @@ describe("e2e: opencode_cli driver", () => {
       expect(argv).toEqual(["mcp", "add", "remote", "--url", "https://mcp.example.com"]);
     } finally {
       d.cleanup();
-      
     }
   });
 
@@ -2043,7 +2042,7 @@ describe("e2e: opencode_cli driver", () => {
       "../src/drivers/opencode-cli/index.js"
     );
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = "context7  connected\nplaywright  connected";
       const r1 = await listOpencodeMcp({ cli: d.cli });
@@ -2063,7 +2062,6 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
@@ -2072,7 +2070,7 @@ describe("e2e: opencode_cli driver", () => {
       "../src/drivers/opencode-cli/index.js"
     );
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = "build\nplan\ngeneral";
       const r1 = await listOpencodeAgents({ cli: d.cli });
@@ -2087,14 +2085,13 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("debugOpencodeConfig parses the resolved merged config as JSON", async () => {
     const { debugOpencodeConfig } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = JSON.stringify({ $schema: "https://x", provider: {} });
       const r = await debugOpencodeConfig({ cli: d.cli });
@@ -2104,14 +2101,13 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("debugOpencodeSkills parses the discovered-skill array", async () => {
     const { debugOpencodeSkills } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = JSON.stringify([
         { name: "verify-change", description: "Verify", location: "/x/SKILL.md" },
@@ -2119,7 +2115,12 @@ describe("e2e: opencode_cli driver", () => {
       ]);
       const r = await debugOpencodeSkills({ cli: d.cli });
       expect(r).toEqual([
-        { name: "verify-change", description: "Verify", location: "/x/SKILL.md", content: undefined },
+        {
+          name: "verify-change",
+          description: "Verify",
+          location: "/x/SKILL.md",
+          content: undefined,
+        },
         { name: "summarize", description: "Sum", location: "/y/SKILL.md", content: undefined },
       ]);
       const argv = JSON.parse(readFileSync(d.dumpFile, "utf8")) as string[];
@@ -2127,14 +2128,13 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("debugOpencodePaths parses key/value lines", async () => {
     const { debugOpencodePaths } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT =
         "home       C:\\Users\\sande\ndata       C:\\Users\\sande\\.local\\share\nconfig     C:\\Users\\sande\\.config\\opencode\n";
@@ -2147,7 +2147,6 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
@@ -2156,7 +2155,7 @@ describe("e2e: opencode_cli driver", () => {
       "../src/drivers/opencode-cli/index.js"
     );
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = "abc1234567890def";
       const t = await trackOpencodeSnapshot({ cli: d.cli });
@@ -2172,14 +2171,13 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("debugOpencodeInfo forwards the subcommand", async () => {
     const { debugOpencodeInfo } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = "opencode 1.18.5 win32 x64";
       const r = await debugOpencodeInfo({ cli: d.cli });
@@ -2189,14 +2187,15 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("queryOpencodeDb / opencodeDbPath forward the right subcommand", async () => {
-    const { queryOpencodeDb, opencodeDbPath } = await import("../src/drivers/opencode-cli/index.js");
+    const { queryOpencodeDb, opencodeDbPath } = await import(
+      "../src/drivers/opencode-cli/index.js"
+    );
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = "id\tses_1\nid\tses_2";
       const r1 = await queryOpencodeDb("SELECT id FROM session", { cli: d.cli });
@@ -2212,17 +2211,15 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("refreshOpencodeModels passes --refresh and parses provider/model lines", async () => {
     const { refreshOpencodeModels } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
-      process.env.AASPAI_FAKE_STDOUT =
-        "opencode-go/mimo-v2.5\nopencode-go/glm-5.2\nrandom-noise\n";
+      process.env.AASPAI_FAKE_STDOUT = "opencode-go/mimo-v2.5\nopencode-go/glm-5.2\nrandom-noise\n";
       const r = await refreshOpencodeModels({ cli: d.cli });
       expect(r.models).toEqual(["opencode-go/mimo-v2.5", "opencode-go/glm-5.2"]);
       const argv = JSON.parse(readFileSync(d.dumpFile, "utf8")) as string[];
@@ -2230,14 +2227,13 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("exportOpencodeSessionSanitized passes --sanitize <id>", async () => {
     const { exportOpencodeSessionSanitized } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = '{"id":"ses_x","sanitized":true}';
       const r = await exportOpencodeSessionSanitized("ses_x", { cli: d.cli });
@@ -2247,14 +2243,13 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("upgradeOpencode forwards --method and a target version", async () => {
     const { upgradeOpencode } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = "Already on v1.18.5\n";
       const r = await upgradeOpencode({ cli: d.cli, target: "v1.19.0", method: "npm" });
@@ -2264,14 +2259,13 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 
   it("opencodeCompletion forwards `completion <shell>`", async () => {
     const { opencodeCompletion } = await import("../src/drivers/opencode-cli/index.js");
     const d = await makeArgvDumper();
-    
+
     try {
       process.env.AASPAI_FAKE_STDOUT = "# bash completion for opencode\ncomplete -F ...";
       const r = await opencodeCompletion("bash", { cli: d.cli });
@@ -2281,7 +2275,6 @@ describe("e2e: opencode_cli driver", () => {
     } finally {
       delete process.env.AASPAI_FAKE_STDOUT;
       d.cleanup();
-      
     }
   });
 

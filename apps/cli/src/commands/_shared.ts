@@ -2,9 +2,8 @@
  * Common helpers for the CLI commands.
  */
 
-import { existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, relative } from "node:path";
 import pc from "picocolors";
 
 export { pc };

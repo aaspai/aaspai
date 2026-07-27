@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema/index.ts",
+    "./schema/sqlite": "./src/schema/sqlite.ts",
     "./schema/phase2": "./src/schema/phase2.ts",
     "./schema/execution": "./src/schema/execution.ts",
     "./client": "./src/client.ts",

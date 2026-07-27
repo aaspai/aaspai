@@ -1,13 +1,10 @@
-import { Daytona } from "@daytonaio/sdk";
 import { readFileSync } from "node:fs";
+import { Daytona } from "@daytonaio/sdk";
 
 const daytona = new Daytona({ apiKey: process.env.DAYTONA_API_KEY! });
 
 console.log("Creating sandbox...");
-const sandbox = await daytona.create(
-  { image: "node:22-bookworm-slim" },
-  { timeout: 120 },
-);
+const sandbox = await daytona.create({ image: "node:22-bookworm-slim" }, { timeout: 120 });
 console.log("Sandbox:", sandbox.id);
 
 try {

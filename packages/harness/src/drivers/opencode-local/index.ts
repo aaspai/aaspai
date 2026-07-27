@@ -182,12 +182,12 @@ export const opencodeLocal: ServerAdapterModule = {
     if (ctx.onLog) {
       await ctx.onLog(
         "stdout",
-        JSON.stringify({
+        `${JSON.stringify({
           kind: "init",
           ts: startedAt.toISOString(),
           model: config.model,
           baseUrl,
-        }) + "\n",
+        })}\n`,
       );
     }
 
@@ -212,20 +212,20 @@ export const opencodeLocal: ServerAdapterModule = {
     if (ctx.onLog && text) {
       await ctx.onLog(
         "stdout",
-        JSON.stringify({
+        `${JSON.stringify({
           kind: "assistant",
           ts: new Date().toISOString(),
           text,
-        }) + "\n",
+        })}\n`,
       );
       await ctx.onLog(
         "stdout",
-        JSON.stringify({
+        `${JSON.stringify({
           kind: "result",
           ts: new Date().toISOString(),
           summary: text.slice(0, 200),
           stopReason: finishReason,
-        }) + "\n",
+        })}\n`,
       );
     }
 

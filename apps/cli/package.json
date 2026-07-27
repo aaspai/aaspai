@@ -22,15 +22,20 @@
     "prepublishOnly": "yarn build"
   },
   "dependencies": {
+    "@aaspai/db": "workspace:*",
+    "@aaspai/execution": "workspace:*",
+    "@aaspai/file-loader": "workspace:*",
+    "@aaspai/harness": "workspace:*",
+    "@aaspai/loops": "workspace:*",
+    "@aaspai/runtime": "workspace:*",
+    "@aaspai/sessions": "workspace:*",
+    "@aaspai/skills": "workspace:*",
+    "@aaspai/tools": "workspace:*",
     "better-sqlite3": "^12.11.1",
     "commander": "^12.1.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
-    "@aaspai/db": "workspace:*",
-    "@aaspai/execution": "workspace:*",
-    "@aaspai/harness": "workspace:*",
-    "@aaspai/runtime": "workspace:*",
     "@biomejs/biome": "^2.1.1",
     "@types/node": "^24.0.0",
     "esbuild": "0.25",

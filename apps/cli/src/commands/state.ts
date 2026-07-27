@@ -106,7 +106,7 @@ async function showMd(): Promise<void> {
             if (r.summary) {
               out.push("");
               out.push("**Summary:**", "");
-              out.push("> " + r.summary.split("\n").join("\n> "));
+              out.push(`> ${r.summary.split("\n").join("\n> ")}`);
             }
           } catch {
             /* ignore */
@@ -147,7 +147,7 @@ async function showMd(): Promise<void> {
         );
       }
     }
-    process.stdout.write(out.join("\n") + "\n");
+    process.stdout.write(`${out.join("\n")}\n`);
   } finally {
     await closeDefaultDb();
     process.exit(0);

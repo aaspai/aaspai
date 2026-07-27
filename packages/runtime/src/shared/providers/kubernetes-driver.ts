@@ -1,6 +1,6 @@
-import type { CoreV1Api, V1Pod, V1PodSpec } from "@kubernetes/client-node";
 import { randomUUID } from "node:crypto";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
+import type { CoreV1Api, V1Pod, V1PodSpec } from "@kubernetes/client-node";
 import type { SandboxClient, SandboxLease } from "../sandbox-client.js";
 import { SdkSandboxDriver, shellQuote, toRunResult } from "../sdk-sandbox-driver.js";
 
@@ -15,7 +15,10 @@ import { SdkSandboxDriver, shellQuote, toRunResult } from "../sdk-sandbox-driver
  * minimal image (default `alpine`) with `tail -f /dev/null` as the
  * entrypoint so the container stays alive between commands.
  */
-export class KubernetesSandboxDriver extends SdkSandboxDriver<{ podName: string; namespace: string }> {
+export class KubernetesSandboxDriver extends SdkSandboxDriver<{
+  podName: string;
+  namespace: string;
+}> {
   private readonly k8sApi: CoreV1Api;
   private readonly namespace: string;
   private readonly image: string;
@@ -37,7 +40,11 @@ export class KubernetesSandboxDriver extends SdkSandboxDriver<{ podName: string;
   protected override async createSandbox(input: {
     remoteCwd: string;
     timeoutMs?: number;
-  }): Promise<{ raw: { podName: string; namespace: string }; remoteCwd: string; metadata: Record<string, unknown> }> {
+  }): Promise<{
+    raw: { podName: string; namespace: string };
+    remoteCwd: string;
+    metadata: Record<string, unknown>;
+  }> {
     const podName = `aaspai-${randomUUID().slice(0, 8).toLowerCase()}`;
     const podSpec: V1PodSpec = {
       containers: [
@@ -71,7 +78,10 @@ export class KubernetesSandboxDriver extends SdkSandboxDriver<{ podName: string;
     // Wait for the pod to be Running (best-effort with a 60s budget)
     const deadline = Date.now() + (input.timeoutMs ?? this.timeoutMs);
     while (Date.now() < deadline) {
-      const read = await this.k8sApi.readNamespacedPod({ name: podName, namespace: this.namespace });
+      const read = await this.k8sApi.readNamespacedPod({
+        name: podName,
+        namespace: this.namespace,
+      });
       const phase = read.status?.phase;
       if (phase === "Running") break;
       if (phase === "Failed" || phase === "Succeeded") {
@@ -108,7 +118,10 @@ export class KubernetesSandboxDriver extends SdkSandboxDriver<{ podName: string;
     }
   }
 
-  protected override async destroySandbox(raw: { podName: string; namespace: string }): Promise<void> {
+  protected override async destroySandbox(raw: {
+    podName: string;
+    namespace: string;
+  }): Promise<void> {
     await this.k8sApi.deleteNamespacedPod({ name: raw.podName, namespace: raw.namespace });
   }
 
@@ -150,7 +163,10 @@ export class KubernetesSandboxDriver extends SdkSandboxDriver<{ podName: string;
           raw.namespace,
           {
             command: "sh",
-            args: ["-c", `mkdir -p ${shellQuote(remotePath.split("/").slice(0, -1).join("/") || ".")} && cat > ${shellQuote(remotePath)}`],
+            args: [
+              "-c",
+              `mkdir -p ${shellQuote(remotePath.split("/").slice(0, -1).join("/") || ".")} && cat > ${shellQuote(remotePath)}`,
+            ],
             stdin: text,
           },
           lease.remoteCwd,
@@ -173,7 +189,10 @@ export class KubernetesSandboxDriver extends SdkSandboxDriver<{ podName: string;
           raw.namespace,
           {
             command: "sh",
-            args: ["-c", `cd ${shellQuote(remotePath)} && find . -mindepth 1 -maxdepth 1 -printf '%f|%s|%y\\n'`],
+            args: [
+              "-c",
+              `cd ${shellQuote(remotePath)} && find . -mindepth 1 -maxdepth 1 -printf '%f|%s|%y\\n'`,
+            ],
           },
           lease.remoteCwd,
           new Date(),
@@ -220,7 +239,16 @@ async function execViaKubectl(
   // flags from the in-pod command. The pod's `workingDir` is set in the
   // pod spec (see createSandbox above), so the container starts in the
   // right directory; we don't need a `cd` wrap here.
-  const args = ["exec", "-i", "-n", namespace, podName, "--", options.command, ...(options.args ?? [])];
+  const args = [
+    "exec",
+    "-i",
+    "-n",
+    namespace,
+    podName,
+    "--",
+    options.command,
+    ...(options.args ?? []),
+  ];
   void cwd;
   return await new Promise<RunProcessResult>((resolve) => {
     const child = spawn("kubectl", args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
@@ -246,4 +274,3 @@ async function execViaKubectl(
     });
   });
 }
-

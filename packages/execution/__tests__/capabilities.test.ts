@@ -15,22 +15,14 @@ describe("provider capability guards", () => {
     expect(() =>
       assertExecutionPlanCapabilities({
         harness: "dry_run_local",
-        target: {
-          kind: "ssh",
-          host: "example.com",
-          port: 22,
-          username: "root",
-          remoteCwd: "/work",
-          strictHostKeyChecking: true,
-          shellCommand: "bash",
-        },
+        target: { kind: "sandbox", provider: "kubernetes", remoteCwd: "/work" },
       }),
     ).toThrowError(ProviderCapabilityError);
     let captured: unknown;
     try {
       assertExecutionPlanCapabilities({
         harness: "dry_run_local",
-        target: { kind: "sandbox", provider: "e2b", remoteCwd: "/work" },
+        target: { kind: "sandbox", provider: "kubernetes", remoteCwd: "/work" },
       });
     } catch (error) {
       captured = error;

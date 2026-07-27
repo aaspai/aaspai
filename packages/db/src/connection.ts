@@ -21,7 +21,8 @@ import Database from "better-sqlite3";
 import { drizzle as drizzleSqlite } from "drizzle-orm/better-sqlite3";
 import { drizzle as drizzlePostgres } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import * as schema from "./schema";
+import * as postgresSchema from "./schema";
+import * as sqliteSchema from "./schema/sqlite";
 
 export type DbBackend = "sqlite" | "postgres";
 
@@ -35,7 +36,7 @@ export type DbBackend = "sqlite" | "postgres";
  * union of the two dialects (which is structurally identical but
  * nominally different).
  */
-export type SqliteDb = ReturnType<typeof drizzleSqlite<typeof schema>>;
+export type SqliteDb = ReturnType<typeof drizzleSqlite<typeof sqliteSchema>>;
 
 export interface DbHandle {
   db: SqliteDb;
@@ -65,7 +66,7 @@ export function createDb(): DbHandle {
     const sqlite = new Database(path);
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("foreign_keys = ON");
-    const db = drizzleSqlite(sqlite, { schema });
+    const db = drizzleSqlite(sqlite, { schema: sqliteSchema });
     return {
       db,
       backend: "sqlite",
@@ -79,7 +80,7 @@ export function createDb(): DbHandle {
   // Postgres branch (Phase 4) — we still return a SqliteDb-typed handle
   // because consumers in the foundation slice don't talk to it.
   const client = postgres(url, { max: 10 });
-  const db = drizzlePostgres(client, { schema }) as unknown as SqliteDb;
+  const db = drizzlePostgres(client, { schema: postgresSchema }) as unknown as SqliteDb;
   return {
     db,
     backend: "postgres",

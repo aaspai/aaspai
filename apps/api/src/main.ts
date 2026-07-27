@@ -165,12 +165,14 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const filtered: string[] = [];
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--cwd" && i + 1 < argv.length) {
-      process.chdir(argv[i + 1]!);
+    const arg = argv[i];
+    const cwd = argv[i + 1];
+    if (arg === "--cwd" && cwd !== undefined) {
+      process.chdir(cwd);
       i++;
       continue;
     }
-    filtered.push(argv[i]!);
+    if (arg !== undefined) filtered.push(arg);
   }
   const cmd = filtered[0];
   if (cmd === "start") {
@@ -193,15 +195,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-
-function findNodeModulesPath(): string {
-  let dir = __dirname;
-  for (let i = 0; i < 10; i++) {
-    const candidate = resolve(dir, "node_modules");
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return "";
-}

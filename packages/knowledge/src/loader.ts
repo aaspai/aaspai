@@ -41,8 +41,8 @@ export class KnowledgeLoader {
    * concepts from the source.
    */
   async loadFor(agent: AgentConfig): Promise<LoadedKnowledge> {
-    const include = asStringArray(agent.knowledge["include"]);
-    const exclude = new Set(asStringArray(agent.knowledge["exclude"]));
+    const include = asStringArray(agent.knowledge.include);
+    const exclude = new Set(asStringArray(agent.knowledge.exclude));
     const concepts = new Map<string, Readonly<KnowledgeConcept>>();
 
     for (const pattern of include) {

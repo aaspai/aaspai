@@ -63,7 +63,7 @@ export class Gate {
         requiresApproval: actionRule.requireApproval,
       };
     }
-    if (actionRule && actionRule.requireApproval) {
+    if (actionRule?.requireApproval) {
       return { ok: true, action: actionRule };
     }
 

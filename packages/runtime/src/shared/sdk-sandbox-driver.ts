@@ -179,16 +179,15 @@ export function buildLoginShellScript(input: {
     .filter(([, v]) => typeof v === "string")
     .map(([k, v]) => `${k}=${shellQuote(v as string)}`);
   const commandParts = [shellQuote(input.command), ...args.map(shellQuote)].join(" ");
-  const execLine = envArgs.length > 0
-    ? `exec env ${envArgs.join(" ")} ${commandParts}`
-    : `exec ${commandParts}`;
+  const execLine =
+    envArgs.length > 0 ? `exec env ${envArgs.join(" ")} ${commandParts}` : `exec ${commandParts}`;
   const script = [
     "if [ -f /etc/profile ]; then . /etc/profile >/dev/null 2>&1 || true; fi",
-    "if [ -f \"$HOME/.profile\" ]; then . \"$HOME/.profile\" >/dev/null 2>&1 || true; fi",
-    "if [ -f \"$HOME/.bash_profile\" ]; then . \"$HOME/.bash_profile\" >/dev/null 2>&1 || true; elif [ -f \"$HOME/.bashrc\" ]; then . \"$HOME/.bashrc\" >/dev/null 2>&1 || true; fi",
-    "if [ -f \"$HOME/.zprofile\" ]; then . \"$HOME/.zprofile\" >/dev/null 2>&1 || true; fi",
-    "export NVM_DIR=\"${NVM_DIR:-$HOME/.nvm}\"",
-    "[ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\" >/dev/null 2>&1 || true",
+    'if [ -f "$HOME/.profile" ]; then . "$HOME/.profile" >/dev/null 2>&1 || true; fi',
+    'if [ -f "$HOME/.bash_profile" ]; then . "$HOME/.bash_profile" >/dev/null 2>&1 || true; elif [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc" >/dev/null 2>&1 || true; fi',
+    'if [ -f "$HOME/.zprofile" ]; then . "$HOME/.zprofile" >/dev/null 2>&1 || true; fi',
+    `export NVM_DIR="\${NVM_DIR:-$HOME/.nvm}"`,
+    '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true',
     execLine,
   ].join(" && ");
   if (input.stdinRedirect) {
@@ -198,7 +197,5 @@ export function buildLoginShellScript(input: {
 }
 
 /** Re-export SandboxClient for convenience. */
-export type { SandboxClient };
-
 /** Re-export RunProcessOptions for convenience. */
-export type { RunProcessOptions };
+export type { RunProcessOptions, SandboxClient };

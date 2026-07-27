@@ -197,7 +197,10 @@ interface ResolvedConfig {
   shell?: string;
   disabledProviders?: string[];
   enabledProviders?: string[];
-  references?: Record<string, { path?: string; repository?: string; branch?: string; description?: string; hidden?: boolean }>;
+  references?: Record<
+    string,
+    { path?: string; repository?: string; branch?: string; description?: string; hidden?: boolean }
+  >;
   skillsPaths?: string[];
   skillsUrls?: string[];
   /** Env escape hatches. */
@@ -436,11 +439,18 @@ function buildOpencodeJson(config: ResolvedConfig): Record<string, unknown> {
     exp.mcp_timeout = config.mcpTimeoutMs;
     out.experimental = exp;
   }
-  if (typeof config.toolOutputMaxLines === "number" || typeof config.toolOutputMaxBytes === "number") {
+  if (
+    typeof config.toolOutputMaxLines === "number" ||
+    typeof config.toolOutputMaxBytes === "number"
+  ) {
     out.tool_output = {
       ...((out.tool_output as Record<string, unknown> | undefined) ?? {}),
-      ...(typeof config.toolOutputMaxLines === "number" ? { max_lines: config.toolOutputMaxLines } : {}),
-      ...(typeof config.toolOutputMaxBytes === "number" ? { max_bytes: config.toolOutputMaxBytes } : {}),
+      ...(typeof config.toolOutputMaxLines === "number"
+        ? { max_lines: config.toolOutputMaxLines }
+        : {}),
+      ...(typeof config.toolOutputMaxBytes === "number"
+        ? { max_bytes: config.toolOutputMaxBytes }
+        : {}),
     };
   }
   if (config.shareMode) out.share = config.shareMode;
@@ -667,7 +677,8 @@ async function runOpencodeCli(
   if (typeof config.port === "number") args.push("--port", String(config.port));
   if (config.mini) args.push("--mini");
   if (config.noReplay) args.push("--no-replay");
-  if (typeof config.replayLimit === "number") args.push("--replay-limit", String(config.replayLimit));
+  if (typeof config.replayLimit === "number")
+    args.push("--replay-limit", String(config.replayLimit));
   // `--prompt <s>` (alternative to positional). When set, it replaces
   // the positional <prompt>. We still include the positional for
   // back-compat unless the caller explicitly opts in via promptArg.
@@ -1144,14 +1155,18 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
  * if it's stale (PID not running), we steal it. The lock is
  * blocking with a short retry loop (50ms × 200 = 10s max).
  */
-const LOCK_PATH = process.env.AASPAI_OPENCODE_LOCK_PATH ?? join(tmpdir(), "aaspai-opencode.lock");
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_WAIT_MS = 10_000;
 let lockChain: Promise<void> = Promise.resolve();
 const PROCESS_LOCK_NONCE = randomUUID();
 
+function getLockPath(): string {
+  return process.env.AASPAI_OPENCODE_LOCK_PATH ?? join(tmpdir(), "aaspai-opencode.lock");
+}
+
 async function acquireLock(): Promise<() => void> {
   const myId = `${process.pid}@${hostname()}@${PROCESS_LOCK_NONCE}`;
+  const lockPath = getLockPath();
   const startedAt = Date.now();
   // Queue our turn behind any other process waiting on the same
   // per-process promise chain.
@@ -1160,9 +1175,9 @@ async function acquireLock(): Promise<() => void> {
       if (Date.now() - startedAt > LOCK_MAX_WAIT_MS) {
         throw new Error(`opencode_cli cross-process lock timeout after ${LOCK_MAX_WAIT_MS}ms`);
       }
-      if (!existsSync(LOCK_PATH)) {
+      if (!existsSync(lockPath)) {
         try {
-          const fd = openSync(LOCK_PATH, "wx");
+          const fd = openSync(lockPath, "wx");
           writeSync(fd, myId);
           closeSync(fd);
           return;
@@ -1172,7 +1187,7 @@ async function acquireLock(): Promise<() => void> {
       }
       // Lock file exists. Check if it's stale (PID not running).
       try {
-        const holder = readFileSync(LOCK_PATH, "utf8").trim();
+        const holder = readFileSync(lockPath, "utf8").trim();
         const m = /^(\d+)@/.exec(holder);
         if (m) {
           const holderPid = Number(m[1]);
@@ -1183,7 +1198,7 @@ async function acquireLock(): Promise<() => void> {
           ) {
             // Stale lock — steal it.
             try {
-              unlinkSync(LOCK_PATH);
+              unlinkSync(lockPath);
             } catch {
               /* race: another process stole it first */
             }
@@ -1202,8 +1217,8 @@ async function acquireLock(): Promise<() => void> {
     // Only delete the lock if we still own it (the holder string
     // starts with our pid).
     try {
-      const current = readFileSync(LOCK_PATH, "utf8").trim();
-      if (current === myId) unlinkSync(LOCK_PATH);
+      const current = readFileSync(lockPath, "utf8").trim();
+      if (current === myId) unlinkSync(lockPath);
     } catch {
       /* already gone */
     }
@@ -2106,9 +2121,7 @@ export async function logoutOpencodeMcp(
 /* ── agent ────────────────────────────────────────────────────────── */
 
 /** List all installed opencode agents. */
-export async function listOpencodeAgents(
-  opts: SubcommandOpts = {},
-): Promise<{ rows: string[] }> {
+export async function listOpencodeAgents(opts: SubcommandOpts = {}): Promise<{ rows: string[] }> {
   const { stdout } = await runOpencodeSubcommand(["agent", "list"], opts);
   return { rows: stdout.split(/\r?\n/).filter((l) => l.trim().length > 0) };
 }
@@ -2139,9 +2152,7 @@ export async function debugOpencodeConfig(
 /** List all skills the opencode CLI actually discovers (not what we materialized). */
 export async function debugOpencodeSkills(
   opts: SubcommandOpts = {},
-): Promise<
-  Array<{ name: string; description?: string; location?: string; content?: string }>
-> {
+): Promise<Array<{ name: string; description?: string; location?: string; content?: string }>> {
   const { stdout, exitCode } = await runOpencodeSubcommand(["debug", "skill"], opts);
   if (exitCode !== 0) return [];
   try {
@@ -2158,15 +2169,23 @@ export async function debugOpencodeSkills(
 }
 
 /** Print all opencode global paths (home/data/bin/log/cache/config/state/tmp). */
-export async function debugOpencodePaths(
-  opts: SubcommandOpts = {},
-): Promise<{ home?: string; data?: string; bin?: string; log?: string; repos?: string; cache?: string; config?: string; state?: string; tmp?: string }> {
+export async function debugOpencodePaths(opts: SubcommandOpts = {}): Promise<{
+  home?: string;
+  data?: string;
+  bin?: string;
+  log?: string;
+  repos?: string;
+  cache?: string;
+  config?: string;
+  state?: string;
+  tmp?: string;
+}> {
   const { stdout, exitCode } = await runOpencodeSubcommand(["debug", "paths"], opts);
   const out: Record<string, string> = {};
   if (exitCode === 0) {
     for (const line of stdout.split(/\r?\n/)) {
       const m = line.match(/^\s*(\w+)\s+(.+)$/);
-      if (m) out[m[1]!] = m[2]!.trim();
+      if (m?.[1] !== undefined && m[2] !== undefined) out[m[1]] = m[2].trim();
     }
   }
   return out as {
@@ -2542,11 +2561,7 @@ export const opencodeCli: ServerAdapterModule = {
    * temp XDG_CONFIG_HOME, then spawn a no-op session continuation.
    * Returns `compacted: false` for non-resumable sessions.
    */
-  async compact(req: {
-    sessionId: string;
-    tailTurns?: number;
-    force?: boolean;
-  }): Promise<{
+  async compact(req: { sessionId: string; tailTurns?: number; force?: boolean }): Promise<{
     compacted: boolean;
     sessionId: string;
     tokensBefore?: number;
