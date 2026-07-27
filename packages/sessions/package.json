@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run --passWithNoTests",
+    "test:e2e": "vitest run -t '^e2e:'",
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
