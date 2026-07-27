@@ -262,8 +262,12 @@ const SQLITE_STATEMENTS = [
     source_snapshot_json TEXT NOT NULL,
     target_json TEXT NOT NULL,
     harness TEXT NOT NULL,
+    agent_id TEXT NOT NULL DEFAULT 'unknown',
+    idempotency_key TEXT NOT NULL DEFAULT 'plan-unknown',
     prompt TEXT NOT NULL,
     timeout_ms INTEGER,
+    harness_config_json TEXT NOT NULL DEFAULT '{}',
+    workspace_policy_json TEXT NOT NULL DEFAULT '{"restore":"changes","cleanup":"always"}',
     runtime_config_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL
   )`,
@@ -287,6 +291,18 @@ const SQLITE_STATEMENTS = [
     payload_json TEXT NOT NULL,
     seq INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS execution_raw_outputs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organization_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    stream TEXT NOT NULL,
+    chunk TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    UNIQUE (attempt_id, seq)
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_raw_outputs_attempt_idx
+    ON execution_raw_outputs (attempt_id, seq)`,
   `CREATE TABLE IF NOT EXISTS execution_verifications (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -591,6 +607,23 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
   {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'verification_id'",
     sql: "ALTER TABLE agent_attempts ADD COLUMN verification_id TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'agent_id'",
+    sql: "ALTER TABLE execution_plans ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'unknown'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'idempotency_key'",
+    sql: "ALTER TABLE execution_plans ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT 'plan-unknown'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'harness_config_json'",
+    sql: "ALTER TABLE execution_plans ADD COLUMN harness_config_json TEXT NOT NULL DEFAULT '{}'",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'workspace_policy_json'",
+    sql: 'ALTER TABLE execution_plans ADD COLUMN workspace_policy_json TEXT NOT NULL DEFAULT \'{"restore":"changes","cleanup":"always"}\'',
   },
   // session_events.seq was added after the initial scaffold. Older
   // DBs need it added; we back-fill with the row id so the order

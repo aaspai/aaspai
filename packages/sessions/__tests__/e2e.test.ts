@@ -21,7 +21,7 @@
  *   - SQLite migration correctness (we trust runMigrations)
  */
 
-import { mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { closeDefaultDb, getDefaultDb, schema } from "@aaspai/db";
@@ -1166,14 +1166,15 @@ describe("e2e: Sessions.execute() → opencode_cli adapter", () => {
 
 describe("e2e: real opencode CLI smoke (skipped if not installed)", () => {
   const hasRealCli = (() => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { execSync } = require("node:child_process") as typeof import("node:child_process");
-      execSync(isWin ? "where opencode" : "which opencode", { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
+    if (process.env.OPENCODE_CLI && existsSync(process.env.OPENCODE_CLI)) return true;
+    if (isWin) {
+      return [
+        "C:\\Program Files\\nodejs\\opencode",
+        "C:\\Program Files\\nodejs\\opencode.cmd",
+        `${process.env.APPDATA ?? ""}\\npm\\opencode.cmd`,
+      ].some((candidate) => existsSync(candidate));
     }
+    return true;
   })();
 
   it.skipIf(!hasRealCli)(

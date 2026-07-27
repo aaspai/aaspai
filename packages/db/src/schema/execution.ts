@@ -288,8 +288,14 @@ export const executionPlans = sqliteTable(
     sourceSnapshotJson: text("source_snapshot_json").notNull(),
     targetJson: text("target_json").notNull(),
     harness: text("harness").notNull(),
+    agentId: text("agent_id").notNull().default("unknown"),
+    idempotencyKey: text("idempotency_key").notNull().default("plan-unknown"),
     prompt: text("prompt").notNull(),
     timeoutMs: integer("timeout_ms"),
+    harnessConfigJson: text("harness_config_json").notNull().default("{}"),
+    workspacePolicyJson: text("workspace_policy_json")
+      .notNull()
+      .default('{"restore":"changes","cleanup":"always"}'),
     runtimeConfigJson: text("runtime_config_json").notNull().default("{}"),
     createdAt: text("created_at").notNull(),
   },
@@ -330,6 +336,25 @@ export const executionEvents = sqliteTable(
   (t) => ({
     attemptSeqUniq: uniqueIndex("execution_events_attempt_seq_uniq").on(t.attemptId, t.seq),
     attemptIdx: index("execution_events_attempt_idx").on(t.attemptId, t.seq),
+  }),
+);
+
+export const executionRawOutputs = sqliteTable(
+  "execution_raw_outputs",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    organizationId: text("organization_id").notNull(),
+    attemptId: text("attempt_id")
+      .notNull()
+      .references(() => agentAttempts.id, { onDelete: "cascade" }),
+    ts: text("ts").notNull(),
+    stream: text("stream").notNull(),
+    chunk: text("chunk").notNull(),
+    seq: integer("seq").notNull(),
+  },
+  (t) => ({
+    attemptSeqUniq: uniqueIndex("execution_raw_outputs_attempt_seq_uniq").on(t.attemptId, t.seq),
+    attemptIdx: index("execution_raw_outputs_attempt_idx").on(t.attemptId, t.seq),
   }),
 );
 

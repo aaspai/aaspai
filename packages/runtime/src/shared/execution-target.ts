@@ -18,6 +18,8 @@ import { LocalSandboxClient, type SandboxClient } from "./sandbox-client.js";
  */
 export interface RuntimeTarget {
   info: RuntimeTargetInfo;
+  /** Optional live readiness check; static registry metadata is not proof of readiness. */
+  readiness?(target: ExecutionTarget): Promise<{ ready: boolean; reason?: string }>;
   run(target: ExecutionTarget, options: RunProcessOptions): Promise<RunProcessResult>;
   prepareWorkspace?(
     target: ExecutionTarget,

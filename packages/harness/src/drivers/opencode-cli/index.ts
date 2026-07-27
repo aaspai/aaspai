@@ -68,6 +68,7 @@ import { promisify } from "node:util";
 import {
   type AdapterExecutionContext,
   type AdapterExecutionResult,
+  type AdapterRuntimeExecution,
   HARNESS_PROTOCOL_VERSION,
   type ServerAdapterModule,
 } from "@aaspai/contracts/harness";
@@ -641,9 +642,12 @@ async function runOpencodeCli(
       get?(name: string): unknown;
       list?(): readonly string[];
     };
+    execution?: AdapterRuntimeExecution;
   } = {},
 ): Promise<RunResult> {
-  const cli = await resolveOpencodeBinary(config.command);
+  const cli = options.execution
+    ? (config.command ?? process.env.OPENCODE_CLI ?? "opencode")
+    : await resolveOpencodeBinary(config.command);
   const workdir = cwd || process.env.OPENCODE_CLI_DIR || process.cwd();
 
   const args = [
@@ -689,6 +693,26 @@ async function runOpencodeCli(
   }
 
   const { extraEnv, cleanup } = prepareConfigInjection(config);
+
+  if (options.execution) {
+    try {
+      return await runOpencodeThroughRuntime({
+        cli,
+        args,
+        cwd: workdir,
+        env: { ...process.env, ...extraEnv } as Record<string, string>,
+        signal,
+        onLog,
+        execution: options.execution,
+        tools: options.tools,
+        resumeSessionId: options.resumeSessionId,
+        continuedLast: config.continueLast,
+        attached: Boolean(config.attachServer),
+      });
+    } finally {
+      cleanup();
+    }
+  }
 
   return await new Promise((resolve, reject) => {
     const child = spawn(cli, args, {
@@ -1094,6 +1118,135 @@ async function runOpencodeCli(
       });
     });
   });
+}
+
+/** Execute OpenCode through the selected runtime while retaining its JSON stream semantics. */
+async function runOpencodeThroughRuntime(input: {
+  cli: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
+  signal?: AbortSignal;
+  onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void> | void;
+  execution: AdapterRuntimeExecution;
+  tools?: {
+    invoke(name: string, input: unknown, ctx: unknown): Promise<unknown>;
+    get?(name: string): unknown;
+    list?(): readonly string[];
+  };
+  resumeSessionId?: string;
+  continuedLast: boolean;
+  attached: boolean;
+}): Promise<RunResult> {
+  let sessionId: string | undefined;
+  let text = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cost = 0;
+  let errorMessage: string | undefined;
+  let thinkingEventCount = 0;
+  let toolEventCount = 0;
+  const toolsInvoked: string[] = [];
+  const toolsDispatched = new Set<string>();
+  let pendingTools: Promise<void> = Promise.resolve();
+  const parse = (chunk: string): void => {
+    for (const line of chunk.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line) as OpenCodeEvent & { error?: unknown };
+        if (event.sessionID) sessionId = event.sessionID;
+        if (event.type === "text" && event.part?.type === "text") {
+          text += String(event.part.text ?? "");
+        }
+        if (event.part?.type === "reasoning" || event.type === "thinking") thinkingEventCount += 1;
+        if (event.part?.type === "tool" || event.type === "tool_use" || event.type === "tool") {
+          toolEventCount += 1;
+          const toolName = String(event.part?.tool ?? event.part?.name ?? "unknown");
+          const callId = String(event.part?.callID ?? "no-id");
+          if (input.tools && !toolsDispatched.has(`${callId}:${toolName}`)) {
+            toolsDispatched.add(`${callId}:${toolName}`);
+            toolsInvoked.push(toolName);
+            const toolInput =
+              (event.part as { input?: unknown; args?: unknown } | undefined)?.input ??
+              (event.part as { args?: unknown } | undefined)?.args ??
+              {};
+            pendingTools = pendingTools.then(async () => {
+              try {
+                const output = await input.tools?.invoke(toolName, toolInput, {
+                  callId,
+                  sessionId: event.sessionID,
+                });
+                await input.onLog?.(
+                  "stdout",
+                  `${JSON.stringify({
+                    kind: "tool_result",
+                    ts: new Date().toISOString(),
+                    name: toolName,
+                    id: callId,
+                    status: "completed",
+                    output: typeof output === "string" ? output : JSON.stringify(output),
+                  })}\n`,
+                );
+              } catch (error) {
+                await input.onLog?.(
+                  "stdout",
+                  `${JSON.stringify({
+                    kind: "tool_result",
+                    ts: new Date().toISOString(),
+                    name: toolName,
+                    id: callId,
+                    status: "failed",
+                    isError: true,
+                    output: error instanceof Error ? error.message : String(error),
+                  })}\n`,
+                );
+              }
+            });
+          }
+        }
+        const tokens = event.part?.tokens as { input?: unknown; output?: unknown } | undefined;
+        if (typeof tokens?.input === "number") inputTokens = tokens.input;
+        if (typeof tokens?.output === "number") outputTokens = tokens.output;
+        if (typeof event.part?.cost === "number") cost = event.part.cost;
+        const message = extractErrorMessage(event.error);
+        if (message) errorMessage = message;
+      } catch {
+        // The raw line is retained by the execution boundary.
+      }
+    }
+  };
+  const result = await input.execution.run({
+    command: input.cli,
+    args: input.args,
+    cwd: input.cwd,
+    env: input.env,
+    signal: input.signal,
+    timeoutMs: CLI_TIMEOUT_MS,
+    onLog: async (stream, chunk) => {
+      if (stream === "stdout") parse(chunk);
+      else if (!errorMessage) errorMessage = chunk.trim().split(/\r?\n/).find(Boolean);
+      await input.onLog?.(stream, chunk);
+    },
+  });
+  await pendingTools;
+  return {
+    sessionId,
+    text,
+    inputTokens,
+    outputTokens,
+    cost,
+    exitCode: result.exitCode,
+    signal: (result.signal as NodeJS.Signals | undefined) ?? null,
+    timedOut: result.timedOut,
+    errorMessage,
+    resumedSession: Boolean(input.resumeSessionId),
+    continuedLast: input.continuedLast,
+    attached: input.attached,
+    cliSessionId: sessionId,
+    thinkingEventCount,
+    toolEventCount,
+    toolsInvoked,
+  };
 }
 
 /**
@@ -2380,7 +2533,12 @@ export const opencodeCli: ServerAdapterModule = {
           ctx.signal,
           ctx.onLog,
           ctx.onRuntimeProgress,
-          { resumeSessionId: runtimeSessionId, forkSession, tools: ctx.tools },
+          {
+            resumeSessionId: runtimeSessionId,
+            forkSession,
+            tools: ctx.tools,
+            execution: ctx.execution,
+          },
         ),
       );
     } finally {

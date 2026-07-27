@@ -1,7 +1,7 @@
 import type { AgentAttempt, ExecutionPlan, ExecutionWorkspace } from "@aaspai/contracts/execution";
 import type { RunProcessResult } from "@aaspai/contracts/runtime";
 import { type RuntimeTarget, resolveTarget } from "@aaspai/runtime";
-import { assertRuntimeExecutable } from "./capabilities.js";
+import { assertRuntimeReady } from "./capabilities.js";
 import type { ExecutionStore } from "./store.js";
 
 export interface ExecutePlanInput {
@@ -25,7 +25,7 @@ export class ExecutionPlanRunner {
 
   async run(input: ExecutePlanInput): Promise<RunProcessResult> {
     this.assertWorkspace(input);
-    assertRuntimeExecutable(input.plan.target);
+    await assertRuntimeReady(input.plan.target);
     await this.store.transitionAttempt(input.plan.attemptId, "preparing");
 
     try {
@@ -35,14 +35,14 @@ export class ExecutionPlanRunner {
         ...input.plan.target,
         cwd: input.workspace.path,
       } as ExecutionPlan["target"];
-      await target.prepareWorkspace?.(targetInput, {
-        localDir: input.workspace.path,
-        remoteDir:
-          input.plan.target.kind === "docker"
-            ? (input.plan.target.remoteCwd ?? "/workspace")
-            : input.workspace.path,
-      });
+      if (input.plan.target.kind === "local") {
+        await target.prepareWorkspace?.(targetInput, {
+          localDir: input.workspace.path,
+          remoteDir: input.workspace.path,
+        });
+      }
       let executionEventSeq = 1;
+      let rawOutputSeq = 0;
       await this.store.appendEvent({
         organizationId: input.plan.organizationId,
         attemptId: input.plan.attemptId,
@@ -65,6 +65,14 @@ export class ExecutionPlanRunner {
           signal: input.signal,
           timeoutMs: input.plan.timeoutMs ?? undefined,
           onLog: async (stream, chunk) => {
+            await this.store.appendRawOutput({
+              organizationId: input.plan.organizationId,
+              attemptId: input.plan.attemptId,
+              ts: new Date().toISOString(),
+              stream,
+              chunk,
+              seq: ++rawOutputSeq,
+            });
             await this.store.appendEvent({
               organizationId: input.plan.organizationId,
               attemptId: input.plan.attemptId,
@@ -75,13 +83,12 @@ export class ExecutionPlanRunner {
           },
         });
       } finally {
-        await target.restoreWorkspace?.(targetInput, {
-          localDir: input.workspace.path,
-          remoteDir:
-            input.plan.target.kind === "docker"
-              ? (input.plan.target.remoteCwd ?? "/workspace")
-              : input.workspace.path,
-        });
+        if (input.plan.target.kind === "local") {
+          await target.restoreWorkspace?.(targetInput, {
+            localDir: input.workspace.path,
+            remoteDir: input.workspace.path,
+          });
+        }
       }
       await this.store.appendEvent({
         organizationId: input.plan.organizationId,
@@ -92,6 +99,7 @@ export class ExecutionPlanRunner {
           signal: result.signal ?? null,
           timedOut: result.timedOut,
           durationMs: result.durationMs,
+          runtimeIdentity: result.runtimeIdentity ?? null,
         },
         seq: ++executionEventSeq,
       });
@@ -113,8 +121,9 @@ export class ExecutionPlanRunner {
     signal?: AbortSignal,
   ): Promise<void> {
     if (signal?.aborted || status === "cancelled") {
-      await this.store.transitionAttempt(attemptId, "cancelling");
-      await this.store.transitionAttempt(attemptId, "cancelled");
+      const requested = await this.store.requestCancelAttempt(attemptId);
+      if (requested.status === "cancelling")
+        await this.store.transitionAttempt(attemptId, "cancelled");
       return;
     }
     await this.store.transitionAttempt(attemptId, status);

@@ -23,6 +23,7 @@ import {
   sessionResultSchema,
 } from "@aaspai/contracts/phase2";
 import type { JsonObject } from "@aaspai/contracts/primitives";
+import { type ExecutionTarget, executionTargetSchema } from "@aaspai/contracts/runtime";
 import {
   getDefaultDb,
   type SessionEventInsert,
@@ -99,6 +100,14 @@ export class Sessions {
     const agent = await this.opts.agentSource.get(req.agentId);
     const adapterConfig = agentAdapterConfig(agent);
     const executionConfig = { ...adapterConfig, ...(req.config ?? {}) };
+    const parsedTarget = executionTargetSchema.safeParse(req.runtime);
+    const runtimeTarget = parsedTarget.success
+      ? (await import("@aaspai/runtime")).resolveTarget(parsedTarget.data)
+      : undefined;
+    if (runtimeTarget?.readiness && parsedTarget.success) {
+      const ready = await runtimeTarget.readiness(parsedTarget.data);
+      if (!ready.ready) throw new Error(ready.reason ?? "Execution runtime is not ready");
+    }
 
     // 2. Load knowledge (resolved against the agent's include/exclude)
     const knowledge = await this.knowledgeLoader.loadFor(agent);
@@ -170,6 +179,7 @@ export class Sessions {
     const controller = new AbortController();
     this.runningSessions.set(sessionId, { controller, adapter });
     let seq = 0;
+    let sessionEventPersistenceError: Error | undefined;
     const recordEvent = async (
       stream: "stdout" | "stderr",
       payload: JsonObject,
@@ -186,6 +196,7 @@ export class Sessions {
       try {
         await db.db.insert(sessionEventsTable).values(eventInsert as never);
       } catch (err) {
+        sessionEventPersistenceError = err instanceof Error ? err : new Error(String(err));
         log.warn("failed to record session event", { sessionId, seq, err: String(err) });
       }
     };
@@ -248,6 +259,30 @@ export class Sessions {
             prompt: fullPrompt,
             role: agent.role,
           },
+          ...(runtimeTarget && parsedTarget.success
+            ? {
+                execution: {
+                  identity: {
+                    kind: parsedTarget.data.kind,
+                    cwd:
+                      parsedTarget.data.kind === "ssh"
+                        ? parsedTarget.data.remoteCwd
+                        : (req.cwd ?? process.cwd()),
+                  },
+                  run: (options: Parameters<NonNullable<typeof runtimeTarget.run>>[1]) =>
+                    runtimeTarget.run(
+                      {
+                        ...parsedTarget.data,
+                        ...(parsedTarget.data.kind === "local" ||
+                        parsedTarget.data.kind === "docker"
+                          ? { cwd: req.cwd ?? process.cwd() }
+                          : {}),
+                      } as ExecutionTarget,
+                      { ...options, cwd: req.cwd ?? process.cwd() },
+                    ),
+                },
+              }
+            : {}),
           signal: controller.signal,
           onLog: async (stream, chunk) => {
             for (const line of chunk.split(/\r?\n/)) {
@@ -289,14 +324,29 @@ export class Sessions {
             log.info("session spawned", { sessionId, pid: meta.pid });
           },
         });
+        if (runtimeTarget && parsedTarget.success) {
+          adapterResult = {
+            ...adapterResult,
+            runtimeIdentity: {
+              kind: parsedTarget.data.kind,
+              cwd:
+                parsedTarget.data.kind === "ssh"
+                  ? parsedTarget.data.remoteCwd
+                  : (req.cwd ?? process.cwd()),
+            },
+          };
+        }
 
         const finishedAt = new Date().toISOString();
         const durationMs = Date.now() - startedAtMs;
-        let status: SessionStatus = adapterResult.timedOut
-          ? "timed_out"
-          : adapterResult.exitCode === 0
-            ? "succeeded"
-            : "failed";
+        let status: SessionStatus = controller.signal.aborted
+          ? "cancelled"
+          : adapterResult.timedOut
+            ? "timed_out"
+            : adapterResult.exitCode === 0
+              ? "succeeded"
+              : "failed";
+        if (sessionEventPersistenceError) status = "failed";
 
         // Reclassify the errorFamily on the success path too. The
         // opencode-cli adapter (and any other non-throwing adapter)
@@ -352,10 +402,13 @@ export class Sessions {
           exitCode: adapterResult.exitCode,
           usage: adapterResult.usage,
           costUsd: adapterResult.costUsd,
-          errorFamily: budgetViolation ? "user_cancelled" : classifiedFamily,
+          errorFamily:
+            budgetViolation || status === "cancelled" ? "user_cancelled" : classifiedFamily,
           errorCode: budgetViolation
             ? `budget_exceeded:${budgetViolation.field}`
-            : adapterResult.errorCode,
+            : sessionEventPersistenceError
+              ? "evidence_persistence_failed"
+              : adapterResult.errorCode,
           // Summary is the assistant's text (if any), falling back
           // to the adapter's errorMessage for failed runs (where
           // the assistant text is typically empty). Handoff markdown
@@ -394,7 +447,9 @@ export class Sessions {
                 ? undefined
                 : budgetViolation
                   ? `Budget exceeded: ${budgetViolation.field} (limit ${budgetViolation.limit}, actual ${budgetViolation.actual})`
-                  : adapterResult.errorMessage || result.summary || result.errorCode || "failed",
+                  : sessionEventPersistenceError
+                    ? sessionEventPersistenceError.message
+                    : adapterResult.errorMessage || result.summary || result.errorCode || "failed",
           } as never)
           .where(eqId(sessionsTable.id, sessionId));
         log.info("session completed", { sessionId, status, durationMs, agent: agent.id });

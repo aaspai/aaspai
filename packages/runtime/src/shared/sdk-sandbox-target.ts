@@ -32,7 +32,16 @@ export function createSdkSandboxTarget(input: {
       const lease = await driver.acquire(remoteCwd, { timeoutMs: sandboxTarget.timeoutMs });
       try {
         const client = driver.client(lease);
-        return await client.run(runOptions);
+        const result = await client.run(runOptions);
+        return {
+          ...result,
+          runtimeIdentity: {
+            kind: "sandbox",
+            cwd: lease.remoteCwd,
+            remoteCwd: lease.remoteCwd,
+            connectionIdentity: `${input.providerKey}:${lease.providerLeaseId}`,
+          },
+        };
       } finally {
         await driver.release(lease);
       }

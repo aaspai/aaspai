@@ -88,7 +88,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     }
   };
 
-  const result = await runProcess({
+  const result = await (ctx.execution?.run ?? runProcess)({
     command,
     args,
     cwd,

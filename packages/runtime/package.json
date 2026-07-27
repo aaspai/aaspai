@@ -34,6 +34,7 @@
     "lint": "biome check .",
     "test": "vitest run",
     "test:real": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real.ts",
+    "test:real:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-daytona-real.ts",
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {

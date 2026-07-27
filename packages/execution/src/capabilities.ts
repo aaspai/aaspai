@@ -2,7 +2,7 @@ import type { ExecutionPlan } from "@aaspai/contracts/execution";
 import { adapterTypeSchema } from "@aaspai/contracts/harness";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import { getAdapterCapabilities } from "@aaspai/harness";
-import { getRuntimeTargetCapabilities } from "@aaspai/runtime";
+import { getRuntimeTargetCapabilities, resolveTarget } from "@aaspai/runtime";
 
 export class ProviderCapabilityError extends Error {
   readonly code = "provider_capability_unsupported" as const;
@@ -42,6 +42,19 @@ export function assertRuntimeExecutable(target: ExecutionTarget): void {
     throw new ProviderCapabilityError(
       target.kind === "sandbox" ? `${target.kind}:${target.provider}` : target.kind,
       "execute",
+    );
+  }
+}
+
+export async function assertRuntimeReady(target: ExecutionTarget): Promise<void> {
+  assertRuntimeExecutable(target);
+  const readiness = resolveTarget(target).readiness;
+  if (!readiness) return;
+  const result = await readiness(target);
+  if (!result.ready) {
+    throw new ProviderCapabilityError(
+      target.kind === "sandbox" ? `${target.kind}:${target.provider}` : target.kind,
+      result.reason ? `ready (${result.reason})` : "ready",
     );
   }
 }
