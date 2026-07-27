@@ -145,7 +145,7 @@ describe("opencode_cli per-process serialization", () => {
 
     const ctx = {
       context: { prompt: "do something" },
-      config: { model: "opencode-go/mimo-v2.5" },
+      config: { model: "opencode-go/mimo-v2.5", command: process.execPath },
       runtime: { sessionId: undefined, sessionParams: undefined },
       onLog: async () => {},
     };
@@ -202,7 +202,7 @@ describe("opencode_cli cross-process lock", () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const ctx = {
       context: { prompt: "hi" },
-      config: { model: "opencode-go/mimo-v2.5" },
+      config: { model: "opencode-go/mimo-v2.5", command: process.execPath },
       runtime: { sessionId: undefined, sessionParams: undefined },
       onLog: async () => {},
     };
