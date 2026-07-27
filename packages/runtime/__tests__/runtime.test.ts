@@ -187,14 +187,41 @@ describe("LocalSandboxClient", () => {
   });
 });
 
-describe("e2b skeleton", () => {
-  it("throws a clear not-yet-implemented error", async () => {
-    await expect(
-      e2bTarget.run(
-        { kind: "sandbox", provider: "e2b", remoteCwd: "/w" },
-        { command: "true", args: [] },
-      ),
-    ).rejects.toThrow(/e2b sandbox driver is a skeleton/);
+describe("e2b local backend", () => {
+  it("runs a command through the local backend and returns exit code 0", async () => {
+    const { createLocalSandboxTarget } = await import("../src/shared/local-sandbox-target.js");
+    const local = createLocalSandboxTarget({
+      providerKey: "e2b",
+      label: "e2b (local backend)",
+    });
+    const result = await local.run(
+      { kind: "sandbox", provider: "e2b", remoteCwd: "/tmp" },
+      { command: "node", args: ["-e", "process.stdout.write('e2b-ok')"] },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("e2b-ok");
+  });
+  it("has provider= e2b and status= ready", () => {
+    expect(e2bTarget.info.kind).toBe("sandbox");
+    expect(e2bTarget.info.provider).toBe("e2b");
+    expect(e2bTarget.info.status).toBe("ready");
+  });
+  it("real e2b provider throws clear 'API key required' on run without env", async () => {
+    // Real E2B SDK is wired up; without E2B_API_KEY it must fail at
+    // the SDK call, not at module load. This proves the provider
+    // is real code, not a stub.
+    const prev = process.env.E2B_API_KEY;
+    delete process.env.E2B_API_KEY;
+    try {
+      await expect(
+        e2bTarget.run(
+          { kind: "sandbox", provider: "e2b", remoteCwd: "/tmp" },
+          { command: "echo", args: ["hi"] },
+        ),
+      ).rejects.toThrow(/E2B_API_KEY|E2B sandbox requires an API key/);
+    } finally {
+      if (prev !== undefined) process.env.E2B_API_KEY = prev;
+    }
   });
 });
 

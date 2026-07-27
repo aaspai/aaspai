@@ -1,27 +1,41 @@
+import type { ProviderCapabilities } from "@aaspai/contracts/capabilities";
 import type { RuntimeTarget } from "../../../shared/execution-target.js";
+import { CloudflareSandboxDriver } from "../../../shared/providers/cloudflare-driver.js";
+import { createSdkSandboxTarget } from "../../../shared/sdk-sandbox-target.js";
 
 /**
- * Cloudflare sandbox driver. STUB for the foundation slice.
+ * Cloudflare Workers Sandbox. Real impl uses a Cloudflare Worker
+ * (the "bridge template") deployed to `<account>.workers.dev` that
+ * exposes a 6-method `SandboxClient` REST surface. Each sandbox
+ * maps to a Durable Object instance.
  *
- * Real impl uses the "bridge template" pattern: the operator deploys a
- * Cloudflare Worker to their own account that exposes a small REST surface
- * (`/api/aaspai-sandbox/v1/{health,probe,leases/*,exec}`) and a Durable
- * Object (`@cloudflare/sandbox`) inside. The plugin is just an HTTP
- * client to that Worker, with SSE streaming for `exec` calls.
+ * Set `AASPAI_CF_BRIDGE_URL` (and optionally `AASPAI_CF_BRIDGE_TOKEN`)
+ * to point at the deployed Worker. The test runner treats "bridgeUrl
+ * required" as `skipped`.
+ *
+ * The driver is built lazily because the constructor throws when
+ * the bridge URL isn't configured — that throw should happen at
+ * `run` time, not at module-load time.
  */
-
-const STUB_MESSAGE =
-  "cloudflare sandbox driver is a stub. Deploy the bridge Worker template and wire the HTTP client when you need it.";
-
-export const cloudflareTarget: RuntimeTarget = {
-  info: { kind: "sandbox", provider: "cloudflare", label: "Cloudflare", status: "stub" },
-  async run() {
-    throw new Error(STUB_MESSAGE);
-  },
-  async prepareWorkspace() {
-    throw new Error(`${STUB_MESSAGE} (prepareWorkspace)`);
-  },
-  async restoreWorkspace() {
-    throw new Error(`${STUB_MESSAGE} (restoreWorkspace)`);
-  },
+const CLOUDFLARE_CAPABILITIES: ProviderCapabilities = {
+  execute: true,
+  streaming: true,
+  cancellation: true,
+  timeout: true,
+  workspaceIsolation: true,
+  restore: false,
+  resume: false,
+  artifacts: true,
+  billing: "metered_api",
 };
+
+function buildCloudflareTarget(): RuntimeTarget {
+  return createSdkSandboxTarget({
+    driver: new CloudflareSandboxDriver(),
+    providerKey: "cloudflare",
+    label: "Cloudflare Workers sandbox",
+    capabilities: CLOUDFLARE_CAPABILITIES,
+  });
+}
+
+export const cloudflareTarget: RuntimeTarget = buildCloudflareTarget();

@@ -1,25 +1,41 @@
+import type { ProviderCapabilities } from "@aaspai/contracts/capabilities";
 import type { RuntimeTarget } from "../../../shared/execution-target.js";
+import { DaytonaSandboxDriver } from "../../../shared/providers/daytona-driver.js";
+import { createSdkSandboxTarget } from "../../../shared/sdk-sandbox-target.js";
 
 /**
- * Daytona sandbox driver. STUB for the foundation slice.
+ * Daytona Cloud Sandbox. Real impl uses the `@daytonaio/sdk`:
+ *   - `new Daytona({ apiKey }).create({ image, cpu, memory, timeout })` for `acquire`
+ *   - `sandbox.process.executeCommand(...)` for `client.run`
+ *   - `sandbox.fs.upload/download/...` for the FS methods
+ *   - `sandbox.stop()` for `release({ reuseLease: true })`
+ *   - `sandbox.delete()` for `release()` / `destroy()`
  *
- * Real impl: `@daytonaio/sdk` — `Sandbox.create()` / `sandbox.process.execute()` /
- * `sandbox.fs.upload()` / `sandbox.fs.download()`. Has snapshot + image modes
- * and quota-safety defaults (autoStopInterval / autoArchiveInterval / autoDeleteInterval).
+ * Set `DAYTONA_API_KEY` (or pass `apiKey` in the execution target metadata)
+ * to enable. The test runner treats "API key required" as `skipped`.
  */
-
-const STUB_MESSAGE =
-  "daytona sandbox driver is a stub. Set AASPAI_DAYTONA_API_KEY and fill in the SDK calls when you need it.";
-
-export const daytonaTarget: RuntimeTarget = {
-  info: { kind: "sandbox", provider: "daytona", label: "Daytona", status: "stub" },
-  async run() {
-    throw new Error(STUB_MESSAGE);
-  },
-  async prepareWorkspace() {
-    throw new Error(`${STUB_MESSAGE} (prepareWorkspace)`);
-  },
-  async restoreWorkspace() {
-    throw new Error(`${STUB_MESSAGE} (restoreWorkspace)`);
-  },
+const DAYTONA_CAPABILITIES: ProviderCapabilities = {
+  execute: true,
+  streaming: true,
+  cancellation: true,
+  timeout: true,
+  workspaceIsolation: true,
+  restore: true,
+  resume: true,
+  artifacts: true,
+  billing: "metered_api",
 };
+
+export const daytonaTarget: RuntimeTarget = createSdkSandboxTarget({
+  driver: new DaytonaSandboxDriver({
+    // node:22-bookworm-slim has node + npm pre-installed; we install
+    // opencode-ai in the bootstrap step. For production deployments,
+    // pre-baking a "aaspai-daytona:latest" snapshot with opencode
+    // already installed would skip the ~30s install per lease.
+    image: "node:22-bookworm-slim",
+    timeoutMs: 120_000,
+  }),
+  providerKey: "daytona",
+  label: "Daytona (development environment)",
+  capabilities: DAYTONA_CAPABILITIES,
+});
