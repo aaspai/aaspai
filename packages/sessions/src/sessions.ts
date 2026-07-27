@@ -209,7 +209,7 @@ export class Sessions {
       : "";
     const fullPrompt = `${systemBlock}${cliBlock}${skillsBlock}${wakeupContextBlock}${req.prompt}${knowledgeBlock}`;
 
-    let result: SessionResult;
+    let result: SessionResult | undefined;
     const startedAtMs = Date.now();
     // Tier 4: retry policy for `transient_upstream` errors. Default:
     // 0 retries (caller opts in via `req.config.retry.transientMaxAttempts`).

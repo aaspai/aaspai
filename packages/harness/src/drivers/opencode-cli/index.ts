@@ -2181,7 +2181,7 @@ export async function debugOpencodePaths(opts: SubcommandOpts = {}): Promise<{
   if (exitCode === 0) {
     for (const line of stdout.split(/\r?\n/)) {
       const m = line.match(/^\s*(\w+)\s+(.+)$/);
-      if (m) out[m[1] ?? ""] = m[2]?.trim();
+      if (m?.[1] !== undefined && m[2] !== undefined) out[m[1]] = m[2].trim();
     }
   }
   return out as {
