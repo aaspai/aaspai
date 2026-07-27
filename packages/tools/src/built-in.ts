@@ -12,6 +12,8 @@ function stubTool(name: string, description: string, risk: Tool["risk"]): Tool {
     name,
     description,
     risk,
+    available: false,
+    unavailableReason: "built-in implementation is not installed",
     inputSchema: { type: "object", properties: {} },
     outputSchema: { type: "object", properties: {} },
     execute: async () => {
@@ -26,6 +28,8 @@ export const BUILT_IN_TOOLS: readonly Tool[] = [
     name: "ListSkills",
     description: "List all skills available to the current session.",
     risk: "safe",
+    available: false,
+    unavailableReason: "built-in implementation is not installed",
     inputSchema: { type: "object", properties: {} },
     execute: async () => {
       throw new Error("Wire to SkillRegistry in Phase 3.");
@@ -35,6 +39,8 @@ export const BUILT_IN_TOOLS: readonly Tool[] = [
     name: "ListAgents",
     description: "List all agents in the current organization.",
     risk: "safe",
+    available: false,
+    unavailableReason: "built-in implementation is not installed",
     inputSchema: { type: "object", properties: {} },
     execute: async () => {
       throw new Error("Wire to AgentConfigSource in Phase 3.");
@@ -44,6 +50,8 @@ export const BUILT_IN_TOOLS: readonly Tool[] = [
     name: "Read",
     description: "Read the contents of a file. In-sandbox only.",
     risk: "safe",
+    available: false,
+    unavailableReason: "built-in implementation is not installed",
     inputSchema: {
       type: "object",
       required: ["path"],
@@ -68,6 +76,8 @@ export const BUILT_IN_TOOLS: readonly Tool[] = [
     name: "AskUserQuestion",
     description: "Pause the session and ask the human a question. Returns when the human answers.",
     risk: "safe",
+    available: false,
+    unavailableReason: "built-in implementation is not installed",
     inputSchema: {
       type: "object",
       required: ["prompt"],
@@ -84,6 +94,8 @@ export const BUILT_IN_TOOLS: readonly Tool[] = [
     name: "Yield",
     description: "Pause the session and let the orchestrator decide what to do next.",
     risk: "safe",
+    available: false,
+    unavailableReason: "built-in implementation is not installed",
     inputSchema: { type: "object", properties: {} },
     execute: async () => {
       throw new Error("Wire to sessions.onQuestion in Phase 3.");

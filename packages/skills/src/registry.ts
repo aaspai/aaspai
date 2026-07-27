@@ -6,7 +6,7 @@
  * files) and the registry is in-memory. Phase 4 adds the DB-backed
  * implementation via the same `SkillSource` port.
  */
-import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Skill } from "@aaspai/contracts/phase2";
@@ -39,6 +39,8 @@ export interface MaterializeOptions {
    * drive.
    */
   symlink?: boolean;
+  /** Autonomous runs must stay inside their assigned runtime workspace. */
+  autonomous?: boolean;
 }
 
 export class SkillRegistry {
@@ -74,6 +76,14 @@ export class SkillRegistry {
 
   list(): readonly Skill[] {
     return [...this.byKey.values()];
+  }
+
+  describe() {
+    return {
+      kind: "memory" as const,
+      label: "memory:skill-registry",
+      detail: { skills: this.byKey.size },
+    };
   }
 
   /**
@@ -119,6 +129,8 @@ export class SkillRegistry {
     const verifySha256 = opts.verifySha256 ?? true;
     const sharedHome = opts.sharedHome ?? false;
     const useSymlink = opts.symlink ?? false;
+    if (opts.autonomous && sharedHome)
+      throw new Error("Autonomous skill materialization cannot use shared home");
     const targetBase = sharedHome
       ? join(homedir(), ".claude", "skills")
       : adapterSkillsDir(opts.adapterType, opts.runtimeBaseDir);
@@ -153,6 +165,15 @@ export class SkillRegistry {
           const filePath = join(skillDir, file.path);
           await mkdir(join(filePath, ".."), { recursive: true });
           await writeFile(filePath, file.content, "utf8");
+          if (
+            verifySha256 &&
+            file.sha256 &&
+            sha256HexSync(await readFile(filePath, "utf8")) !== file.sha256
+          ) {
+            throw new Error(
+              `${skill.key}@${skill.version} ${file.path}: written file verification failed`,
+            );
+          }
         }
         if (useSymlink) {
           const linkPath = join(targetBase, skill.key);

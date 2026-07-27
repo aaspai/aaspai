@@ -422,6 +422,8 @@ export const toolSchema = z
     risk: toolRiskSchema,
     inputSchema: jsonObjectSchema, // JSON Schema-ish
     outputSchema: jsonObjectSchema.optional(),
+    available: z.boolean().default(true),
+    unavailableReason: z.string().max(1_024).optional(),
     requires: z
       .object({
         adapters: z.array(z.string()).max(32).optional(),

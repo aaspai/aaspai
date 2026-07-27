@@ -4,6 +4,7 @@ export { KillSwitch, type KillSwitchState } from "./kill-switch.js";
 export { CircuitBreaker, normalizeError, signatureSimilarity } from "./ledger.js";
 export {
   type LoopExecutionLineage,
+  type LoopPersistence,
   LoopRunner,
   type LoopRunnerOptions,
   type RunOutcome,
@@ -25,6 +26,12 @@ export {
   PR_BABYSITTER,
   STARTER_PATTERNS,
 } from "./patterns/index.js";
+export {
+  type CompiledProcess,
+  compileProcess,
+  type ProcessFailureAction,
+  type ProcessStep,
+} from "./process.js";
 export { Scheduler, type TickResult } from "./scheduler.js";
 export { type LoopStateView, StateStore } from "./state.js";
 export { type WorktreeLease, WorktreeManager } from "./worktree.js";

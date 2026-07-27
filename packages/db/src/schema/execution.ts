@@ -297,6 +297,8 @@ export const executionPlans = sqliteTable(
       .notNull()
       .default('{"restore":"changes","cleanup":"always"}'),
     runtimeConfigJson: text("runtime_config_json").notNull().default("{}"),
+    profileHash: text("profile_hash").notNull().default("profile-unknown"),
+    profileSnapshotJson: text("profile_snapshot_json").notNull().default("{}"),
     createdAt: text("created_at").notNull(),
   },
   (t) => ({ attemptUniq: uniqueIndex("execution_plans_attempt_uniq").on(t.attemptId) }),

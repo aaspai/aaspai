@@ -12,6 +12,7 @@ import { getDefaultDb } from "@aaspai/db";
 import { type WakeupInsert, wakeups as wakeupsTable } from "@aaspai/db/schema/phase2";
 import { getLogger } from "@aaspai/observability";
 import cronParser from "cron-parser";
+import { and, eq, inArray } from "drizzle-orm";
 import type { KillSwitch } from "./kill-switch.js";
 import type { PatternRegistry, ResolvedLoopPattern } from "./pattern.js";
 
@@ -65,7 +66,7 @@ export class Scheduler {
         skipped++;
         continue;
       }
-      const fired2 = await this.fire(resolved.pattern, "scheduled");
+      const fired2 = await this.fire(resolved.pattern, "scheduled", now);
       if (fired2) fired++;
       else deferred++;
     }
@@ -81,10 +82,29 @@ export class Scheduler {
       .filter((resolved) => isDue(resolved.pattern, now));
   }
 
-  async fire(loop: LoopPattern, source: "scheduled" | "manual" | "test"): Promise<boolean> {
+  async fire(
+    loop: LoopPattern,
+    source: "scheduled" | "manual" | "test",
+    now = new Date(),
+  ): Promise<boolean> {
+    const organizationId = this.opts.organizationId ?? "default";
+    const idempotencyKey = `loop:${organizationId}:${loop.id}:${occurrenceKey(loop, now)}:${loop.catchUpPolicy}`;
+    const db = getDefaultDb();
+    const active = await db.db
+      .select({ id: wakeupsTable.id })
+      .from(wakeupsTable)
+      .where(
+        and(
+          eq(wakeupsTable.organizationId, organizationId),
+          eq(wakeupsTable.loopId, loop.id),
+          inArray(wakeupsTable.status, ["queued", "claimed"]),
+        ),
+      )
+      .limit(1);
+    if (active[0] && loop.concurrencyPolicy !== "always_enqueue") return false;
     const wakeup: WakeupInsert = {
       id: `wake_${randomUUID()}`,
-      organizationId: this.opts.organizationId ?? "default",
+      organizationId,
       loopId: loop.id,
       source: source === "manual" ? "manual" : "timer",
       triggerDetail: source,
@@ -92,10 +112,9 @@ export class Scheduler {
       agentId: loop.agent,
       payloadJson: JSON.stringify({ loopId: loop.id, agent: loop.agent }),
       status: "queued",
-      idempotencyKey: `loop:${loop.id}:${Date.now()}:${randomUUID().slice(0, 8)}`,
-      requestedAt: new Date().toISOString(),
+      idempotencyKey,
+      requestedAt: now.toISOString(),
     };
-    const db = getDefaultDb();
     try {
       await db.db.insert(wakeupsTable).values(wakeup as never);
       log.info("wakeup enqueued", { id: wakeup.id, loopId: loop.id, source });
@@ -127,4 +146,22 @@ function isDue(loop: LoopPattern, now: Date): boolean {
     }
   }
   return false;
+}
+
+function occurrenceKey(loop: LoopPattern, now: Date): string {
+  if (loop.schedule.kind === "interval" && loop.schedule.seconds) {
+    return `interval:${Math.floor(now.getTime() / (loop.schedule.seconds * 1_000))}`;
+  }
+  if (loop.schedule.kind === "cron" && loop.schedule.expression) {
+    try {
+      const it = cronParser.parseExpression(loop.schedule.expression, {
+        currentDate: now,
+        tz: loop.schedule.timezone ?? "UTC",
+      });
+      return `cron:${it.prev().toISOString()}`;
+    } catch {
+      return `invalid:${now.toISOString().slice(0, 16)}`;
+    }
+  }
+  return `${loop.schedule.kind}:${now.toISOString().slice(0, 16)}`;
 }
