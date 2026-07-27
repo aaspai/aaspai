@@ -56,8 +56,8 @@ export class E2bSandboxDriver extends SdkSandboxDriver<Sandbox> {
   }): Promise<{ raw: Sandbox; remoteCwd: string; metadata: Record<string, unknown> }> {
     // Defer the API key check to here so the module loads cleanly
     // even when E2B_API_KEY is not set.
-    const { Sandbox } = await import("e2b");
     const apiKey = this.getApiKey();
+    const { Sandbox } = await import("e2b");
     const sandbox = await Sandbox.create(this.defaultTemplate, {
       apiKey,
       timeoutMs: input.timeoutMs ?? this.defaultTimeoutMs,
