@@ -1457,6 +1457,7 @@ describe("e2e: opencode_cli driver", () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const cwd = makeScratchDir("no-mcp-");
     const envProbe = join(cwd, "probe.json");
+    const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
     process.env.AASPAI_FAKE_OPENCODE_PROBE_FILE = envProbe;
     try {
       const ctx = buildAdapterContext({
@@ -1467,7 +1468,7 @@ describe("e2e: opencode_cli driver", () => {
       await opencodeCli.execute(ctx);
       const probe = JSON.parse(readFileSync(envProbe, "utf8")) as Record<string, string>;
       // No XDG_CONFIG_HOME was set because nothing required it.
-      expect(probe.XDG_CONFIG_HOME).toBeUndefined();
+      expect(probe.XDG_CONFIG_HOME).toBe(originalXdgConfigHome);
     } finally {
       delete process.env.AASPAI_FAKE_OPENCODE_PROBE_FILE;
       rmRf(cwd);
