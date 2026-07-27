@@ -27,4 +27,22 @@ test/
 # aaspai runtime (agent state, knowledge, scratch — never committed)
 .aaspai/
 
+# Test dumps (per-target scenario results, input/result.json)
+.aaspai-e2e/
+.aaspai-runtime-e2e/
+packages/.aaspai-e2e/
+packages/.aaspai-runtime-e2e/
+
+# OS / editor
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local scratch / temporary notes
+scratch/
+tmp/
+playground/
+
 # `docs/` is public concept documentation and IS committed.
