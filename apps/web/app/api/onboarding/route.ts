@@ -4,10 +4,12 @@ import { z } from "zod";
 import { workspaceRoot } from "@/lib/aaspai";
 import { createFrontendGoal } from "@/lib/company-goals";
 import { currentUser } from "@/lib/local-auth";
+import { listFrontendProviderModels } from "@/lib/provider-status";
 import { ensureFrontendWorkspace } from "@/lib/workspace-bootstrap";
 
 const bodySchema = z.object({
   provider: z.enum(["codex_local", "claude_local", "opencode_cli", "dry_run_local"]),
+  model: z.string().trim().min(1).max(256),
   ceoAgenda: z.string().trim().min(10).max(10_000),
   ceoInstructions: z.string().trim().min(10).max(10_000),
   goalTitle: z.string().trim().min(3).max(300),
@@ -27,7 +29,17 @@ export async function POST(request: Request) {
   }
 
   const provider = getAdapter(parsed.data.provider);
-  const environment = await provider.testEnvironment({ config: {}, cwd: workspaceRoot() });
+  const models = await listFrontendProviderModels(parsed.data.provider);
+  if (!models.some((model) => model.id === parsed.data.model)) {
+    return NextResponse.json(
+      { error: `${parsed.data.model} is not supported by ${provider.info.label}.` },
+      { status: 400 },
+    );
+  }
+  const environment = await provider.testEnvironment({
+    config: { model: parsed.data.model },
+    cwd: workspaceRoot(),
+  });
   if (parsed.data.provider !== "dry_run_local" && !environment.ok) {
     return NextResponse.json(
       { error: `${parsed.data.provider} is not ready. Connect it on the setup page first.` },
@@ -37,6 +49,7 @@ export async function POST(request: Request) {
 
   await ensureFrontendWorkspace(user.companyName, {
     ceoProvider: parsed.data.provider,
+    ceoModel: parsed.data.model,
     ceoAgenda: parsed.data.ceoAgenda,
     ceoInstructions: parsed.data.ceoInstructions,
   });
