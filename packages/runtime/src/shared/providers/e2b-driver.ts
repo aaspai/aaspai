@@ -1,13 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
-import {
-  CommandExitError,
-  type CommandResult,
-  Sandbox,
-  SandboxNotFoundError,
-  TimeoutError,
-} from "e2b";
+import type { CommandResult, Sandbox } from "e2b";
 import type { SandboxClient, SandboxLease } from "../sandbox-client.js";
 import {
   buildLoginShellScript,
@@ -62,6 +56,7 @@ export class E2bSandboxDriver extends SdkSandboxDriver<Sandbox> {
   }): Promise<{ raw: Sandbox; remoteCwd: string; metadata: Record<string, unknown> }> {
     // Defer the API key check to here so the module loads cleanly
     // even when E2B_API_KEY is not set.
+    const { Sandbox } = await import("e2b");
     const apiKey = this.getApiKey();
     const sandbox = await Sandbox.create(this.defaultTemplate, {
       apiKey,
@@ -87,6 +82,7 @@ export class E2bSandboxDriver extends SdkSandboxDriver<Sandbox> {
   }
 
   protected override async reconnect(providerLeaseId: string): Promise<Sandbox | null> {
+    const { Sandbox, SandboxNotFoundError } = await import("e2b");
     try {
       return await Sandbox.connect(providerLeaseId, {
         apiKey: this.getApiKey(),
@@ -113,6 +109,7 @@ export class E2bSandboxDriver extends SdkSandboxDriver<Sandbox> {
   protected override buildClient(raw: Sandbox, lease: SandboxLease): SandboxClient {
     const remoteCwd = lease.remoteCwd;
     const execCommand = async (options: RunProcessOptions): Promise<RunProcessResult> => {
+      const { CommandExitError, TimeoutError } = await import("e2b");
       const startedAt = new Date();
       // Refresh the sandbox death clock on every command. E2B's
       // `timeoutMs` is the absolute lifetime; without refresh, a
