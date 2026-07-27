@@ -1,6 +1,7 @@
 export * from "./api-keys";
 export * from "./audit-log";
 export * from "./auth";
+export * from "./company-control";
 export * from "./company-operations";
 export * from "./execution";
 export * from "./knowledge";

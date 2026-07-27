@@ -1,6 +1,11 @@
 import type { AuthVerifier } from "@aaspai/auth";
-import { CompanyOperationsService } from "@aaspai/company";
+import {
+  CompanyControlPlaneService,
+  CompanyOperationsService,
+  type CompanyWorkItemInput,
+} from "@aaspai/company";
 import { getDefaultDb } from "@aaspai/db";
+import { ExecutionStore } from "@aaspai/execution";
 import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 import { LocalGitHubPullRequestProvider, LocalGitRepository } from "@aaspai/git";
 import type { Context, Hono } from "hono";
@@ -128,6 +133,137 @@ export function registerCompanyRoutes(
     } catch (error) {
       return companyError(c, error);
     }
+  });
+
+  app.post("/v1/company/authority-edges", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body.fromAgentId !== "string" ||
+      typeof body.toAgentId !== "string" ||
+      typeof body.relation !== "string"
+    )
+      return c.json({ error: "invalid_request", message: "authority edge is incomplete" }, 400);
+    try {
+      const edge = await new CompanyControlPlaneService(getDefaultDb().db).setAuthorityEdge({
+        organizationId: auth.principal.organizationId,
+        fromAgentId: body.fromAgentId,
+        toAgentId: body.toAgentId,
+        relation: body.relation as
+          | "reports_to"
+          | "manages"
+          | "may_delegate_to"
+          | "may_approve"
+          | "must_escalate_to",
+      });
+      return c.json({ data: edge }, 201);
+    } catch (error) {
+      return companyError(c, error);
+    }
+  });
+
+  app.post("/v1/company/routes/preview", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body.idempotencyKey !== "string" ||
+      typeof body.title !== "string" ||
+      typeof body.description !== "string"
+    )
+      return c.json({ error: "invalid_request", message: "route request is incomplete" }, 400);
+    try {
+      const decision = await new CompanyControlPlaneService(getDefaultDb().db).route({
+        organizationId: auth.principal.organizationId,
+        idempotencyKey: body.idempotencyKey,
+        requestedByAgentId: null,
+        targetAgentId: typeof body.targetAgentId === "string" ? body.targetAgentId : null,
+        departmentId: typeof body.departmentId === "string" ? body.departmentId : null,
+        requiredRole: typeof body.requiredRole === "string" ? body.requiredRole : null,
+        capability: typeof body.capability === "string" ? body.capability : null,
+        risk:
+          body.risk === "low" || body.risk === "high" || body.risk === "critical"
+            ? body.risk
+            : "medium",
+        priority: typeof body.priority === "number" ? body.priority : 50,
+        title: body.title,
+        description: body.description,
+      });
+      return c.json({ data: decision });
+    } catch (error) {
+      return companyError(c, error);
+    }
+  });
+
+  app.post("/v1/company/delegations", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const required = [
+      "idempotencyKey",
+      "goalId",
+      "projectId",
+      "repositoryId",
+      "definitionRevisionId",
+      "title",
+      "description",
+    ];
+    if (!body || required.some((key) => typeof body[key] !== "string"))
+      return c.json(
+        { error: "invalid_request", message: "delegation lineage or description is incomplete" },
+        400,
+      );
+    const workItems = new ExecutionStore(getDefaultDb().db);
+    try {
+      const delegation = await new CompanyControlPlaneService(getDefaultDb().db, {
+        createWorkItem(input: CompanyWorkItemInput) {
+          return workItems.createWorkItem({
+            ...input,
+            status: "ready",
+            governance: input.governance as never,
+          });
+        },
+      }).delegate({
+        organizationId: auth.principal.organizationId,
+        idempotencyKey: body.idempotencyKey as string,
+        requestedByAgentId: null,
+        targetAgentId: typeof body.targetAgentId === "string" ? body.targetAgentId : null,
+        departmentId: typeof body.departmentId === "string" ? body.departmentId : null,
+        requiredRole: typeof body.requiredRole === "string" ? body.requiredRole : null,
+        capability: typeof body.capability === "string" ? body.capability : null,
+        risk:
+          body.risk === "low" || body.risk === "high" || body.risk === "critical"
+            ? body.risk
+            : "medium",
+        priority: typeof body.priority === "number" ? body.priority : 50,
+        title: body.title as string,
+        description: body.description as string,
+        goalId: body.goalId as string,
+        projectId: body.projectId as string,
+        repositoryId: body.repositoryId as string,
+        definitionRevisionId: body.definitionRevisionId as string,
+        workflowRunId: typeof body.workflowRunId === "string" ? body.workflowRunId : null,
+        branchName: typeof body.branchName === "string" ? body.branchName : null,
+        sourceCommitSha: typeof body.sourceCommitSha === "string" ? body.sourceCommitSha : null,
+        maxAttempts: typeof body.maxAttempts === "number" ? body.maxAttempts : 1,
+        governance: isRecord(body.governance) ? body.governance : {},
+      });
+      return c.json({ data: delegation }, 201);
+    } catch (error) {
+      return companyError(c, error);
+    }
+  });
+
+  app.get("/v1/company/escalations", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const escalations = await new CompanyControlPlaneService(getDefaultDb().db).listEscalations(
+      auth.principal.organizationId,
+    );
+    return c.json({ data: escalations });
   });
 
   app.post("/v1/company/autonomy-proposals", async (c) => {

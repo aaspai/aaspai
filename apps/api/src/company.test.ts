@@ -83,4 +83,42 @@ describe("company operations API", () => {
     });
     expect(apply.status).toBe(403);
   });
+
+  it("exposes scoped authority and routing decisions", async () => {
+    const app = createApiApp({ authVerifier: verifier });
+    const agent = await app.request("/v1/company/service-agents", {
+      method: "POST",
+      headers: { authorization: "Bearer write-company", "content-type": "application/json" },
+      body: JSON.stringify({
+        agentId: "agent/security",
+        metadata: { capabilities: ["security"] },
+      }),
+    });
+    expect(agent.status).toBe(201);
+    const edge = await app.request("/v1/company/authority-edges", {
+      method: "POST",
+      headers: { authorization: "Bearer write-company", "content-type": "application/json" },
+      body: JSON.stringify({
+        fromAgentId: "agent/ceo",
+        toAgentId: "agent/security",
+        relation: "manages",
+      }),
+    });
+    expect(edge.status).toBe(201);
+    const routed = await app.request("/v1/company/routes/preview", {
+      method: "POST",
+      headers: { authorization: "Bearer read-company", "content-type": "application/json" },
+      body: JSON.stringify({
+        idempotencyKey: "route/api-security",
+        capability: "security",
+        title: "API security review",
+        description: "Review the API boundary.",
+      }),
+    });
+    expect(routed.status).toBe(200);
+    const routedBody = (await routed.json()) as {
+      data: { status: string; selectedAgentId: string };
+    };
+    expect(routedBody.data).toMatchObject({ status: "routed", selectedAgentId: "agent/security" });
+  });
 });

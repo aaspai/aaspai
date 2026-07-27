@@ -31,6 +31,14 @@ import {
 } from "@aaspai/db";
 import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 
+export {
+  CompanyControlPlaneError,
+  CompanyControlPlaneService,
+  type CompanyWorkItemInput,
+  type CompanyWorkItemPort,
+  type DelegateWorkInput,
+} from "./control-plane";
+
 export interface CreateDepartmentInput {
   organizationId: string;
   name: string;
