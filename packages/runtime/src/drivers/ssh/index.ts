@@ -1,8 +1,12 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RunProcessOptions, RunProcessResult, SshExecutionTarget } from "@aaspai/contracts/runtime";
+import type {
+  RunProcessOptions,
+  RunProcessResult,
+  SshExecutionTarget,
+} from "@aaspai/contracts/runtime";
 import type { RuntimeTarget } from "../../shared/execution-target.js";
 import { preferredShellForSandbox, shellCommandArgs, shellQuote } from "../../shared/shell.js";
 
@@ -104,16 +108,23 @@ async function runOverSsh(
     // 2. If `options.cwd` is set, sync it to remoteWorkdir (best effort)
     if (options.cwd) {
       const scpArgs = [
-        "-P", String(target.port),
+        "-P",
+        String(target.port),
         ...(target.privateKey ? ["-i", target.privateKey] : []),
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=no",
         "-r",
         `${options.cwd}/.`,
         `${target.username}@${target.host}:${remoteWorkdir}/`,
       ];
       await new Promise<void>((res, rej) => {
-        const c = spawn(scpBin, scpArgs, { stdio: "ignore", windowsHide: true, signal: options.signal });
+        const c = spawn(scpBin, scpArgs, {
+          stdio: "ignore",
+          windowsHide: true,
+          signal: options.signal,
+        });
         c.on("close", (code) => (code === 0 ? res() : rej(new Error(`scp exited ${code}`))));
         c.on("error", rej);
       });
@@ -121,9 +132,10 @@ async function runOverSsh(
 
     // 3. Run the actual command remotely
     const shell = preferredShellForSandbox(target.shellCommand);
-    const cmd = options.args.length === 0
-      ? options.command
-      : `${options.command} ${options.args.map(shellQuote).join(" ")}`;
+    const cmd =
+      options.args.length === 0
+        ? options.command
+        : `${options.command} ${options.args.map(shellQuote).join(" ")}`;
     const wrapped = `cd ${shellQuote(remoteWorkdir)} && exec ${cmd}`;
     const runArgs = buildSshArgs(target, wrapped);
 
@@ -190,7 +202,8 @@ async function runOverSsh(
  */
 export function sshTargetFromEnv(): SshExecutionTarget {
   if (!isSshConfigured()) throw new SshNotConfiguredError();
-  const host = process.env.AASPAI_SSH_HOST!;
+  const host = process.env.AASPAI_SSH_HOST;
+  if (!host) throw new SshNotConfiguredError();
   const port = Number.parseInt(process.env.AASPAI_SSH_PORT ?? "22", 10);
   const username = process.env.AASPAI_SSH_USER ?? "root";
   const privateKey = process.env.AASPAI_SSH_KEY;
@@ -239,9 +252,11 @@ export const sshTarget: RuntimeTarget = {
     const sshTarget = sshTargetFromEnv();
     const scpBin = resolveSshBinary("scp");
     const args = [
-      "-P", String(sshTarget.port),
+      "-P",
+      String(sshTarget.port),
       ...(sshTarget.privateKey ? ["-i", sshTarget.privateKey] : []),
-      "-o", "BatchMode=yes",
+      "-o",
+      "BatchMode=yes",
       "-r",
       `${localDir}/.`,
       `${sshTarget.username}@${sshTarget.host}:${remoteDir}/`,
@@ -258,9 +273,11 @@ export const sshTarget: RuntimeTarget = {
     const sshTarget = sshTargetFromEnv();
     const scpBin = resolveSshBinary("scp");
     const args = [
-      "-P", String(sshTarget.port),
+      "-P",
+      String(sshTarget.port),
       ...(sshTarget.privateKey ? ["-i", sshTarget.privateKey] : []),
-      "-o", "BatchMode=yes",
+      "-o",
+      "BatchMode=yes",
       "-r",
       `${sshTarget.username}@${sshTarget.host}:${remoteDir}/.`,
       `${localDir}/`,

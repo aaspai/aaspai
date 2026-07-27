@@ -1,9 +1,9 @@
-import { Sandbox } from "novita-sandbox";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
+import { Sandbox } from "novita-sandbox";
 import type { SandboxClient, SandboxLease } from "../sandbox-client.js";
 import {
-  SdkSandboxDriver,
   buildLoginShellScript,
+  SdkSandboxDriver,
   shellQuote,
   toRunResult,
 } from "../sdk-sandbox-driver.js";
@@ -86,8 +86,9 @@ export class NovitaSandboxDriver extends SdkSandboxDriver<Sandbox> {
   protected override async pauseSandbox(raw: Sandbox): Promise<void> {
     // Novita's betaPause; fall back to kill on failure
     try {
-      await (raw as unknown as { betaPause: (o: { requestTimeoutMs: number }) => Promise<void> })
-        .betaPause({ requestTimeoutMs: 30_000 });
+      await (
+        raw as unknown as { betaPause: (o: { requestTimeoutMs: number }) => Promise<void> }
+      ).betaPause({ requestTimeoutMs: 30_000 });
     } catch {
       await raw.kill({ requestTimeoutMs: 30_000 }).catch(() => undefined);
     }
@@ -132,14 +133,18 @@ export class NovitaSandboxDriver extends SdkSandboxDriver<Sandbox> {
       },
       async writeFile(remotePath, content) {
         const text = typeof content === "string" ? content : Buffer.from(content).toString("utf8");
-        await (raw as unknown as {
-          files: { write: (p: string, c: string) => Promise<unknown> };
-        }).files.write(remotePath, text);
+        await (
+          raw as unknown as {
+            files: { write: (p: string, c: string) => Promise<unknown> };
+          }
+        ).files.write(remotePath, text);
       },
       async readFile(remotePath) {
-        const text = await (raw as unknown as {
-          files: { read: (p: string) => Promise<string> };
-        }).files.read(remotePath);
+        const text = await (
+          raw as unknown as {
+            files: { read: (p: string) => Promise<string> };
+          }
+        ).files.read(remotePath);
         return Buffer.from(text, "utf8");
       },
       async listFiles(remotePath) {

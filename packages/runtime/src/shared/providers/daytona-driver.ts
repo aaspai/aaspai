@@ -1,13 +1,9 @@
 import path from "node:path";
-import { Daytona, DaytonaNotFoundError } from "@daytonaio/sdk";
-import type { CreateSandboxFromImageParams, Sandbox } from "@daytonaio/sdk";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
+import type { CreateSandboxFromImageParams, Sandbox } from "@daytonaio/sdk";
+import { Daytona, DaytonaNotFoundError } from "@daytonaio/sdk";
 import type { SandboxClient, SandboxLease } from "../sandbox-client.js";
-import {
-  SdkSandboxDriver,
-  shellQuote,
-  toRunResult,
-} from "../sdk-sandbox-driver.js";
+import { SdkSandboxDriver, shellQuote, toRunResult } from "../sdk-sandbox-driver.js";
 
 /**
  * Daytona sandboxes are disposable containers whose default login
@@ -52,14 +48,16 @@ export class DaytonaSandboxDriver extends SdkSandboxDriver<Sandbox> {
   private readonly defaultCpu: number | undefined;
   private readonly defaultMemory: number | undefined;
 
-  constructor(options: {
-    apiKey?: string | null;
-    apiUrl?: string | null;
-    image?: string;
-    timeoutMs?: number;
-    cpu?: number;
-    memory?: number;
-  } = {}) {
+  constructor(
+    options: {
+      apiKey?: string | null;
+      apiUrl?: string | null;
+      image?: string;
+      timeoutMs?: number;
+      cpu?: number;
+      memory?: number;
+    } = {},
+  ) {
     super("daytona");
     // Defer the API key check to `acquire` so the module loads
     // cleanly even when DAYTONA_API_KEY is not set. Also build the
@@ -228,9 +226,7 @@ export class DaytonaSandboxDriver extends SdkSandboxDriver<Sandbox> {
         .map(([k, v]) => `${k}=${shellQuote(v)}`)
         .join(" ");
       const script =
-        envInline.length > 0
-          ? `env ${envInline} ${quotedParts.join(" ")}`
-          : quotedParts.join(" ");
+        envInline.length > 0 ? `env ${envInline} ${quotedParts.join(" ")}` : quotedParts.join(" ");
       const result = await sandboxExec(raw, script, {
         cwd: remoteCwd,
         timeoutMs: options.timeoutMs ?? this.defaultTimeoutMs,
@@ -298,14 +294,10 @@ async function sandboxExec(
 ): Promise<ExecResult> {
   // Daytona's executeCommand signature: (command, cwd?, env?, timeout?)
   // timeout is in seconds here.
-  const timeoutSec = options.timeoutMs !== undefined ? Math.ceil(options.timeoutMs / 1000) : undefined;
+  const timeoutSec =
+    options.timeoutMs !== undefined ? Math.ceil(options.timeoutMs / 1000) : undefined;
   const env = { ...DEFAULT_ENV, ...(options.env ?? {}) };
-  const result = await sandbox.process.executeCommand(
-    command,
-    options.cwd,
-    env,
-    timeoutSec,
-  );
+  const result = await sandbox.process.executeCommand(command, options.cwd, env, timeoutSec);
   return {
     exitCode: result.exitCode,
     stdout: result.result ?? result.artifacts?.stdout ?? "",

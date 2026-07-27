@@ -14,8 +14,7 @@
  */
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExecutionTarget, RunProcessResult } from "@aaspai/contracts/runtime";
@@ -41,7 +40,15 @@ mkdirSync(join(ROOT, "scratch"), { recursive: true });
 mkdirSync(join(ROOT, "scratch", "local"), { recursive: true });
 mkdirSync(join(ROOT, "scratch", "docker"), { recursive: true });
 mkdirSync(join(ROOT, "scratch", "ssh"), { recursive: true });
-for (const provider of ["e2b", "daytona", "cloudflare", "modal", "novita", "exe_dev", "kubernetes"]) {
+for (const provider of [
+  "e2b",
+  "daytona",
+  "cloudflare",
+  "modal",
+  "novita",
+  "exe_dev",
+  "kubernetes",
+]) {
   mkdirSync(join(ROOT, "scratch", provider), { recursive: true });
 }
 
@@ -174,9 +181,7 @@ async function resolveOpencodeCliPath(): Promise<string> {
     const nodejsRoot = process.env.ProgramFiles
       ? `${process.env.ProgramFiles}\\nodejs`
       : "C:\\Program Files\\nodejs";
-    const direct = [
-      `${nodejsRoot}\\node_modules\\opencode-ai\\bin\\opencode.exe`,
-    ];
+    const direct = [`${nodejsRoot}\\node_modules\\opencode-ai\\bin\\opencode.exe`];
     for (const c of direct) {
       if (existsSync(c)) return c;
     }
@@ -196,7 +201,10 @@ async function resolveOpencodeCliPath(): Promise<string> {
 async function isDockerReady(): Promise<boolean> {
   try {
     const result = await new Promise<RunProcessResult>((resolve) => {
-      const child = spawn("docker", ["ps"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      const child = spawn("docker", ["ps"], {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
       const out: Buffer[] = [];
       const err: Buffer[] = [];
       child.stdout.on("data", (b: Buffer) => out.push(b));
@@ -222,7 +230,10 @@ async function isDockerReady(): Promise<boolean> {
 async function ensureDockerImage(imageName: string): Promise<{ ok: boolean; detail: string }> {
   // 1. Check if image exists locally
   const inspect = await new Promise<RunProcessResult>((resolve) => {
-    const c = spawn("docker", ["inspect", imageName], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const c = spawn("docker", ["inspect", imageName], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     c.stdout.on("data", (b: Buffer) => out.push(b));
@@ -283,7 +294,10 @@ WORKDIR /workspace
       }),
     );
   });
-  return { ok: build.exitCode === 0, detail: build.exitCode === 0 ? "built" : build.stderr.slice(-500) };
+  return {
+    ok: build.exitCode === 0,
+    detail: build.exitCode === 0 ? "built" : build.stderr.slice(-500),
+  };
 }
 
 async function checkReadiness(): Promise<Map<string, string | undefined>> {
@@ -340,10 +354,7 @@ interface ScenarioInput {
   cwd: string;
   flags: string[];
   env?: Record<string, string>;
-  onToolCall?: (
-    name: string,
-    input: unknown,
-  ) => Promise<unknown> | unknown;
+  onToolCall?: (name: string, input: unknown) => Promise<unknown> | unknown;
   resumeSessionId?: string;
 }
 
@@ -365,19 +376,13 @@ function parseJsonlEvents(stdout: string): ParsedEvent[] {
       if (typeof merged.sessionID === "string") event.sessionId = merged.sessionID;
       if (typeof merged.sessionId === "string") event.sessionId = merged.sessionId;
       if (event.kind === "tool_call" || event.kind === "tool_use") {
-        event.toolName = String(
-          (merged.toolName as string) ?? (merged.name as string) ?? "?",
-        );
+        event.toolName = String((merged.toolName as string) ?? (merged.name as string) ?? "?");
         event.toolInput = merged.input ?? merged.args;
       }
       if (event.kind === "tool_result") {
-        event.toolName = String(
-          (merged.toolName as string) ?? (merged.name as string) ?? "?",
-        );
+        event.toolName = String((merged.toolName as string) ?? (merged.name as string) ?? "?");
         event.toolOutput =
-          typeof merged.output === "string"
-            ? merged.output
-            : JSON.stringify(merged.output ?? null);
+          typeof merged.output === "string" ? merged.output : JSON.stringify(merged.output ?? null);
       }
       for (const [k, v] of Object.entries(merged)) {
         if (!(k in event)) event[k] = v;
@@ -406,10 +411,16 @@ async function runScenarioOnTarget(
   const apiKeyRequiredPatterns: Array<{ pattern: RegExp; keyHint: string }> = [
     { pattern: /E2B_API_KEY|E2B sandbox requires an API key/i, keyHint: "E2B_API_KEY" },
     { pattern: /DAYTONA_API_KEY|daytona sandbox requires an API key/i, keyHint: "DAYTONA_API_KEY" },
-    { pattern: /MODAL_TOKEN_ID|MODAL_TOKEN_SECRET|modal sandbox requires/i, keyHint: "MODAL_TOKEN_ID+MODAL_TOKEN_SECRET" },
+    {
+      pattern: /MODAL_TOKEN_ID|MODAL_TOKEN_SECRET|modal sandbox requires/i,
+      keyHint: "MODAL_TOKEN_ID+MODAL_TOKEN_SECRET",
+    },
     { pattern: /NOVITA_API_KEY|novita sandbox requires an API key/i, keyHint: "NOVITA_API_KEY" },
     { pattern: /EXE_API_KEY|exe-dev sandbox requires an API key/i, keyHint: "EXE_API_KEY" },
-    { pattern: /AASPAI_CF_BRIDGE_URL|cloudflare sandbox requires a bridgeUrl/i, keyHint: "AASPAI_CF_BRIDGE_URL" },
+    {
+      pattern: /AASPAI_CF_BRIDGE_URL|cloudflare sandbox requires a bridgeUrl/i,
+      keyHint: "AASPAI_CF_BRIDGE_URL",
+    },
     { pattern: /KUBECONFIG|kubernetes sandbox requires KUBECONFIG/i, keyHint: "KUBECONFIG" },
   ];
 
@@ -420,7 +431,13 @@ async function runScenarioOnTarget(
   if (spec.key === "docker") {
     const dockerWorkspace = (spec.executionTarget as { cwd?: string }).cwd;
     if (dockerWorkspace) {
-      const hostAuth = join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".local", "share", "opencode", "auth.json");
+      const hostAuth = join(
+        process.env.USERPROFILE ?? process.env.HOME ?? "",
+        ".local",
+        "share",
+        "opencode",
+        "auth.json",
+      );
       if (existsSync(hostAuth)) {
         const containerAuthDir = join(dockerWorkspace, ".local", "share", "opencode");
         mkdirSync(containerAuthDir, { recursive: true });
@@ -437,7 +454,7 @@ async function runScenarioOnTarget(
   const startedAt = Date.now();
   writeFileSync(
     join(dir, "00-input.jsonl"),
-    JSON.stringify({
+    `${JSON.stringify({
       timestamp: new Date().toISOString(),
       scenario: input.scenario,
       targetKey: spec.key,
@@ -446,7 +463,7 @@ async function runScenarioOnTarget(
       cwd: input.cwd,
       env: input.env ?? {},
       resumeSessionId: input.resumeSessionId,
-    }) + "\n",
+    })}\n`,
   );
 
   // Each runtime target owns its own opencode install (host for
@@ -454,8 +471,7 @@ async function runScenarioOnTarget(
   // cloud providers). The Windows .exe path is only valid for the
   // local target — for everything else, the binary is on the
   // target's PATH.
-  const command =
-    spec.key === "local" ? await resolveOpencodeCliPath() : "opencode";
+  const command = spec.key === "local" ? await resolveOpencodeCliPath() : "opencode";
   const args = [
     "run",
     "--format",
@@ -548,9 +564,7 @@ async function runScenarioOnTarget(
     // whole target as `skipped` for clarity.
     const apiKeyMatch = apiKeyRequiredPatterns.find((p) => p.pattern.test(message));
     if (apiKeyMatch) {
-      throw new SkippableError(
-        `skipped: needs ${apiKeyMatch.keyHint} (${message})`,
-      );
+      throw new SkippableError(`skipped: needs ${apiKeyMatch.keyHint} (${message})`);
     }
     const out: ScenarioResult = {
       scenario: input.scenario,
@@ -578,7 +592,10 @@ class SkippableError extends Error {
 //  Scenario definitions (parameterized by target)
 // ─────────────────────────────────────────────────────────────────
 
-function scenariosFor(spec: TargetSpec, targetDir: string): Array<(resumeSessionId?: string) => Promise<ScenarioResult>> {
+function scenariosFor(
+  spec: TargetSpec,
+  targetDir: string,
+): Array<(resumeSessionId?: string) => Promise<ScenarioResult>> {
   return [
     async (resumeSessionId) =>
       runScenarioOnTarget(
@@ -631,7 +648,8 @@ function scenariosFor(spec: TargetSpec, targetDir: string): Array<(resumeSession
         spec,
         {
           scenario: "05-tools",
-          prompt: "List the files in the current directory using the read tool, then reply with their count.",
+          prompt:
+            "List the files in the current directory using the read tool, then reply with their count.",
           cwd: join(targetDir, "ws"),
           flags: [],
         },
@@ -675,7 +693,10 @@ interface TargetRunResult {
   totalDurationMs: number;
 }
 
-async function runAllScenariosOnTarget(spec: TargetSpec, skipReason?: string): Promise<TargetRunResult> {
+async function runAllScenariosOnTarget(
+  spec: TargetSpec,
+  skipReason?: string,
+): Promise<TargetRunResult> {
   const targetDir = join(ROOT, "targets", spec.key);
   mkdirSync(targetDir, { recursive: true });
 
@@ -744,9 +765,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const skipReasons = await checkReadiness();
   const allSpecs = buildTargetSpecs();
-  const wanted = argv.length > 0
-    ? allSpecs.filter((s) => argv.includes(s.key))
-    : allSpecs;
+  const wanted = argv.length > 0 ? allSpecs.filter((s) => argv.includes(s.key)) : allSpecs;
   if (wanted.length === 0) {
     console.error(`No targets matched: ${argv.join(", ")}`);
     console.error(`Available: ${allSpecs.map((s) => s.key).join(", ")}`);
@@ -799,4 +818,4 @@ main().catch((err) => {
 });
 
 // Re-export for tooling
-export { buildTargetSpecs, runScenarioOnTarget, parseJsonlEvents };
+export { buildTargetSpecs, parseJsonlEvents, runScenarioOnTarget };

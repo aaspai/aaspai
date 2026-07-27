@@ -1,16 +1,11 @@
-import path from "node:path";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import path, { join } from "node:path";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
 import type { SandboxClient, SandboxLease } from "../sandbox-client.js";
-import {
-  SdkSandboxDriver,
-  shellQuote,
-  toRunResult,
-} from "../sdk-sandbox-driver.js";
+import { SdkSandboxDriver, shellQuote, toRunResult } from "../sdk-sandbox-driver.js";
 
 /**
  * Default setup script. Installs Node 20 (and git) so the agent CLI works
@@ -66,26 +61,35 @@ function parseVmRecord(value: unknown, depth = 0): ExeDevVm | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
   // Recurse into known envelopes.
-  const nested =
-    parseVmRecord(record.vm, depth + 1) ??
-    parseVmRecord(record.data, depth + 1);
+  const nested = parseVmRecord(record.vm, depth + 1) ?? parseVmRecord(record.data, depth + 1);
   if (nested) return nested;
 
   const name =
-    typeof record.vm_name === "string" ? record.vm_name :
-    typeof record.name === "string" ? record.name :
-    typeof record.vmName === "string" ? record.vmName :
-    null;
+    typeof record.vm_name === "string"
+      ? record.vm_name
+      : typeof record.name === "string"
+        ? record.name
+        : typeof record.vmName === "string"
+          ? record.vmName
+          : null;
   const sshDest =
-    typeof record.ssh_dest === "string" ? record.ssh_dest :
-    typeof record.sshDest === "string" ? record.sshDest :
-    name ? `${name}.exe.xyz` : null;
+    typeof record.ssh_dest === "string"
+      ? record.ssh_dest
+      : typeof record.sshDest === "string"
+        ? record.sshDest
+        : name
+          ? `${name}.exe.xyz`
+          : null;
   if (!name || !sshDest) return null;
   return {
     name,
     sshDest,
-    httpsUrl: typeof record.https_url === "string" ? record.https_url :
-              typeof record.httpsUrl === "string" ? record.httpsUrl : undefined,
+    httpsUrl:
+      typeof record.https_url === "string"
+        ? record.https_url
+        : typeof record.httpsUrl === "string"
+          ? record.httpsUrl
+          : undefined,
     status: typeof record.status === "string" ? record.status : undefined,
     region: typeof record.region === "string" ? record.region : undefined,
   };
@@ -157,8 +161,18 @@ async function runLifecycleCommand(
   }
 }
 
-async function lookupVm(apiUrl: string, apiKey: string, vmName: string, timeoutMs: number): Promise<ExeDevVm | null> {
-  const response = await runLifecycleCommand(apiUrl, apiKey, `ls --json ${shellQuote(vmName)}`, timeoutMs);
+async function lookupVm(
+  apiUrl: string,
+  apiKey: string,
+  vmName: string,
+  timeoutMs: number,
+): Promise<ExeDevVm | null> {
+  const response = await runLifecycleCommand(
+    apiUrl,
+    apiKey,
+    `ls --json ${shellQuote(vmName)}`,
+    timeoutMs,
+  );
   const list: unknown[] = Array.isArray((response as { vms?: unknown[] } | null)?.vms)
     ? (response as { vms: unknown[] }).vms
     : Array.isArray(response)
@@ -181,7 +195,7 @@ async function lookupVm(apiUrl: string, apiKey: string, vmName: string, timeoutM
  * `prepareSshIdentity`.
  */
 async function prepareSshIdentity(rawKey: string): Promise<string> {
-  const { mkdir, writeFile: wf, chmod } = await import("node:fs/promises");
+  const { writeFile: wf, chmod } = await import("node:fs/promises");
   const dir = await mkdtemp(path.join(tmpdir(), "aaspai-exedev-key-"));
   const keyPath = join(dir, "id_ed25519");
   const normalized = rawKey.endsWith("\n") ? rawKey : `${rawKey}\n`;
@@ -214,14 +228,16 @@ export class ExeDevSandboxDriver extends SdkSandboxDriver<ExeDevVm> {
   private readonly sshPort: number;
   private readonly defaultTimeoutMs: number;
 
-  constructor(options: {
-    apiKey?: string | null;
-    apiUrl?: string | null;
-    image?: string;
-    command?: string;
-    sshPort?: number;
-    timeoutMs?: number;
-  } = {}) {
+  constructor(
+    options: {
+      apiKey?: string | null;
+      apiUrl?: string | null;
+      image?: string;
+      command?: string;
+      sshPort?: number;
+      timeoutMs?: number;
+    } = {},
+  ) {
     super("exe_dev");
     this.apiKey = options.apiKey?.trim() ?? "";
     this.apiUrl = resolveApiUrl({ apiUrl: options.apiUrl });
@@ -315,7 +331,11 @@ export class ExeDevSandboxDriver extends SdkSandboxDriver<ExeDevVm> {
 
     return {
       async makeDir(remotePath, options) {
-        await runOverSsh({ sshTarget, port: sshPort, remoteCommand: `mkdir ${options?.recursive === false ? "" : "-p"} ${shellQuote(remotePath)}` });
+        await runOverSsh({
+          sshTarget,
+          port: sshPort,
+          remoteCommand: `mkdir ${options?.recursive === false ? "" : "-p"} ${shellQuote(remotePath)}`,
+        });
       },
       async writeFile(remotePath, content) {
         const text = typeof content === "string" ? content : Buffer.from(content).toString("utf8");
@@ -326,7 +346,13 @@ export class ExeDevSandboxDriver extends SdkSandboxDriver<ExeDevVm> {
           : undefined;
         try {
           await writeFile(localPath, text);
-          await runScp({ sshTarget, port: sshPort, identityFile: sshIdentity, localPath, remotePath });
+          await runScp({
+            sshTarget,
+            port: sshPort,
+            identityFile: sshIdentity,
+            localPath,
+            remotePath,
+          });
         } finally {
           cleanupSshIdentity(sshIdentity);
           await rm(dir, { recursive: true, force: true });
@@ -339,7 +365,14 @@ export class ExeDevSandboxDriver extends SdkSandboxDriver<ExeDevVm> {
           ? await prepareSshIdentity(process.env.AASPAI_SSH_KEY)
           : undefined;
         try {
-          await runScp({ sshTarget, port: sshPort, identityFile: sshIdentity, localPath, remotePath, direction: "from" });
+          await runScp({
+            sshTarget,
+            port: sshPort,
+            identityFile: sshIdentity,
+            localPath,
+            remotePath,
+            direction: "from",
+          });
           const { readFile } = await import("node:fs/promises");
           return await readFile(localPath);
         } finally {
@@ -410,13 +443,17 @@ async function runSshExec(args: SshExecOptions): Promise<RunProcessResult> {
     child.stdout?.on("data", (b: Buffer) => {
       stdoutChunks.push(b);
       if (args.options.onLog) {
-        void Promise.resolve(args.options.onLog("stdout", b.toString("utf8"))).catch(() => undefined);
+        void Promise.resolve(args.options.onLog("stdout", b.toString("utf8"))).catch(
+          () => undefined,
+        );
       }
     });
     child.stderr?.on("data", (b: Buffer) => {
       stderrChunks.push(b);
       if (args.options.onLog) {
-        void Promise.resolve(args.options.onLog("stderr", b.toString("utf8"))).catch(() => undefined);
+        void Promise.resolve(args.options.onLog("stderr", b.toString("utf8"))).catch(
+          () => undefined,
+        );
       }
     });
     child.on("close", (code, signal) => {
@@ -475,9 +512,12 @@ async function runScp(args: {
 }): Promise<void> {
   const direction = args.direction ?? "to";
   const scpArgs: string[] = [
-    "-P", String(args.port),
-    "-o", "BatchMode=yes",
-    "-o", "StrictHostKeyChecking=accept-new",
+    "-P",
+    String(args.port),
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
   ];
   if (args.identityFile) {
     scpArgs.push("-i", args.identityFile, "-o", "IdentitiesOnly=yes");
@@ -502,11 +542,7 @@ function buildSshArgs(opts: {
   target: string;
   extra: string[];
 }): string[] {
-  const args: string[] = [
-    "-p", String(opts.port),
-    "-o", "BatchMode=yes",
-    ...opts.extra,
-  ];
+  const args: string[] = ["-p", String(opts.port), "-o", "BatchMode=yes", ...opts.extra];
   if (opts.identityFile) {
     args.push("-i", opts.identityFile, "-o", "IdentitiesOnly=yes");
   }

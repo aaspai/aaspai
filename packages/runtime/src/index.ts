@@ -21,11 +21,11 @@ export { modalTarget } from "./drivers/sandbox/modal/index.js";
 export { novitaTarget } from "./drivers/sandbox/novita/index.js";
 export {
   isSshConfigured,
+  rmSshKeyFile,
   SshNotConfiguredError,
   sshTarget,
   sshTargetFromEnv,
   writeSshKeyFromEnv,
-  rmSshKeyFile,
 } from "./drivers/ssh/index.js";
 export {
   getRuntimeTargetCapabilities,
@@ -45,6 +45,17 @@ export {
 } from "./shared/execution-target.js";
 export { buildSandboxNpmInstallCommand } from "./shared/install-command.js";
 export {
+  type CreateSandboxTargetOptions,
+  createLocalSandboxTarget,
+} from "./shared/local-sandbox-target.js";
+export { CloudflareSandboxDriver } from "./shared/providers/cloudflare-driver.js";
+export { DaytonaSandboxDriver } from "./shared/providers/daytona-driver.js";
+export { E2bSandboxDriver } from "./shared/providers/e2b-driver.js";
+export { ExeDevSandboxDriver } from "./shared/providers/exe-dev-driver.js";
+export { KubernetesSandboxDriver } from "./shared/providers/kubernetes-driver.js";
+export { ModalSandboxDriver } from "./shared/providers/modal-driver.js";
+export { NovitaSandboxDriver } from "./shared/providers/novita-driver.js";
+export {
   createSandboxRunLogTailFactory,
   RUN_LOG_STREAM_STUB_MESSAGE,
 } from "./shared/run-log-stream.js";
@@ -56,22 +67,14 @@ export {
 } from "./shared/sandbox-client.js";
 export { listSandboxProviders, type SandboxProviderKey } from "./shared/sandbox-dispatch.js";
 export { LocalSandboxDriver } from "./shared/sandbox-driver.js";
-export { createLocalSandboxTarget, type CreateSandboxTargetOptions } from "./shared/local-sandbox-target.js";
 export {
   buildLoginShellScript,
+  type SandboxClient as SdkSandboxClient,
   SdkSandboxDriver,
   shellQuote,
   toRunResult,
-  type SandboxClient as SdkSandboxClient,
 } from "./shared/sdk-sandbox-driver.js";
 export { createSdkSandboxTarget } from "./shared/sdk-sandbox-target.js";
-export { E2bSandboxDriver } from "./shared/providers/e2b-driver.js";
-export { DaytonaSandboxDriver } from "./shared/providers/daytona-driver.js";
-export { ModalSandboxDriver } from "./shared/providers/modal-driver.js";
-export { NovitaSandboxDriver } from "./shared/providers/novita-driver.js";
-export { ExeDevSandboxDriver } from "./shared/providers/exe-dev-driver.js";
-export { CloudflareSandboxDriver } from "./shared/providers/cloudflare-driver.js";
-export { KubernetesSandboxDriver } from "./shared/providers/kubernetes-driver.js";
 export {
   preferredShellForSandbox,
   shellCommandArgs,

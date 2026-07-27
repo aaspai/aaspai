@@ -1,13 +1,3 @@
-/**
- * Kill switch — pause-all primitive.
- *
- * Per-loop and global. The scheduler checks the kill switch before
- * firing any wakeup. The global kill switch is stored in the DB
- * (audit_events with action = "kill_switch.toggled") so it survives
- * process restarts.
- */
-import type { LoopConfigSource, LoopPattern } from "@aaspai/contracts/phase2";
-
 export class KillSwitch {
   private readonly pausedLoops = new Set<string>();
   private globalPaused = false;

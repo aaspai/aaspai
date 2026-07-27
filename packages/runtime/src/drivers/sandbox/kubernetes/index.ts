@@ -1,5 +1,5 @@
-import { KubeConfig, CoreV1Api } from "@kubernetes/client-node";
 import type { ProviderCapabilities } from "@aaspai/contracts/capabilities";
+import { CoreV1Api, KubeConfig } from "@kubernetes/client-node";
 import type { RuntimeTarget } from "../../../shared/execution-target.js";
 import { KubernetesSandboxDriver } from "../../../shared/providers/kubernetes-driver.js";
 import { createSdkSandboxTarget } from "../../../shared/sdk-sandbox-target.js";
@@ -63,7 +63,7 @@ export const kubernetesTarget: RuntimeTarget = k8sApi
   : // A placeholder target that throws on first use. This keeps the
     // export shape consistent while letting the test runner report
     // "skipped: needs KUBECONFIG" cleanly.
-    ({
+    {
       info: {
         kind: "sandbox" as const,
         provider: "kubernetes" as never,
@@ -82,5 +82,4 @@ export const kubernetesTarget: RuntimeTarget = k8sApi
       async restoreWorkspace() {
         throw new Error("kubernetes sandbox: stub");
       },
-    });
-
+    };

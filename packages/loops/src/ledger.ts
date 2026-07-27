@@ -23,12 +23,14 @@ export class CircuitBreaker {
     // 1. Stagnation: same normalized signature N× in a row
     const stagThreshold = this.policy.stagnationThreshold;
     if (stagThreshold > 0 && attempts.length >= stagThreshold) {
-      const last = attempts[attempts.length - 1]!;
+      const last = attempts.at(-1);
+      if (!last) return { kind: "continue" };
       if (last.outcome === "failure" && last.error) {
         const sig = last.error.signature;
         let runLen = 1;
         for (let i = attempts.length - 2; i >= 0; i--) {
-          const a = attempts[i]!;
+          const a = attempts[i];
+          if (!a) break;
           if (
             a.outcome === "failure" &&
             a.error &&
