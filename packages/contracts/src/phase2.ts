@@ -285,12 +285,26 @@ export const sessionRequestSchema = z
       .object({
         sessionId: z.string().min(1).max(512),
         sessionParams: jsonObjectSchema.optional(),
+        // Optional context prepended to the prompt when resuming
+        // (e.g. "the user said X in chat while you were away"). The
+        // sessions layer turns this into a `wakeupContext` block in
+        // the composed prompt.
+        context: z.string().max(65_536).optional(),
       })
       .strict()
       .optional(),
     budget: jsonObjectSchema.default({}),
     cwd: z.string().trim().min(1).max(8_192).optional(),
     attachments: z.array(jsonObjectSchema).max(64).optional(),
+    // Markdown appended to the assistant's final message at the end
+    // of a successful run. Used for agent-on-agent handoff notes
+    // (paperclip parity). The session row stores the final
+    // (assistant_text + handoff_markdown) as the summary.
+    handoffMarkdown: z.string().max(65_536).optional(),
+    // The id of the parent session, if this is a follow-up spawned
+    // by another session. Persisted into the `parent_session_id`
+    // column so the UI can render a session tree.
+    parentSessionId: z.string().trim().min(1).max(512).optional(),
     idempotencyKey: z.string().min(1).max(512),
     traceId: identifierSchema.optional(),
     wakeupId: identifierSchema.optional(), // links back to the loop's wakeup
@@ -367,7 +381,17 @@ export const skillSchema = z
     files: z
       .array(
         z
-          .object({ path: z.string().min(1).max(1_024), content: z.string().max(1_048_576) })
+          .object({
+            path: z.string().min(1).max(1_024),
+            content: z.string().max(1_048_576),
+            kind: z
+              .enum(["skill", "markdown", "reference", "script", "asset", "other"])
+              .default("other"),
+            sha256: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .optional(),
+          })
           .strict(),
       )
       .max(256)

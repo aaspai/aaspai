@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./audit": "./src/audit.ts",
     "./auth": "./src/auth.ts",
+    "./capabilities": "./src/capabilities.ts",
     "./errors": "./src/errors.ts",
     "./event": "./src/event.ts",
     "./execution": "./src/execution.ts",

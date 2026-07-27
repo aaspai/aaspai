@@ -200,6 +200,26 @@ export const adapterExecutionContextSchema = z
       (v) => typeof v === "function",
       { message: "onLog must be a function" },
     ),
+    /**
+     * Optional: a tool dispatcher the adapter can use to handle
+     * `tool_use` events. When provided, the adapter looks up the
+     * tool by name and (if found) awaits the dispatcher's
+     * `invoke(name, input)` method, then emits the result back
+     * through `onLog` / `onRuntimeProgress` as a `tool_result` event.
+     * The adapter does NOT itself decide what a tool does — it
+     * just routes the call.
+     */
+    tools: z
+      .custom<{
+        invoke(name: string, input: unknown, ctx: unknown): Promise<unknown>;
+        /** Look up a tool by name; returns null if unknown. */
+        get?(name: string): unknown;
+        /** List all available tool names. */
+        list?(): readonly string[];
+      }>((v) => typeof v === "object" && v !== null, {
+        message: "tools must be a tool-dispatcher object",
+      })
+      .optional(),
     onMeta: z
       .custom<(meta: Record<string, unknown>) => Promise<void> | void>(
         (v) => typeof v === "function",
@@ -338,6 +358,237 @@ export const adapterInfoSchema = z
   .strict();
 export type AdapterInfo = z.infer<typeof adapterInfoSchema>;
 
+/* ────────────────────────────────────────────────────────────────────
+ *  Tier 3 (this pass): typed ResultJson + Usage + SessionEvent enum +
+ *  Adapter.compact / cancel / describe / fork operations
+ *  ──────────────────────────────────────────────────────────────────── */
+
+/** Token usage breakdown (per step or per run). */
+export const usageSchema = z
+  .object({
+    inputTokens: nonNegativeIntegerSchema.optional(),
+    outputTokens: nonNegativeIntegerSchema.optional(),
+    reasoningTokens: nonNegativeIntegerSchema.optional(),
+    cacheReadTokens: nonNegativeIntegerSchema.optional(),
+    cacheWriteTokens: nonNegativeIntegerSchema.optional(),
+    totalTokens: nonNegativeIntegerSchema.optional(),
+    costUsd: z.number().nonnegative().optional(),
+  })
+  .strict();
+export type Usage = z.infer<typeof usageSchema>;
+
+/** Discriminated union of session events written to the `session_events` table. */
+export const sessionEventKindSchema = z.enum([
+  "init",
+  "assistant",
+  "thinking",
+  "tool_call",
+  "tool_result",
+  "user",
+  "result",
+  "stderr",
+  "compaction",
+  "snapshot",
+  "permission_ask",
+  "question",
+  "cost",
+  "info",
+  "warn",
+  "error",
+]);
+export type SessionEventKind = z.infer<typeof sessionEventKindSchema>;
+
+/** Typed ResultJson — replaces the untyped `jsonObjectSchema` for adapters. */
+export const resultJsonSchema = z
+  .object({
+    cli: z.string().optional(),
+    model: z.string().optional(),
+    resumedSession: z.boolean().optional(),
+    continuedLast: z.boolean().optional(),
+    attached: z.boolean().optional(),
+    cliSessionId: z.string().optional(),
+    thinkingEventCount: nonNegativeIntegerSchema.optional(),
+    toolEventCount: nonNegativeIntegerSchema.optional(),
+    toolEvents: z
+      .array(
+        z
+          .object({
+            name: z.string(),
+            status: z.string().optional(),
+            output: z.string().optional(),
+            id: z.string().optional(),
+            ts: z.string().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    textEvents: z
+      .array(
+        z
+          .object({
+            text: z.string(),
+            ts: z.string().optional(),
+            delta: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    thinkingEvents: z
+      .array(
+        z
+          .object({
+            text: z.string(),
+            ts: z.string().optional(),
+            delta: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    toolsInvoked: z.array(z.string()).optional(),
+    /** Per-step usage entries. */
+    stepUsage: z.array(usageSchema.extend({ step: nonNegativeIntegerSchema.optional() })).optional(),
+    /** Session events that were forwarded to the adapter. */
+    sessionEvents: z
+      .array(
+        z
+          .object({
+            kind: sessionEventKindSchema,
+            ts: z.string().optional(),
+            seq: nonNegativeIntegerSchema.optional(),
+            payload: jsonObjectSchema.optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    /** Compaction event records. */
+    compactions: z
+      .array(
+        z
+          .object({
+            at: z.string(),
+            tailTurns: nonNegativeIntegerSchema.optional(),
+            tokensBefore: nonNegativeIntegerSchema.optional(),
+            tokensAfter: nonNegativeIntegerSchema.optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    /** Snapshot event records. */
+    snapshots: z
+      .array(
+        z
+          .object({
+            at: z.string(),
+            hash: z.string(),
+          })
+          .strict(),
+      )
+      .optional(),
+    /** MCP servers configured for this run. */
+    mcpServers: z.array(z.string()).optional(),
+    /** Skills materialized for this run. */
+    skills: z.array(z.string()).optional(),
+    /** Free-form per-adapter extras (escape hatch for adapter-specific data). */
+    extra: jsonObjectSchema.optional(),
+  })
+  .strict();
+export type ResultJson = z.infer<typeof resultJsonSchema>;
+
+/** Cancellation token shape for `Adapter.cancel()`. */
+export const adapterCancelRequestSchema = z
+  .object({
+    sessionId: z.string().min(1).max(512),
+    /** When the cancellation was requested. */
+    requestedAt: z.string().optional(),
+    /** Who/what requested the cancellation. */
+    requestedBy: z.string().optional(),
+    /** Optional reason (e.g. "budget_exceeded", "user_cancelled"). */
+    reason: z.string().max(512).optional(),
+  })
+  .strict();
+export type AdapterCancelRequest = z.infer<typeof adapterCancelRequestSchema>;
+
+/** Result of an `Adapter.cancel()` call. */
+export const adapterCancelResultSchema = z
+  .object({
+    cancelled: z.boolean(),
+    sessionId: z.string(),
+    /** Final status of the run (if known). */
+    finalStatus: z.enum(["cancelled", "interrupted", "completed", "already_finished"]).optional(),
+  })
+  .strict();
+export type AdapterCancelResult = z.infer<typeof adapterCancelResultSchema>;
+
+/** Compaction request — shrinks session context. */
+export const adapterCompactRequestSchema = z
+  .object({
+    sessionId: z.string().min(1).max(512),
+    /** Keep this many tail turns; older ones get summarized. */
+    tailTurns: nonNegativeIntegerSchema.optional(),
+    /** Force compaction even if under the auto threshold. */
+    force: z.boolean().default(false),
+  })
+  .strict();
+export type AdapterCompactRequest = z.infer<typeof adapterCompactRequestSchema>;
+
+/** Result of an `Adapter.compact()` call. */
+export const adapterCompactResultSchema = z
+  .object({
+    compacted: z.boolean(),
+    sessionId: z.string(),
+    tokensBefore: nonNegativeIntegerSchema.optional(),
+    tokensAfter: nonNegativeIntegerSchema.optional(),
+    summary: z.string().optional(),
+  })
+  .strict();
+export type AdapterCompactResult = z.infer<typeof adapterCompactResultSchema>;
+
+/** Fork request — copy a session to a new one. */
+export const adapterForkRequestSchema = z
+  .object({
+    parentSessionId: z.string().min(1).max(512),
+    /** Fork from this step (inclusive). Default: latest. */
+    fromStep: nonNegativeIntegerSchema.optional(),
+  })
+  .strict();
+export type AdapterForkRequest = z.infer<typeof adapterForkRequestSchema>;
+
+/** Result of an `Adapter.fork()` call. */
+export const adapterForkResultSchema = z
+  .object({
+    forked: z.boolean(),
+    parentSessionId: z.string(),
+    childSessionId: z.string().optional(),
+  })
+  .strict();
+export type AdapterForkResult = z.infer<typeof adapterForkResultSchema>;
+
+/** Describes the capabilities + tool set of an adapter. */
+export const adapterDescribeSchema = z
+  .object({
+    type: adapterTypeSchema,
+    label: z.string(),
+    models: z.array(z.object({ id: z.string(), label: z.string() }).strict()).optional(),
+    /** Native tools the adapter ships with (not via ctx.tools). */
+    nativeTools: z.array(z.string()).optional(),
+    /** Whether the adapter supports out-of-band cancel. */
+    supportsCancel: z.boolean().default(false),
+    /** Whether the adapter supports explicit compaction. */
+    supportsCompact: z.boolean().default(false),
+    /** Whether the adapter supports explicit fork. */
+    supportsFork: z.boolean().default(false),
+    /** Whether the adapter supports `--session` resume. */
+    supportsResume: z.boolean().default(false),
+    /** Whether the adapter supports thinking/extended-reasoning. */
+    supportsThinking: z.boolean().default(false),
+    /** Whether the adapter supports `--session <id> --fork`. */
+    supportsForkSession: z.boolean().default(false),
+    /** Max output tokens (best-effort). */
+    maxOutputTokens: nonNegativeIntegerSchema.optional(),
+  })
+  .strict();
+export type AdapterDescribe = z.infer<typeof adapterDescribeSchema>;
+
 /** The full adapter contract. */
 export const serverAdapterModuleSchema = z
   .object({
@@ -349,6 +600,30 @@ export const serverAdapterModuleSchema = z
     testEnvironment: z.custom<
       (ctx: AdapterEnvironmentTestContext) => Promise<AdapterEnvironmentTestResult>
     >((v) => typeof v === "function", { message: "testEnvironment must be a function" }),
+    // Tier 3 (this pass): out-of-band operations. All optional; default = "not supported".
+    cancel: z
+      .custom<(req: AdapterCancelRequest) => Promise<AdapterCancelResult>>(
+        (v) => typeof v === "function",
+        { message: "cancel must be a function" },
+      )
+      .optional(),
+    compact: z
+      .custom<(req: AdapterCompactRequest) => Promise<AdapterCompactResult>>(
+        (v) => typeof v === "function",
+        { message: "compact must be a function" },
+      )
+      .optional(),
+    fork: z
+      .custom<(req: AdapterForkRequest) => Promise<AdapterForkResult>>(
+        (v) => typeof v === "function",
+        { message: "fork must be a function" },
+      )
+      .optional(),
+    describe: z
+      .custom<() => AdapterDescribe | Promise<AdapterDescribe>>((v) => typeof v === "function", {
+        message: "describe must be a function",
+      })
+      .optional(),
   })
   .strict();
 export type ServerAdapterModule = z.infer<typeof serverAdapterModuleSchema>;
