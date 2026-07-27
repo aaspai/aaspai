@@ -22,6 +22,8 @@ export function OnboardingWizard({
   const router = useRouter();
   const firstReady = providers.find((provider) => provider.ready)?.type ?? "dry_run_local";
   const [provider, setProvider] = useState(firstReady);
+  const selectedProvider = providers.find((item) => item.type === provider) ?? providers[0];
+  const [model, setModel] = useState(selectedProvider?.models[0]?.id ?? "");
   const [agenda, setAgenda] = useState("");
   const [instructions, setInstructions] = useState("");
   const [goalTitle, setGoalTitle] = useState("");
@@ -40,6 +42,7 @@ export function OnboardingWizard({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           provider,
+          model,
           ceoAgenda: agenda,
           ceoInstructions: instructions,
           goalTitle,
@@ -69,46 +72,75 @@ export function OnboardingWizard({
             Put the CEO in the driver's seat
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {companyName} starts with one provider, one company agenda, and one measurable goal.
+            {companyName} starts with one provider and model, one company agenda, and one measurable
+            goal.
           </p>
         </header>
 
         <form onSubmit={submit} className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>1. Choose the CEO's execution engine</CardTitle>
+              <CardTitle>1. Choose the CEO's execution engine and model</CardTitle>
               <CardDescription>
                 Only verified local providers can be selected. Dry-run is safe for a first test.
               </CardDescription>
             </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2">
-              {providers.map((item) => (
-                <label
-                  key={item.type}
-                  className={`cursor-pointer rounded-lg border p-4 transition-colors ${provider === item.type ? "border-primary bg-primary/5" : "bg-card hover:bg-accent/40"}`}
-                >
-                  <input
-                    type="radio"
-                    name="provider"
-                    value={item.type}
-                    checked={provider === item.type}
-                    onChange={() => setProvider(item.type)}
-                    className="sr-only"
-                  />
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-medium">{item.label}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{item.type}</p>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {providers.map((item) => (
+                  <label
+                    key={item.type}
+                    className={`cursor-pointer rounded-lg border p-4 transition-colors ${provider === item.type ? "border-primary bg-primary/5" : "bg-card hover:bg-accent/40"}`}
+                  >
+                    <input
+                      type="radio"
+                      name="provider"
+                      value={item.type}
+                      checked={provider === item.type}
+                      onChange={() => {
+                        setProvider(item.type);
+                        setModel(item.models[0]?.id ?? "");
+                      }}
+                      className="sr-only"
+                    />
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium">{item.label}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{item.type}</p>
+                      </div>
+                      <Badge variant={item.ready ? "default" : "outline"}>
+                        {item.ready
+                          ? "Ready"
+                          : item.installed
+                            ? "Needs attention"
+                            : "Not installed"}
+                      </Badge>
                     </div>
-                    <Badge variant={item.ready ? "default" : "outline"}>
-                      {item.ready ? "Ready" : item.installed ? "Needs attention" : "Not installed"}
-                    </Badge>
-                  </div>
-                  <p className="mt-3 text-xs text-muted-foreground">
-                    {item.environment.checks[0]?.message ?? "Available for local execution."}
-                  </p>
-                </label>
-              ))}
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {item.environment.checks[0]?.message ?? "Available for local execution."}
+                    </p>
+                  </label>
+                ))}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ceo-model">CEO model</Label>
+                <select
+                  id="ceo-model"
+                  value={model}
+                  onChange={(event) => setModel(event.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  required
+                >
+                  {selectedProvider?.models.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label} ({item.id})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  This model becomes the CEO agent's default for every execution.
+                </p>
+              </div>
             </CardContent>
           </Card>
 

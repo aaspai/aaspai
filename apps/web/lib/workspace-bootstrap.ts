@@ -4,12 +4,14 @@ import { workspaceRoot } from "./aaspai";
 
 export type FrontendWorkspaceOptions = {
   ceoProvider?: string;
+  ceoModel?: string;
   ceoAgenda?: string;
   ceoInstructions?: string;
 };
 
 export type FrontendOnboarding = {
   ceoProvider: string;
+  ceoModel?: string;
   ceoAgenda: string;
   ceoInstructions: string;
   completedAt: string;
@@ -51,11 +53,12 @@ export async function ensureFrontendWorkspace(
   const stored = await readStoredOnboarding();
   const onboarding: FrontendOnboarding = {
     ceoProvider: options.ceoProvider ?? stored?.ceoProvider ?? "dry_run_local",
+    ceoModel: options.ceoModel ?? stored?.ceoModel,
     ceoAgenda: options.ceoAgenda?.trim() || stored?.ceoAgenda || defaultAgenda,
     ceoInstructions:
       options.ceoInstructions?.trim() || stored?.ceoInstructions || defaultInstructions,
     completedAt:
-      options.ceoProvider || options.ceoAgenda || options.ceoInstructions
+      options.ceoProvider || options.ceoModel || options.ceoAgenda || options.ceoInstructions
         ? new Date().toISOString()
         : (stored?.completedAt ?? ""),
   };
@@ -90,7 +93,7 @@ export async function ensureFrontendWorkspace(
         : `# ${title}\n\nWork toward measurable company goals. Report evidence, blockers, and the next action.\n`;
     await writeFile(
       join(directory, "AGENT.md"),
-      `---\nid: agent/${id}\ntype: Agent\ntitle: "${title}"\ndescription: "${title} for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${adapter}\nrole: ${role}\nreportsTo: ${reportsTo}\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\n---\n\n${body}`,
+      `---\nid: agent/${id}\ntype: Agent\ntitle: "${title}"\ndescription: "${title} for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${adapter}\n${id === "ceo" && onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ${role}\nreportsTo: ${reportsTo}\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\n---\n\n${body}`,
       "utf8",
     );
     await writeFile(
