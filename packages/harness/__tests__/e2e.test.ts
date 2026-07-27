@@ -1048,7 +1048,7 @@ describe("e2e: opencode_cli driver", () => {
         adapterConfig: { disableProjectConfig: true },
       });
       await opencodeCli.execute(ctx);
-      const { readFileSync } = await import("node:fs");
+      const { existsSync, readFileSync } = await import("node:fs");
       expect(existsSync(envProbe)).toBe(true);
       const probe = JSON.parse(readFileSync(envProbe, "utf8")) as Record<string, string>;
       expect(probe.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("1");
@@ -1070,7 +1070,7 @@ describe("e2e: opencode_cli driver", () => {
         adapterConfig: { xdgConfigHome: xdg, dangerouslySkipPermissions: true },
       });
       await opencodeCli.execute(ctx);
-      const { readFileSync } = await import("node:fs");
+      const { existsSync, readFileSync } = await import("node:fs");
       const cfgPath = join(xdg, "opencode", "config.json");
       expect(existsSync(cfgPath)).toBe(true);
       const cfg = JSON.parse(readFileSync(cfgPath, "utf8")) as Record<string, unknown>;
