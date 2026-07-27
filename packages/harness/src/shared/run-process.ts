@@ -28,6 +28,14 @@ function resolveWindowsCommand(
   env: NodeJS.ProcessEnv,
 ): { command: string; args: readonly string[] } {
   if (process.platform !== "win32") return { command, args };
+  // Escape hatch: skip the .cmd → .exe resolution entirely. Useful
+  // when the .cmd is an nvm/PATH shim whose target path can't be
+  // resolved statically (e.g. `C:\Program Files\nodejs\opencode.cmd`
+  // references `%dp0%\node_modules\opencode-ai\bin\opencode.exe`
+  // relative to the shim dir, not the nvm dir where the .exe lives).
+  // Still does the PATH lookup to find the .cmd, but never extracts
+  // a static .exe path from inside it.
+  const skipCmdResolution = env.AASPAI_RUN_SKIP_CMD_RESOLUTION === "1";
   let executable = command;
   if (!extname(command) && !command.includes("\\") && !command.includes("/")) {
     const pathValue = env.Path ?? env.PATH ?? "";
@@ -43,6 +51,7 @@ function resolveWindowsCommand(
     }
   }
   if (extname(executable).toLowerCase() !== ".cmd") return { command: executable, args };
+  if (skipCmdResolution) return { command: executable, args };
 
   const matches = Array.from(
     readFileSync(executable, "utf8").matchAll(/%dp0%[\\/]([^"\r\n]+?\.(?:js|exe))["']?\s+%\*/gi),
@@ -71,14 +80,22 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
   const env = { ...process.env, ...(envOverrides ?? {}) };
   const resolved = resolveWindowsCommand(command, args, env);
 
+  // On Windows, `spawn` can't directly execute a `.cmd` (or `.bat`)
+  // file without `shell: true`. Without it, Node.js throws EINVAL.
+  // The shell approach is only taken for cmd/bat; direct .exe
+  // execution is unchanged.
+  const isCmd = process.platform === "win32" && /\.(cmd|bat)$/i.test(resolved.command);
+
   return await new Promise<RunProcessResult>((resolve) => {
-    const child = spawn(resolved.command, resolved.args, {
+    const spawnOptions: import("node:child_process").SpawnOptions = {
       cwd: workingDir,
       env,
       stdio: [stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
       windowsHide: true,
-    });
+      ...(isCmd ? { shell: true } : {}),
+    };
+    const child = spawn(resolved.command, resolved.args, spawnOptions);
 
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
