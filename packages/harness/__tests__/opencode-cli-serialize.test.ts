@@ -146,6 +146,7 @@ describe("opencode_cli per-process serialization", () => {
     const ctx = {
       context: { prompt: "do something" },
       config: { model: "opencode-go/mimo-v2.5" },
+      runtime: { sessionId: undefined, sessionParams: undefined },
       onLog: async () => {},
     };
 
@@ -202,6 +203,7 @@ describe("opencode_cli cross-process lock", () => {
     const ctx = {
       context: { prompt: "hi" },
       config: { model: "opencode-go/mimo-v2.5" },
+      runtime: { sessionId: undefined, sessionParams: undefined },
       onLog: async () => {},
     };
     await opencodeCli.execute(ctx as never);
