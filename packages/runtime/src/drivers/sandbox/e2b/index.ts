@@ -1,36 +1,34 @@
+import type { ProviderCapabilities } from "@aaspai/contracts/capabilities";
 import type { RuntimeTarget } from "../../../shared/execution-target.js";
+import { E2bSandboxDriver } from "../../../shared/providers/e2b-driver.js";
+import { createSdkSandboxTarget } from "../../../shared/sdk-sandbox-target.js";
 
 /**
- * e2b sandbox driver. SKELETON for the foundation slice.
+ * E2B Cloud Sandbox. Real impl uses the official `e2b` SDK:
+ *   - `Sandbox.create(template, { apiKey, timeoutMs })` for `acquire`
+ *   - `sandbox.commands.run(...)` for `client.run`
+ *   - `sandbox.pause()` for `release({ reuseLease: true })`
+ *   - `sandbox.kill()` for `release()` / `destroy()`
  *
- * Real impl (once you have an `E2B_API_KEY`):
- *   1. `import { Sandbox } from "e2b"`
- *   2. `const sandbox = await Sandbox.create(template, { apiKey, timeoutMs })`
- *   3. Build a `SandboxClient` over the e2b SDK:
- *        - `makeDir`  → `sandbox.commands.run("mkdir -p ...")`
- *        - `writeFile` → `sandbox.files.write(path, content)`
- *        - `readFile` → `sandbox.files.read(path)`
- *        - `listFiles` → `await sandbox.files.list(path)`
- *        - `remove`   → `sandbox.commands.run("rm -rf ...")`
- *        - `run`      → `sandbox.commands.run(command, { cwd, timeoutMs, envs })`
- *   4. `sandbox.pause()` for `reuseLease`, `sandbox.kill()` otherwise.
- *
- * The skeleton below keeps the dispatch surface and the lease contract
- * stable so swapping the body in is a one-file change.
+ * Set `E2B_API_KEY` (or pass `apiKey` in the execution target metadata)
+ * to enable. The provider throws a clear "API key required" error if
+ * neither is set — the test runner treats that as `skipped: needs E2B_API_KEY`.
  */
-
-const STUB_MESSAGE =
-  "e2b sandbox driver is a skeleton. Set AASPAI_E2B_API_KEY and fill in the SDK calls when you need it.";
-
-export const e2bTarget: RuntimeTarget = {
-  info: { kind: "sandbox", provider: "e2b", label: "e2b", status: "stub" },
-  async run() {
-    throw new Error(STUB_MESSAGE);
-  },
-  async prepareWorkspace() {
-    throw new Error(`${STUB_MESSAGE} (prepareWorkspace)`);
-  },
-  async restoreWorkspace() {
-    throw new Error(`${STUB_MESSAGE} (restoreWorkspace)`);
-  },
+const E2B_CAPABILITIES: ProviderCapabilities = {
+  execute: true,
+  streaming: true,
+  cancellation: true,
+  timeout: true,
+  workspaceIsolation: true,
+  restore: false,
+  resume: true,
+  artifacts: true,
+  billing: "metered_api",
 };
+
+export const e2bTarget: RuntimeTarget = createSdkSandboxTarget({
+  driver: new E2bSandboxDriver({ template: "base", timeoutMs: 3_600_000 }),
+  providerKey: "e2b",
+  label: "e2b (Firecracker microVM)",
+  capabilities: E2B_CAPABILITIES,
+});

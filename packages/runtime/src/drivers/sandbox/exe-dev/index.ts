@@ -1,26 +1,36 @@
+import type { ProviderCapabilities } from "@aaspai/contracts/capabilities";
 import type { RuntimeTarget } from "../../../shared/execution-target.js";
+import { ExeDevSandboxDriver } from "../../../shared/providers/exe-dev-driver.js";
+import { createSdkSandboxTarget } from "../../../shared/sdk-sandbox-target.js";
 
 /**
- * exe.dev sandbox driver. STUB for the foundation slice.
+ * exe.dev SSH Visitor. Real impl uses the exe.dev REST API:
+ *   - `POST https://exe.dev/exec` with `{ name, image, command }` for `acquire`
+ *   - All commands run via `ssh exedev@<host>` over the operator's
+ *     registered SSH key
+ *   - `DELETE /exec/<name>` for `release()` / `destroy()`
  *
- * Real impl: HTTPS API at `https://exe.dev/exec` for VM lifecycle
- * (`new`/`ls`/`rm` with a 29s API timeout) + SSH from host to `*.exe.xyz`
- * for command exec. exe.dev has no real pause — `reuseLease` just
- * keeps the VM alive.
+ * Set `EXE_API_KEY` to enable. The SSH client uses the host's
+ * registered key (operator runs `ssh exe.dev` once to register).
  */
-
-const STUB_MESSAGE =
-  "exe-dev sandbox driver is a stub. Configure SSH access to *.exe.xyz and fill in the SDK calls when you need it.";
-
-export const exeDevTarget: RuntimeTarget = {
-  info: { kind: "sandbox", provider: "exe_dev", label: "exe.dev", status: "stub" },
-  async run() {
-    throw new Error(STUB_MESSAGE);
-  },
-  async prepareWorkspace() {
-    throw new Error(`${STUB_MESSAGE} (prepareWorkspace)`);
-  },
-  async restoreWorkspace() {
-    throw new Error(`${STUB_MESSAGE} (restoreWorkspace)`);
-  },
+const EXE_DEV_CAPABILITIES: ProviderCapabilities = {
+  execute: true,
+  streaming: true,
+  cancellation: true,
+  timeout: true,
+  workspaceIsolation: true,
+  restore: true,
+  resume: true,
+  artifacts: true,
+  billing: "api",
 };
+
+export const exeDevTarget: RuntimeTarget = createSdkSandboxTarget({
+  driver: new ExeDevSandboxDriver({
+    image: "ubuntu-24.04",
+    command: "/bin/bash",
+  }),
+  providerKey: "exe_dev",
+  label: "exe.dev SSH visitor",
+  capabilities: EXE_DEV_CAPABILITIES,
+});

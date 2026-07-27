@@ -33,12 +33,18 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",
+    "test:real": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real.ts",
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
     "@aaspai/harness": "workspace:*",
     "@aaspai/observability": "workspace:*",
+    "@daytonaio/sdk": "^0.171.0",
+    "@kubernetes/client-node": "^1.0.0",
+    "e2b": "^2.19.0",
+    "modal": "^0.7.4",
+    "novita-sandbox": "^1.0.3-b2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
