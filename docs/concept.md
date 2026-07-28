@@ -26,11 +26,12 @@ those files, runs the agents, and writes back what happened to a database.
               ┌────────────────────────────────────────┐
               │            YOUR REPOSITORY             │
               │                                        │
-              │   agents/      ─ versioned in git     │
-              │   knowledge/   ─ versioned in git     │
-              │   loops/       ─ versioned in git     │
+              │   .aaspai/                            │
+              │     agents/    ─ versioned in git     │
+              │     knowledge/ ─ versioned in git     │
+              │     loops/     ─ versioned in git     │
               │   skills/      ─ versioned in git     │
-              │   aaspai.config.ts                    │
+              │     aaspai.config.ts                  │
               └────────────────────────────────────────┘
                               │
                               ▼

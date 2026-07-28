@@ -36,6 +36,9 @@ import {
   LocalExecutionWorkspaceManager,
 } from "@aaspai/execution";
 import {
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_KNOWLEDGE_DIR,
+  DEFAULT_LOOPS_DIR,
   FileAgentConfigSource,
   FileKnowledgeSource,
   FileLoopConfigSource,
@@ -110,11 +113,13 @@ export class WorkerDaemon {
     this.wakeupPollIntervalMs = opts.wakeupPollIntervalMs ?? DEFAULT_WAKEUP_POLL_INTERVAL_MS;
     this.organizationId = opts.organizationId ?? "default";
 
-    this.agentSource = new FileAgentConfigSource(process.env.AASPAI_AGENTS_DIR ?? "./agents");
-    this.knowledgeSource = new FileKnowledgeSource(
-      process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
+    this.agentSource = new FileAgentConfigSource(
+      process.env.AASPAI_AGENTS_DIR ?? DEFAULT_AGENTS_DIR,
     );
-    this.loopSource = new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? "./loops");
+    this.knowledgeSource = new FileKnowledgeSource(
+      process.env.AASPAI_KNOWLEDGE_DIR ?? DEFAULT_KNOWLEDGE_DIR,
+    );
+    this.loopSource = new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? DEFAULT_LOOPS_DIR);
     const sessionFacade = new Sessions({
       agentSource: this.agentSource,
       knowledgeSource: this.knowledgeSource,

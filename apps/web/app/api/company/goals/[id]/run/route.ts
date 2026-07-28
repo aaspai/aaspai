@@ -1,7 +1,12 @@
 import { join } from "node:path";
 import { getDefaultDb } from "@aaspai/db";
 import { ExecutionStore, OperatorService } from "@aaspai/execution";
-import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
+import {
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_KNOWLEDGE_DIR,
+  FileAgentConfigSource,
+  FileKnowledgeSource,
+} from "@aaspai/file-loader";
 import { Sessions } from "@aaspai/sessions";
 import { loadSkillDirectory } from "@aaspai/skills";
 import { NextResponse } from "next/server";
@@ -29,8 +34,8 @@ export async function POST(_request: Request, routeContext: { params: Promise<{ 
   if (!item.workflowRunId)
     return NextResponse.json({ error: "Work item has no workflow run" }, { status: 409 });
   const root = workspaceRoot();
-  const agentSource = new FileAgentConfigSource(join(root, "agents"));
-  const knowledgeSource = new FileKnowledgeSource(join(root, "knowledge"));
+  const agentSource = new FileAgentConfigSource(join(root, DEFAULT_AGENTS_DIR));
+  const knowledgeSource = new FileKnowledgeSource(join(root, DEFAULT_KNOWLEDGE_DIR));
   const sessions = new Sessions({
     agentSource,
     knowledgeSource,

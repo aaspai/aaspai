@@ -12,9 +12,9 @@
  *   aaspai-worker logs [--tail N]
  *
  * Env:
- *   AASPAI_AGENTS_DIR    (default: ./agents)
- *   AASPAI_KNOWLEDGE_DIR (default: ./knowledge)
- *   AASPAI_LOOPS_DIR     (default: ./loops)
+ *   AASPAI_AGENTS_DIR    (default: ./.aaspai/agents)
+ *   AASPAI_KNOWLEDGE_DIR (default: ./.aaspai/knowledge)
+ *   AASPAI_LOOPS_DIR     (default: ./.aaspai/loops)
  *   AASPAI_TICK_INTERVAL_MS (default: 60000)
  *   AASPAI_WAKEUP_POLL_INTERVAL_MS (default: 5000)
  */

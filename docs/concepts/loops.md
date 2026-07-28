@@ -24,10 +24,10 @@ Loops make that pattern first-class. A loop is:
 
 ## Anatomy of a loop
 
-Every loop is a directory under `loops/<id>/`:
+Every loop is a directory under `.aaspai/loops/<id>/`:
 
 ```
-loops/
+.aaspai/loops/
 └── daily-triage/
     ├── LOOP.md        # the loop's definition (frontmatter + markdown)
     ├── schedule.yaml  # the cron / event schedule

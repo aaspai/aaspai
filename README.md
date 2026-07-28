@@ -20,7 +20,7 @@ aaspai orchestrates many AI-agent sessions — running on top of
 **any agentic CLI** (Claude Code, Codex, OpenCode, …) — from a single
 control plane with:
 
-- **A file-based project** (`agents/`, `knowledge/`, `loops/`) — versioned in git
+- **A file-based project** under `.aaspai/` — versioned definitions, ignored runtime state
 - **A small HTTP API** + a **long-lived worker daemon** that executes sessions
 - **A SQLite-or-Postgres database** for state (sessions, wakeups, audit, budget)
 - **A loop engine** that runs scheduled patterns (daily-triage, pr-babysitter, etc.)
@@ -80,7 +80,7 @@ curl -X POST http://127.0.0.1:7420/v1/sessions \
 node ../apps/cli/src/cli.ts state md > STATE.md
 ```
 
-To switch from `dry_run_local` to a real LLM, edit `agents/operator/AGENT.md`
+To switch from `dry_run_local` to a real LLM, edit `.aaspai/agents/operator/AGENT.md`
 and set `adapter: opencode_cli` (or `claude_local`, etc.) and
 `model: opencode-go/mimo-v2.5` (or whichever model). No code changes.
 
@@ -88,25 +88,21 @@ and set `adapter: opencode_cli` (or `claude_local`, etc.) and
 
 ```
 your-aaspai-project/
-├── .aaspai/                        ← runtime state (gitignored)
-│   ├── state.db                    SQLite database
-│   ├── worker.log / api.log        daemon logs
-│   └── worker.pid / api.pid        daemon PIDs
-├── aaspai.config.ts                 ← project config (versioned)
-├── agents/                          ← your company (versioned)
-│   ├── _index.md
-│   ├── operator/AGENT.md, config.yaml, tools.yaml, ...
-│   ├── developer/...
-│   └── tester/...
-├── knowledge/                       ← OKF knowledge (versioned)
-│   ├── _index.md
-│   ├── company/mission.md
-│   └── ...
-├── loops/                           ← loop configs (versioned)
-│   ├── daily-triage/LOOP.md, gate.yaml, budget.yaml
-│   └── ...
-├── tools/                           ← tool configs (versioned)
-└── aaspai.config.ts                 ← project config (versioned)
+└── .aaspai/
+    ├── aaspai.config.ts             ← project config (versioned)
+    ├── agents/                      ← your company (versioned)
+    │   ├── _index.md
+    │   ├── operator/AGENT.md, config.yaml, tools.yaml, ...
+    │   ├── developer/...
+    │   └── tester/...
+    ├── knowledge/                   ← OKF knowledge (versioned)
+    │   ├── _index.md
+    │   └── company/mission.md
+    ├── loops/                       ← loop configs (versioned)
+    │   └── daily-triage/LOOP.md, gate.yaml, budget.yaml
+    ├── state.db                     ← SQLite state (gitignored)
+    ├── worker.log / api.log         ← daemon logs (gitignored)
+    └── worker.pid / api.pid         ← daemon PIDs (gitignored)
 ```
 
 ## Packages

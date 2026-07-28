@@ -114,9 +114,9 @@ describe("autonomy change request API", () => {
     const listBody = (await listed.json()) as { data: Array<{ status: string }> };
     expect(listBody.data).toHaveLength(1);
     expect(listBody.data[0]?.status).toBe("published");
-    await expect(readFile(join(repositoryPath, "agents/ceo/AGENT.md"), "utf8")).resolves.toContain(
-      "autonomyLevel: L1",
-    );
+    await expect(
+      readFile(join(repositoryPath, ".aaspai/agents/ceo/AGENT.md"), "utf8"),
+    ).resolves.toContain("autonomyLevel: L1");
   }, 20_000);
 });
 
@@ -127,9 +127,9 @@ async function createRepository(): Promise<string> {
   await git(repositoryPath, ["config", "user.email", "test@aaspai.local"]);
   await git(repositoryPath, ["config", "user.name", "Aaspai Test"]);
   await git(repositoryPath, ["branch", "-M", "main"]);
-  await mkdir(join(repositoryPath, "agents", "ceo"), { recursive: true });
+  await mkdir(join(repositoryPath, ".aaspai", "agents", "ceo"), { recursive: true });
   await writeFile(
-    join(repositoryPath, "agents", "ceo", "AGENT.md"),
+    join(repositoryPath, ".aaspai", "agents", "ceo", "AGENT.md"),
     "---\nid: agent/ceo\ntype: Agent\nautonomyLevel: L1\n---\n",
   );
   await git(repositoryPath, ["add", "."]);

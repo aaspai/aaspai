@@ -13,7 +13,7 @@ const log = getLogger("file-loader.agent-source");
 /**
  * File-based `AgentConfigSource`.
  *
- * Reads `agents/<slug>/AGENT.md` (OKF frontmatter + body) plus the
+ * Reads `.aaspai/agents/<slug>/AGENT.md` (OKF frontmatter + body) plus the
  * optional sidecar files (`config.yaml`, `tools.yaml`,
  * `skills.lock.json`, `relations.yaml`) and exposes them through the
  * `AgentConfigSource` port.

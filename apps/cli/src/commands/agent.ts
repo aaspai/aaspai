@@ -1,4 +1,8 @@
-import { type CompositeAgentConfigSource, FileAgentConfigSource } from "@aaspai/file-loader";
+import {
+  type CompositeAgentConfigSource,
+  DEFAULT_AGENTS_DIR,
+  FileAgentConfigSource,
+} from "@aaspai/file-loader";
 import { Command } from "commander";
 import pc from "picocolors";
 
@@ -6,7 +10,7 @@ export function agentCommand(): Command {
   const cmd = new Command("agent").description("Agent operations");
 
   function source(): FileAgentConfigSource | CompositeAgentConfigSource {
-    const agentsDir = process.env.AASPAI_AGENTS_DIR ?? "./agents";
+    const agentsDir = process.env.AASPAI_AGENTS_DIR ?? DEFAULT_AGENTS_DIR;
     return new FileAgentConfigSource(agentsDir);
   }
 
@@ -113,7 +117,7 @@ export function agentCommand(): Command {
         const fs = await import("node:fs/promises");
         const path = await import("node:path");
         const slug = id.replace(/^agent\//, "");
-        const dir = path.join(process.env.AASPAI_AGENTS_DIR ?? "./agents", slug);
+        const dir = path.join(process.env.AASPAI_AGENTS_DIR ?? DEFAULT_AGENTS_DIR, slug);
         await fs.mkdir(dir, { recursive: true });
         const title = opts.title ?? slug.replace(/-/g, " ");
         const manages = (opts.manages ?? "")

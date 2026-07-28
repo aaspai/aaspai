@@ -3,7 +3,7 @@
  *
  * The web app reads the user's aaspai project from the current
  * working directory (or `AASPAI_CWD` env var). The same source
- * files (`agents/`, `knowledge/`, `loops/`) and the same
+ * files (`.aaspai/agents/`, `.aaspai/knowledge/`, `.aaspai/loops/`) and the same
  * `.aaspai/state.db` are read by the CLI and worker.
  *
  * In v0, the web app runs in the same workspace as the CLI. The
@@ -56,7 +56,12 @@ import {
   workflowRuns,
 } from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
-import { FileAgentConfigSource } from "@aaspai/file-loader";
+import {
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_CONFIG_PATH,
+  DEFAULT_JSON_CONFIG_PATH,
+  FileAgentConfigSource,
+} from "@aaspai/file-loader";
 import type { KnowledgeSnapshot } from "@aaspai/knowledge";
 import { createKnowledgeCurator } from "@aaspai/knowledge";
 import { asc, desc, eq } from "drizzle-orm";
@@ -108,8 +113,8 @@ export function workspaceRoot(): string {
 export function isAaspaiWorkspace(): boolean {
   const root = workspaceRoot();
   return (
-    existsSync(join(root, "aaspai.config.ts")) ||
-    existsSync(join(root, "aaspai.config.json")) ||
+    existsSync(join(root, DEFAULT_CONFIG_PATH)) ||
+    existsSync(join(root, DEFAULT_JSON_CONFIG_PATH)) ||
     existsSync(join(root, ".aaspai", "state.db"))
   );
 }
@@ -200,7 +205,7 @@ function agentSource(): FileAgentConfigSource {
   const root = workspaceRoot();
   if (agentSourceCache && agentSourceCacheKey === root) return agentSourceCache;
   agentSourceCache?.stop();
-  const src = new FileAgentConfigSource(join(root, "agents"));
+  const src = new FileAgentConfigSource(join(root, DEFAULT_AGENTS_DIR));
   agentSourceCache = src;
   agentSourceCacheKey = root;
   return src;

@@ -14,7 +14,7 @@ import { parseOkfFile, sha256HexSync } from "./okf-parser.js";
 const log = getLogger("file-loader.loop-source");
 
 /**
- * File-based `LoopConfigSource`. Reads `loops/<slug>/LOOP.md` (OKF
+ * File-based `LoopConfigSource`. Reads `.aaspai/loops/<slug>/LOOP.md` (OKF
  * frontmatter) plus the optional sidecar files (`gate.yaml`,
  * `budget.yaml`, `schedule.yaml`).
  */

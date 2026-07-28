@@ -1,4 +1,7 @@
 import {
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_KNOWLEDGE_DIR,
+  DEFAULT_LOOPS_DIR,
   FileAgentConfigSource,
   FileKnowledgeSource,
   FileLoopConfigSource,
@@ -14,9 +17,11 @@ export function startCommand(): Command {
     console.log(pc.cyan("Starting aaspai daemon..."));
 
     // Wire up the file-based sources
-    const agents = new FileAgentConfigSource(process.env.AASPAI_AGENTS_DIR ?? "./agents");
-    const knowledge = new FileKnowledgeSource(process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge");
-    const loops = new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? "./loops");
+    const agents = new FileAgentConfigSource(process.env.AASPAI_AGENTS_DIR ?? DEFAULT_AGENTS_DIR);
+    const knowledge = new FileKnowledgeSource(
+      process.env.AASPAI_KNOWLEDGE_DIR ?? DEFAULT_KNOWLEDGE_DIR,
+    );
+    const loops = new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? DEFAULT_LOOPS_DIR);
 
     await agents.start();
     await knowledge.start();

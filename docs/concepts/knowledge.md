@@ -23,10 +23,10 @@ Every knowledge file is:
 
 ## Anatomy of a knowledge file
 
-A typical project has a `knowledge/` directory:
+A typical project has a `.aaspai/knowledge/` directory:
 
 ```
-knowledge/
+.aaspai/knowledge/
 ├── _index.md
 ├── company/
 │   ├── mission.md
@@ -67,7 +67,7 @@ The frontmatter carries the typed metadata; the body is the content.
 When a session starts:
 
 1. The agent's `knowledge.include` and `knowledge.exclude` globs are
-   expanded against the `knowledge/` tree.
+   expanded against the `.aaspai/knowledge/` tree.
 2. The matched files are loaded and indexed.
 3. The index is appended to the system prompt under a stable header
    (e.g. `## Project knowledge`).

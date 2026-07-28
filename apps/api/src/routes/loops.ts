@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AuthVerifier } from "@aaspai/auth";
 import { getDefaultDb, wakeups as wakeupsTable } from "@aaspai/db";
-import { FileLoopConfigSource } from "@aaspai/file-loader";
+import { DEFAULT_LOOPS_DIR, FileLoopConfigSource } from "@aaspai/file-loader";
 import { getLogger } from "@aaspai/observability";
 import type { Hono } from "hono";
 import { authenticate } from "./auth.js";
@@ -12,7 +12,7 @@ let loopSource: FileLoopConfigSource | null = null;
 
 function source(): FileLoopConfigSource {
   if (!loopSource) {
-    loopSource = new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? "./loops");
+    loopSource = new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? DEFAULT_LOOPS_DIR);
   }
   return loopSource;
 }

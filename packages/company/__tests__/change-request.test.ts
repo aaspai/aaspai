@@ -37,7 +37,7 @@ describe("Git-backed autonomy change requests", () => {
     const repositoryId = `repo_definitions_${randomUUID()}`;
     const repositoryPath = await createRepository(
       "definitions",
-      "agents/ceo/AGENT.md",
+      ".aaspai/agents/ceo/AGENT.md",
       "---\nid: agent/ceo\ntype: Agent\nautonomyLevel: L1\n---\n\n# CEO\n",
     );
     const remotePath = join(testDirectory, "definitions-remote.git");
@@ -88,18 +88,18 @@ describe("Git-backed autonomy change requests", () => {
     });
 
     expect(request.status).toBe("published");
-    expect(request.targetPath).toBe("agents/ceo/AGENT.md");
+    expect(request.targetPath).toBe(".aaspai/agents/ceo/AGENT.md");
     expect(request.pullRequestNumber).toBe(42);
     expect(provider.created[0]).toMatchObject({
       repository: "https://github.com/aaspai/definitions.git",
       base: "main",
       head: request.branchName,
     });
-    await expect(readFile(join(repositoryPath, "agents/ceo/AGENT.md"), "utf8")).resolves.toContain(
-      "autonomyLevel: L1",
-    );
     await expect(
-      gitOutput(repositoryPath, ["show", `${request.branchName}:agents/ceo/AGENT.md`]),
+      readFile(join(repositoryPath, ".aaspai/agents/ceo/AGENT.md"), "utf8"),
+    ).resolves.toContain("autonomyLevel: L1");
+    await expect(
+      gitOutput(repositoryPath, ["show", `${request.branchName}:.aaspai/agents/ceo/AGENT.md`]),
     ).resolves.toContain("autonomyLevel: L2");
     await expect(
       readFile(
@@ -123,7 +123,7 @@ describe("Git-backed autonomy change requests", () => {
     const repositoryId = `repo_drifted_${randomUUID()}`;
     const repositoryPath = await createRepository(
       "definitions",
-      "loops/research/LOOP.md",
+      ".aaspai/loops/research/LOOP.md",
       "---\nid: loop/research\ntype: LoopPattern\nautonomyLevel: L3\n---\n",
     );
     await handle.db.insert(repositories).values({

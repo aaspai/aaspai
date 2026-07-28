@@ -1,4 +1,4 @@
-import { FileKnowledgeSource } from "@aaspai/file-loader";
+import { DEFAULT_KNOWLEDGE_DIR, FileKnowledgeSource } from "@aaspai/file-loader";
 import { Command } from "commander";
 import pc from "picocolors";
 
@@ -6,7 +6,7 @@ export function knowledgeCommand(): Command {
   const cmd = new Command("knowledge").description("Knowledge (OKF) operations");
 
   function source(): FileKnowledgeSource {
-    return new FileKnowledgeSource(process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge");
+    return new FileKnowledgeSource(process.env.AASPAI_KNOWLEDGE_DIR ?? DEFAULT_KNOWLEDGE_DIR);
   }
 
   cmd
@@ -68,7 +68,7 @@ export function knowledgeCommand(): Command {
       const fs = await import("node:fs/promises");
       const nodePath = await import("node:path");
       const fullPath = nodePath.join(
-        process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
+        process.env.AASPAI_KNOWLEDGE_DIR ?? DEFAULT_KNOWLEDGE_DIR,
         `${path}.md`,
       );
       const template = `---

@@ -17,7 +17,12 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 import { createInterface } from "node:readline/promises";
-import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
+import {
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_KNOWLEDGE_DIR,
+  FileAgentConfigSource,
+  FileKnowledgeSource,
+} from "@aaspai/file-loader";
 import { Sessions } from "@aaspai/sessions";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -42,8 +47,8 @@ export function chatCommand(): Command {
       const agentId = rawAgentId.startsWith("agent/") ? rawAgentId : `agent/${rawAgentId}`;
 
       // Load the agent
-      const agentsDir = process.env.AASPAI_AGENTS_DIR ?? join(cwd, "agents");
-      const knowledgeDir = process.env.AASPAI_KNOWLEDGE_DIR ?? join(cwd, "knowledge");
+      const agentsDir = process.env.AASPAI_AGENTS_DIR ?? join(cwd, DEFAULT_AGENTS_DIR);
+      const knowledgeDir = process.env.AASPAI_KNOWLEDGE_DIR ?? join(cwd, DEFAULT_KNOWLEDGE_DIR);
       if (!existsSync(agentsDir)) {
         console.error(pc.red(`✗ No agents directory at ${agentsDir}`));
         console.error(`  Run ${pc.cyan("aaspai init")} first.`);

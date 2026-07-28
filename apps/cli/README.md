@@ -20,7 +20,7 @@ After install, the `aaspai` binary is on your PATH.
 
 ```bash
 mkdir my-project && cd my-project
-aaspai init                 # scaffold agents/, knowledge/, loops/
+aaspai init                 # scaffold definitions under .aaspai/
 aaspai agent list           # see the 4 seeded agents, including the CEO
 aaspai session start \
   --agent agent/operator \
@@ -43,13 +43,13 @@ issue. Branch names must be descriptive and must not contain `codex`.
 The `dry_run_local` adapter synthesizes a response — no API key
 required, no network call. Switch to a real LLM by setting
 `adapter: opencode_cli` (or `claude_local`, `codex_local`, …) in
-`agents/operator/AGENT.md`.
+`.aaspai/agents/operator/AGENT.md`.
 
 ## What you get
 
-- **File-based config** — agents in `agents/<name>/AGENT.md`, knowledge
-  in `knowledge/<concept>/<file>.md` (OKF v0.1), loops in
-  `loops/<name>/LOOP.md`. Version your project config in git; the
+- **File-based config** — agents in `.aaspai/agents/<name>/AGENT.md`, knowledge
+  in `.aaspai/knowledge/<concept>/<file>.md` (OKF v0.1), loops in
+  `.aaspai/loops/<name>/LOOP.md`. Version your project config in git; the
   runtime state (`.aaspai/state.db`) stays out.
 - **Two-storage tier** — your project (versioned) vs. `.aaspai/`
   (gitignored). The CLI enforces the boundary.
@@ -87,7 +87,7 @@ aaspai start         Start the scheduler daemon
 ┌─────────────────────────────────────────────────────┐
 │  Your project (versioned in git)                    │
 │  ┌─────────┐ ┌──────────┐ ┌─────────┐               │
-│  │ agents/ │ │knowledge/│ │ loops/  │  AGENTS.md    │
+│  │       versioned definitions under .aaspai/       │
 │  └────┬────┘ └─────┬────┘ └────┬────┘               │
 │       └────────────┴───────────┘                    │
 │            FileSource (port+adapter)                │
@@ -110,7 +110,7 @@ aaspai start         Start the scheduler daemon
 
 ## Configuration
 
-Each project has an `aaspai.config.ts` at the root:
+Each project has `.aaspai/aaspai.config.ts`:
 
 ```ts
 import { defineConfig } from "@aaspai/config";
@@ -124,13 +124,13 @@ export default defineConfig({
     adapter: "claude_local",
     runtime: { kind: "local" },
   },
-  agents:     { root: "./agents" },
-  knowledge:  { root: "./knowledge" },
-  loops:      { root: "./loops" },
+  agents:     { root: "./.aaspai/agents" },
+  knowledge:  { root: "./.aaspai/knowledge" },
+  loops:      { root: "./.aaspai/loops" },
 });
 ```
 
-The CLI also accepts a JSON variant (`aaspai.config.json`).
+The CLI also accepts a JSON variant (`.aaspai/aaspai.config.json`).
 
 ## Project status
 

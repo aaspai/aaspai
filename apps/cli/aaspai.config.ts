@@ -12,7 +12,7 @@ export default defineConfig({
     adapter: "claude_local",
     runtime: { kind: "local" },
   },
-  agents: { root: "./agents" },
-  knowledge: { root: "./knowledge" },
-  loops: { root: "./loops" },
+  agents: { root: "./.aaspai/agents" },
+  knowledge: { root: "./.aaspai/knowledge" },
+  loops: { root: "./.aaspai/loops" },
 });

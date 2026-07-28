@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { Command } from "commander";
 import { pc, SCAFFOLD_TEMPLATES, shortPath, writeText } from "./_shared.js";
@@ -10,42 +10,43 @@ export function initCommand(): Command {
     .action(async () => {
       const cwd = process.cwd();
       console.log(pc.cyan(`Scaffolding aaspai project in ${cwd}...`));
+      await migrateLegacyLayout(cwd);
 
       const files: Array<[string, string]> = [
-        ["aaspai.config.ts", SCAFFOLD_TEMPLATES.CONFIG_TS],
-        ["AGENTS.md", SCAFFOLD_TEMPLATES.AGENTS_MD],
-        ["agents/_index.md", SCAFFOLD_TEMPLATES.AGENT_INDEX],
-        ["agents/ceo/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_CEO],
-        ["agents/ceo/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
+        [".aaspai/aaspai.config.ts", SCAFFOLD_TEMPLATES.CONFIG_TS],
+        [".aaspai/AGENTS.md", SCAFFOLD_TEMPLATES.AGENTS_MD],
+        [".aaspai/agents/_index.md", SCAFFOLD_TEMPLATES.AGENT_INDEX],
+        [".aaspai/agents/ceo/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_CEO],
+        [".aaspai/agents/ceo/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
         [
-          "agents/ceo/tools.yaml",
+          ".aaspai/agents/ceo/tools.yaml",
           "allow:\n  - Read\n  - ListSkills\n  - ListAgents\n  - AskUserQuestion\n  - Bash\ndeny:\n  - Write\n  - Edit\nrequire_approval_for:\n  - Bash\n",
         ],
-        ["agents/ceo/skills.lock.json", "[]\n"],
-        ["agents/ceo/relations.yaml", "reportsTo: null\nmanages: []\npeers: []\n"],
-        ["agents/operator/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_OPERATOR],
-        ["agents/operator/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
-        ["agents/operator/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
-        ["agents/operator/skills.lock.json", "[]\n"],
-        ["agents/operator/relations.yaml", "reportsTo: null\n"],
-        ["agents/developer/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_DEVELOPER],
-        ["agents/developer/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
-        ["agents/developer/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
-        ["agents/developer/skills.lock.json", "[]\n"],
-        ["agents/developer/relations.yaml", "reportsTo: agent/operator\n"],
-        ["agents/tester/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_TESTER],
-        ["agents/tester/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
-        ["agents/tester/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
-        ["agents/tester/skills.lock.json", "[]\n"],
-        ["agents/tester/relations.yaml", "reportsTo: agent/operator\n"],
-        ["knowledge/_index.md", SCAFFOLD_TEMPLATES.KNOWLEDGE_INDEX],
-        ["knowledge/company/mission.md", SCAFFOLD_TEMPLATES.KNOWLEDGE_MISSION],
-        ["loops/_index.md", SCAFFOLD_TEMPLATES.LOOPS_INDEX],
-        ["loops/daily-triage/LOOP.md", SCAFFOLD_TEMPLATES.LOOP_DAILY_TRIAGE],
-        ["loops/daily-triage/gate.yaml", SCAFFOLD_TEMPLATES.LOOP_GATE],
-        ["loops/daily-triage/budget.yaml", SCAFFOLD_TEMPLATES.LOOP_BUDGET],
+        [".aaspai/agents/ceo/skills.lock.json", "[]\n"],
+        [".aaspai/agents/ceo/relations.yaml", "reportsTo: null\nmanages: []\npeers: []\n"],
+        [".aaspai/agents/operator/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_OPERATOR],
+        [".aaspai/agents/operator/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
+        [".aaspai/agents/operator/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
+        [".aaspai/agents/operator/skills.lock.json", "[]\n"],
+        [".aaspai/agents/operator/relations.yaml", "reportsTo: null\n"],
+        [".aaspai/agents/developer/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_DEVELOPER],
+        [".aaspai/agents/developer/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
+        [".aaspai/agents/developer/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
+        [".aaspai/agents/developer/skills.lock.json", "[]\n"],
+        [".aaspai/agents/developer/relations.yaml", "reportsTo: agent/operator\n"],
+        [".aaspai/agents/tester/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_TESTER],
+        [".aaspai/agents/tester/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
+        [".aaspai/agents/tester/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
+        [".aaspai/agents/tester/skills.lock.json", "[]\n"],
+        [".aaspai/agents/tester/relations.yaml", "reportsTo: agent/operator\n"],
+        [".aaspai/knowledge/_index.md", SCAFFOLD_TEMPLATES.KNOWLEDGE_INDEX],
+        [".aaspai/knowledge/company/mission.md", SCAFFOLD_TEMPLATES.KNOWLEDGE_MISSION],
+        [".aaspai/loops/_index.md", SCAFFOLD_TEMPLATES.LOOPS_INDEX],
+        [".aaspai/loops/daily-triage/LOOP.md", SCAFFOLD_TEMPLATES.LOOP_DAILY_TRIAGE],
+        [".aaspai/loops/daily-triage/gate.yaml", SCAFFOLD_TEMPLATES.LOOP_GATE],
+        [".aaspai/loops/daily-triage/budget.yaml", SCAFFOLD_TEMPLATES.LOOP_BUDGET],
         [
-          "loops/daily-triage/schedule.yaml",
+          ".aaspai/loops/daily-triage/schedule.yaml",
           'kind: cron\nexpression: "0 8 * * 1-5"\ntimezone: UTC\n',
         ],
       ];
@@ -67,7 +68,13 @@ export function initCommand(): Command {
       const gitignore = join(cwd, ".gitignore");
       if (existsSync(gitignore)) {
         const existing = await readFile(gitignore, "utf8");
-        if (!existing.includes(".aaspai/state.db")) {
+        if (/^\.aaspai\/\s*$/m.test(existing)) {
+          await writeText(
+            gitignore,
+            `${existing.replace(/^\.aaspai\/\s*$/m, "").trimEnd()}${SCAFFOLD_TEMPLATES.GITIGNORE_APPEND}`,
+          );
+          console.log(`  ${pc.green("+")} .gitignore (made definitions trackable)`);
+        } else if (!existing.includes(".aaspai/state.db")) {
           await appendFile(gitignore, SCAFFOLD_TEMPLATES.GITIGNORE_APPEND);
           console.log(`  ${pc.green("+")} .gitignore (appended runtime ignores)`);
         }
@@ -105,4 +112,42 @@ export function initCommand(): Command {
       );
       console.log("");
     });
+}
+
+async function migrateLegacyLayout(cwd: string): Promise<void> {
+  const moves = [
+    ["aaspai.config.ts", ".aaspai/aaspai.config.ts"],
+    ["aaspai.config.json", ".aaspai/aaspai.config.json"],
+    ["AGENTS.md", ".aaspai/AGENTS.md"],
+    ["agents", ".aaspai/agents"],
+    ["knowledge", ".aaspai/knowledge"],
+    ["loops", ".aaspai/loops"],
+  ] as const;
+
+  await mkdir(join(cwd, ".aaspai"), { recursive: true });
+  for (const [from, to] of moves) {
+    const source = join(cwd, from);
+    if (!existsSync(source)) continue;
+    const target = join(cwd, to);
+    if (existsSync(target)) {
+      console.log(`  ${pc.yellow("!")} kept ${from}; ${to} already exists`);
+      continue;
+    }
+    await rename(source, target);
+    console.log(`  ${pc.green("→")} ${from} -> ${to}`);
+  }
+
+  for (const config of [".aaspai/aaspai.config.ts", ".aaspai/aaspai.config.json"]) {
+    const path = join(cwd, config);
+    if (!existsSync(path)) continue;
+    const current = await readFile(path, "utf8");
+    const updated = current
+      .replaceAll('"./agents"', '"./.aaspai/agents"')
+      .replaceAll('"./knowledge"', '"./.aaspai/knowledge"')
+      .replaceAll('"./loops"', '"./.aaspai/loops"')
+      .replaceAll("'./agents'", "'./.aaspai/agents'")
+      .replaceAll("'./knowledge'", "'./.aaspai/knowledge'")
+      .replaceAll("'./loops'", "'./.aaspai/loops'");
+    if (updated !== current) await writeText(path, updated);
+  }
 }

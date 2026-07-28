@@ -1,7 +1,7 @@
 /**
  * Tool registry. Tracks which tools an agent has access to, and
  * enforces the allow/deny/require-approval policy from
- * `agents/<id>/tools.yaml`.
+ * `.aaspai/agents/<id>/tools.yaml`.
  */
 import type { Tool } from "@aaspai/contracts/phase2";
 import { getLogger } from "@aaspai/observability";

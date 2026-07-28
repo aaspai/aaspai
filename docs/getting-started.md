@@ -31,18 +31,17 @@ To install only the CLI from a release:
 Inside the monorepo, scaffold a new aaspai project under any directory:
 
 ```sh
-yarn workspace @aaspai/cli start init my-project
-cd my-project
+yarn workspace @aaspai/cli start init
 ```
 
 `init` creates:
 
-- `agents/` with the default `operator`, `developer`, and `tester`
+- `.aaspai/agents/` with the default `operator`, `developer`, and `tester`
   agents
-- `knowledge/` with a `company/mission.md` stub
-- `loops/` with a `daily-triage` loop
-- `aaspai.config.ts` with sensible defaults
-- `.aaspai/` for runtime data (gitignored)
+- `.aaspai/knowledge/` with a `company/mission.md` stub
+- `.aaspai/loops/` with a `daily-triage` loop
+- `.aaspai/aaspai.config.ts` with sensible defaults
+- `.aaspai/state.db` for ignored runtime state
 
 The default `operator` agent uses the `dry_run_local` harness, so the
 project runs without any API key.
@@ -94,7 +93,7 @@ yarn workspace @aaspai/cli start knowledge new engineering/architecture
 ```
 
 This writes a valid OKF file at
-`knowledge/engineering/architecture.md`. Edit it, commit it, and the
+`.aaspai/knowledge/engineering/architecture.md`. Edit it, commit it, and the
 next session will index it.
 
 ## Switch to a real harness

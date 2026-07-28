@@ -24,8 +24,17 @@ workspace/
 test/
 .gstack/
 
-# aaspai runtime (agent state, knowledge, scratch — never committed)
-.aaspai/
+# aaspai runtime artifacts; definitions and config remain versioned
+.aaspai/state.db
+.aaspai/state.db-journal
+.aaspai/state.db-wal
+.aaspai/state.db-shm
+.aaspai/views/
+.aaspai/events/
+.aaspai/tmp/
+.aaspai/*.pid
+.aaspai/*.log
+.aaspai/frontend-onboarding.json
 
 # Test dumps (per-target scenario results, input/result.json)
 .aaspai-e2e/

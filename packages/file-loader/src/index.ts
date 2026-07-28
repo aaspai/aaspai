@@ -21,3 +21,11 @@ export {
   type OpenPinnedDefinitionWorkspaceInput,
   type PinnedDefinitionWorkspace,
 } from "./pinned-workspace.js";
+export {
+  AASPAI_DIR,
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_CONFIG_PATH,
+  DEFAULT_JSON_CONFIG_PATH,
+  DEFAULT_KNOWLEDGE_DIR,
+  DEFAULT_LOOPS_DIR,
+} from "./workspace-paths.js";
