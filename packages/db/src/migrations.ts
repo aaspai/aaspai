@@ -703,7 +703,8 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
     sql: "ALTER TABLE workflow_runs ADD COLUMN source_type TEXT",
   },
   {
-    check: "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'process_definition_hash'",
+    check:
+      "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'process_definition_hash'",
     sql: "ALTER TABLE workflow_runs ADD COLUMN process_definition_hash TEXT",
   },
   {

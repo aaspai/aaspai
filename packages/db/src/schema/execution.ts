@@ -477,7 +477,10 @@ export const executionProcessDefinitions = sqliteTable(
       t.id,
       t.revision,
     ),
-    hashIdx: index("execution_process_definitions_org_hash_idx").on(t.organizationId, t.contentHash),
+    hashIdx: index("execution_process_definitions_org_hash_idx").on(
+      t.organizationId,
+      t.contentHash,
+    ),
   }),
 );
 
@@ -514,7 +517,9 @@ export const executionControlDecisions = sqliteTable(
   {
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
-    operatorRunId: text("operator_run_id").notNull().references(() => executionOperatorRuns.id),
+    operatorRunId: text("operator_run_id")
+      .notNull()
+      .references(() => executionOperatorRuns.id),
     sequence: integer("sequence").notNull(),
     observedStateVersion: integer("observed_state_version").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
@@ -554,7 +559,9 @@ export const executionEscalations = sqliteTable(
     createdAt: text("created_at").notNull(),
     resolvedAt: text("resolved_at"),
   },
-  (t) => ({ statusIdx: index("execution_escalations_org_status_idx").on(t.organizationId, t.status) }),
+  (t) => ({
+    statusIdx: index("execution_escalations_org_status_idx").on(t.organizationId, t.status),
+  }),
 );
 
 export const executionOperatorLeases = sqliteTable(
@@ -562,7 +569,9 @@ export const executionOperatorLeases = sqliteTable(
   {
     id: text("id").primaryKey(),
     organizationId: text("organization_id").notNull(),
-    operatorRunId: text("operator_run_id").notNull().references(() => executionOperatorRuns.id),
+    operatorRunId: text("operator_run_id")
+      .notNull()
+      .references(() => executionOperatorRuns.id),
     owner: text("owner").notNull(),
     acquiredAt: text("acquired_at").notNull(),
     heartbeatAt: text("heartbeat_at").notNull(),
