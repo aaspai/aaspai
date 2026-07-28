@@ -1,124 +1,132 @@
 # Getting started
 
-Install aaspai, initialize a project, and run your first agent. The
-default configuration runs entirely locally, without any API key.
+This guide runs aaspai from the monorepo with SQLite and the deterministic
+`dry_run_local` adapter.
 
 ## Requirements
 
-- **Node.js** 20 or later
-- **Corepack** (ships with Node; enables Yarn 4)
+- Node.js `>=20.18.0 <21`
+- Corepack and Yarn 4.5
+- Git
 
 ## Install
 
-aaspai is a Yarn 4 monorepo. To install all workspaces:
-
 ```sh
-corepack enable
 git clone https://github.com/aaspai/aaspai.git
 cd aaspai
+corepack enable
 yarn install
+yarn build
 ```
 
-To install only the CLI from a release:
+The standalone CLI is not published yet. In this repository, replace
+`aaspai ...` with:
 
 ```sh
-# coming soon — prebuilt binaries are not yet published
-# until then, run the CLI from the monorepo: `yarn workspace @aaspai/cli start`
+yarn workspace @aaspai/cli start ...
 ```
 
-## Initialize a project
-
-Inside the monorepo, scaffold a new aaspai project under any directory:
+## Initialize the workspace
 
 ```sh
 yarn workspace @aaspai/cli start init
 ```
 
-`init` creates:
+Initialization creates and migrates:
 
-- `.aaspai/agents/` with the default `operator`, `developer`, and `tester`
-  agents
-- `.aaspai/knowledge/` with a `company/mission.md` stub
-- `.aaspai/loops/` with a `daily-triage` loop
-- `.aaspai/aaspai.config.ts` with sensible defaults
-- `.aaspai/state.db` for ignored runtime state
+```text
+.aaspai/
+|-- AGENTS.md
+|-- aaspai.config.ts
+|-- agents/
+|-- knowledge/
+|-- loops/
+`-- state.db
+```
 
-The default `operator` agent uses the `dry_run_local` harness, so the
-project runs without any API key.
+It also adds runtime-only entries to `.gitignore`. If an older workspace has
+root-level `AGENTS.md`, `aaspai.config.ts`, `agents/`, `knowledge/`, or
+`loops/`, `init` moves each item into `.aaspai/` only when the destination
+does not already exist. It never overwrites the destination.
 
-## Run the API and worker
-
-In two terminals:
+## Inspect the installation
 
 ```sh
-# terminal 1: the API (Hono on http://localhost:3000 by default)
+yarn workspace @aaspai/cli start db status
+yarn workspace @aaspai/cli start agent list
+yarn workspace @aaspai/cli start loop list
+yarn workspace @aaspai/cli start provider capabilities
+yarn workspace @aaspai/cli start provider doctor
+```
+
+`provider capabilities` reports implemented harness and runtime features.
+`provider doctor` checks which external agent CLIs are installed locally.
+
+## Run locally
+
+Use separate terminals:
+
+```sh
+# API: http://127.0.0.1:7420
 yarn workspace @aaspai/api dev
 
-# terminal 2: the worker (long-running daemon)
+# durable scheduler and executor
 yarn workspace @aaspai/worker dev
+
+# web command center: Next.js development server
+yarn workspace @aaspai/web dev
 ```
 
-The worker starts the loop scheduler, which will fire the
-`daily-triage` loop at its scheduled time (08:00 UTC on weekdays, by
-default).
+The worker loads definitions from `.aaspai/`, polls durable wakeups, schedules
+eligible work, creates isolated execution workspaces, and records attempts and
+evidence in SQLite.
 
-## Run an agent on demand
-
-To run a single session without waiting for the schedule:
+For a single scheduler tick:
 
 ```sh
-yarn workspace @aaspai/cli start agent run developer
+yarn workspace @aaspai/cli start start --once
 ```
 
-This calls `Session.execute()` for the `developer` agent, streams
-events to the terminal, and writes the result to the database. Use
-`--no-stream` to suppress event output.
-
-## Inspect state
+## Try the user surfaces
 
 ```sh
+# interactive/manual execution path
+yarn workspace @aaspai/cli start chat ceo --adapter dry_run_local
+
+# create a durable goal and dependent work items
+yarn workspace @aaspai/cli start goal create \
+  --description "Prepare a verified change" \
+  --step "Implement the change" \
+  --step "Verify the result"
+
+# inspect operational state
 yarn workspace @aaspai/cli start state show
 yarn workspace @aaspai/cli start session list
-yarn workspace @aaspai/cli start loop list
 ```
 
-`state show` renders the most recent `STATE.md` from the database.
-`session list` and `loop list` are the read APIs for the runtime
-state.
+Manual chat uses the bounded session path. Autonomous work uses the durable
+`WorkItem -> AgentAttempt -> ExecutionPlan` path described in
+[Architecture](./architecture.md#execution-paths).
 
-## Add a knowledge file
+## Use a real agentic CLI
+
+Install and authenticate a supported CLI, then verify it:
 
 ```sh
-yarn workspace @aaspai/cli start knowledge new engineering/architecture
+yarn workspace @aaspai/cli start provider doctor
 ```
 
-This writes a valid OKF file at
-`.aaspai/knowledge/engineering/architecture.md`. Edit it, commit it, and the
-next session will index it.
+Select the adapter and model in the agent definition or pass an explicit
+override for manual chat/session commands. Authentication remains owned by
+the external CLI; do not place provider credentials in `.aaspai/`.
 
-## Switch to a real harness
+## Validate changes
 
-The default harness is `dry_run_local`. To use a real model:
+```sh
+yarn typecheck
+yarn lint
+yarn test
+```
 
-1. Install the agentic CLI you want to use (Claude Code, Codex, or
-   OpenCode).
-2. Authenticate it. aaspai does not store credentials; it delegates to
-   the CLI.
-3. Edit the agent's `AGENT.md` and change the `adapter:` field:
-
-   ```yaml
-   adapter: opencode_cli
-   model: opencode-go/mimo-v2.5
-   ```
-
-4. Restart the worker. The next session will run through the real
-   harness.
-
-## Where to go next
-
-- [Concept](./concept.md) — the ideas behind the design.
-- [Architecture](./architecture.md) — the four layers, the port/adapter
-  seam.
-- [Deployment](./deployment.md) — running in production with Postgres.
-- [Concepts/Agents](./concepts/agents.md) — anatomy of an agent.
-- [Concepts/Loops](./concepts/loops.md) — anatomy of a loop.
+Real-provider tests are opt-in because they require installed, authenticated
+CLIs and can incur cost.

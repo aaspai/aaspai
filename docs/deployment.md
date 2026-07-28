@@ -1,161 +1,98 @@
 # Deployment
 
-aaspai is self-hosted. The default development setup uses SQLite and
-the `dry_run_local` harness; production deployments use Postgres and
-a real agentic CLI.
+The current repository is suitable for local development and controlled
+evaluation. It is not yet documented as a production-ready, horizontally
+scaled service.
 
-This document covers the high-level production layout. For concrete
-recipes (Docker Compose, Kubernetes, systemd), see the deployment
-examples in the private `study/` directory.
+## Verified local topology
 
-## Components
+Run these processes from the same checked-out workspace:
 
-A production deployment has three processes, each in its own
-container or pod:
-
-| Process | Image | Role |
+| Process | Command | Notes |
 |---|---|---|
-| `aaspai-api` | `apps/api` | Hono HTTP API. Serves queries and webhooks. |
-| `aaspai-worker` | `apps/worker` | Long-running daemon. Executes scheduled loops and runs sessions. |
-| Postgres | any | The state database. |
+| API | `yarn workspace @aaspai/api start` | Binds to `127.0.0.1:7420` by default. |
+| Worker | `yarn workspace @aaspai/worker start` | Polls and executes durable work; no inbound port. |
+| Web | `yarn workspace @aaspai/web start` | Requires a prior web build and trusted access to the workspace/database. |
+| CLI | `yarn workspace @aaspai/cli start ...` | On-demand administrative and user commands. |
 
-The CLI (`apps/cli`) is not a long-running process. It is invoked
-from a shell, from CI, or from a job runner.
-
-## Storage
-
-State lives in Postgres. Configuration lives in a git repository that
-the API and worker mount as a read-only volume.
-
-```
-/etc/aaspai/.aaspai/
-├── aaspai.config.ts     # the project config
-├── agents/              # versioned in git
-├── knowledge/           # versioned in git
-└── loops/               # versioned in git
-```
-
-The schema is managed by the migration runner in
-`packages/db/src/migrate.ts`. Run it on every deploy:
+Build and initialize first:
 
 ```sh
-yarn workspace @aaspai/db start migrate
+yarn install
+yarn build
+yarn workspace @aaspai/cli start init
 ```
 
-## Configuration
+The default local database is `.aaspai/state.db`. Run migrations with:
 
-`.aaspai/aaspai.config.ts` is the project-level config. It declares:
-
-- Where to find agents, knowledge, and loops (the `file-loader`
-  sources).
-- Which harness to use per agent (overridable by each agent's
-  `AGENT.md`).
-- Which runtime to use per session (local, docker, ssh, sandbox).
-- Database connection string and observability settings.
-
-A typical production config:
-
-```ts
-export default {
-  sources: {
-    agents:   { kind: 'file', root: '/etc/aaspai/agents' },
-    knowledge:{ kind: 'file', root: '/etc/aaspai/knowledge' },
-    loops:    { kind: 'file', root: '/etc/aaspai/loops' },
-  },
-  database: {
-    url: process.env.DATABASE_URL!,
-    pool: { min: 2, max: 20 },
-  },
-  observability: {
-    logLevel: 'info',
-    metrics: { enabled: true, endpoint: '/metrics' },
-    tracing: { enabled: true, exporter: 'otlp' },
-  },
-  runtime: { default: 'docker' },
-} satisfies AaspaiConfig;
+```sh
+yarn workspace @aaspai/cli start db migrate
 ```
 
-## Networking
+## Files and persistence
 
-- The **API** listens on `http://0.0.0.0:3000` by default. Terminate
-  TLS at a reverse proxy (Caddy, nginx, or your cloud's load balancer).
-- The **worker** does not accept inbound traffic. It connects to
-  Postgres and to the configured runtimes. No public port.
-- The **CLI** runs wherever you run it. It connects to Postgres over
-  the same DSN as the API and the worker.
+Commit:
 
-## Real harnesses
+```text
+.aaspai/AGENTS.md
+.aaspai/aaspai.config.ts
+.aaspai/agents/
+.aaspai/knowledge/
+.aaspai/loops/
+```
 
-The `dry_run_local` harness is for development. In production, each
-agent declares which harness it uses in `AGENT.md`. The supported
-harnesses and their requirements:
+Back up but do not commit runtime state:
 
-| Harness | Requires |
-|---|---|
-| `opencode_cli` | The OpenCode CLI on the `PATH` of the runtime. |
-| `claude_local` | Claude Code on the `PATH` and a `CLAUDE_CODE_OAUTH_TOKEN` (or equivalent). |
-| `codex_local` | The Codex CLI and a `OPENAI_API_KEY`. |
-| `cursor_local` | Cursor and a Cursor session. |
-| `cursor_cloud` | A Cursor Cloud API key. |
+```text
+.aaspai/state.db
+.aaspai/backups/
+.aaspai/*.log
+.aaspai/*.pid
+```
 
-aaspai does not store API keys. The harness's own authentication
-mechanism is the source of truth. The runtime only needs the
-`PATH` and the environment the CLI expects.
+Use the CLI backup command before risky local upgrades:
 
-## Scaling
+```sh
+yarn workspace @aaspai/cli start db backup
+```
 
-The **API** is stateless and scales horizontally. Run as many
-replicas as you need behind a load balancer.
+## Network and security
 
-The **worker** is stateful (it holds the loop scheduler state and the
-active sessions in memory). Run **exactly one** worker per
-environment, or use a leader-election lock to allow multiple
-replicas with one active scheduler.
+- Keep the API and web app on a trusted network.
+- Do not bind the API publicly unless authentication is configured and every
+  exposed route has been reviewed for organization scoping.
+- Execution mutations fail closed when the API auth verifier is absent.
+- External CLI credentials are managed by those CLIs or the process
+  environment, not by definition files.
+- Treat the worker as privileged: it can create workspaces and invoke local or
+  remote runtimes according to policy.
 
-Postgres is the source of truth for state. Both the API and the
-worker can be restarted freely; in-flight sessions are recovered on
-startup.
+## Provider and runtime readiness
 
-## Backups
+Before enabling real work:
 
-- **Configuration** is in git. Back up the git host.
-- **State** is in Postgres. Use your standard Postgres backup
-  strategy (logical dump or physical backup).
-- **Audit log** is in Postgres. Same strategy.
+```sh
+yarn workspace @aaspai/cli start provider capabilities
+yarn workspace @aaspai/cli start provider doctor
+```
 
-There is no other state to back up. The runtime `.aaspai/` directory
-on the worker is intentionally ephemeral.
+Run the relevant opt-in real tests for the selected harness/runtime. A passing
+unit suite or `dry_run_local` run is not proof that an external CLI,
+authentication flow, remote sandbox, cancellation path, or artifact transfer
+works in your environment.
 
-## Observability
+## Production gaps
 
-aaspai exports:
+Do not assume the following until they have dedicated acceptance evidence:
 
-- **Logs** — structured JSON via the `observability` package. Pipe to
-  your log aggregator.
-- **Metrics** — Prometheus-compatible, served at `/metrics` on the
-  API. Includes session counts, token usage, loop fires, gate
-  decisions.
-- **Traces** — OTLP-compatible, exported from both the API and the
-  worker. Wire to your tracing backend.
+- horizontally scaled API/worker deployment;
+- safe multi-worker scheduling across all backends;
+- complete worker-loss and in-flight attempt recovery;
+- production Postgres parity for every execution/control-plane operation;
+- remote artifact durability and backup;
+- public web/API hardening and tenant isolation;
+- metrics, tracing, alerting, and operational runbooks.
 
-## Upgrades
-
-aaspai follows semantic versioning. Patch releases are always
-backwards-compatible; minor releases may add new config fields;
-major releases are rare and will be announced in advance.
-
-The recommended upgrade flow:
-
-1. Read the release notes.
-2. Pull the new image / tag.
-3. Run the database migrations (`yarn workspace @aaspai/db start
-   migrate`).
-4. Restart the API, then the worker.
-5. Watch the first scheduled loop fire to confirm.
-
-## License
-
-Production deployments of aaspai are subject to the
-[AGPL-3.0 license](../LICENSE). If you offer aaspai as a hosted
-service to third parties, you must publish your modifications under
-the same license.
+The internal target architecture covers these goals. Public deployment
+recipes should be added only after their corresponding real-environment tests
+pass.
