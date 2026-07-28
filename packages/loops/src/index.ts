@@ -29,6 +29,7 @@ export {
 export {
   type CompiledProcess,
   compileProcess,
+  compileProcessDefinition,
   type ProcessFailureAction,
   type ProcessStep,
 } from "./process.js";

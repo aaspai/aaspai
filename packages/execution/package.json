@@ -8,7 +8,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./store": "./src/store.ts"
+    "./store": "./src/store.ts",
+    "./operator": "./src/operator.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

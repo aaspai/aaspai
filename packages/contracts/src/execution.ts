@@ -153,6 +153,8 @@ export const workflowRunSchema = z
     organizationId: identifierSchema,
     goalId: identifierSchema,
     definitionRevisionId: identifierSchema,
+    processDefinitionHash: z.string().trim().max(128).nullable().default(null),
+    stateVersion: nonNegativeIntegerSchema.default(0),
     sourceType: z.string().trim().min(1).max(64).nullable().default(null),
     sourceId: identifierSchema.nullable().default(null),
     status: workflowRunStatusSchema.default("queued"),

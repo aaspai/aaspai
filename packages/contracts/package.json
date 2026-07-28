@@ -20,6 +20,7 @@
     "./knowledge": "./src/knowledge.ts",
     "./memory": "./src/memory.ts",
     "./observability": "./src/observability.ts",
+    "./operator": "./src/operator.ts",
     "./phase2": "./src/phase2.ts",
     "./profile": "./src/profile.ts",
     "./primitives": "./src/primitives.ts",

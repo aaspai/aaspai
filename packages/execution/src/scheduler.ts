@@ -180,7 +180,7 @@ export class DependencyScheduler {
   async run(
     input: SchedulerTickInput,
     execute: (context: ScheduledExecutionContext) => Promise<ScheduledExecutionOutcome>,
-    options: { maxTicks?: number } = {},
+    options: { maxTicks?: number; executorOwnsAttempt?: boolean } = {},
   ): Promise<SchedulerTickResult> {
     const maxTicks = Math.max(1, options.maxTicks ?? 100);
     let latest: SchedulerTickResult = await this.tick(input);
@@ -200,12 +200,13 @@ export class DependencyScheduler {
         } catch (caught) {
           error = String(caught instanceof Error ? caught.message : caught);
         }
-        await this.store.completeScheduledAttempt({
-          attemptId: dispatched.attempt.id,
-          status: outcome,
-          error,
-          retryDelayMs: this.retryDelayMs,
-        });
+        if (!options.executorOwnsAttempt)
+          await this.store.completeScheduledAttempt({
+            attemptId: dispatched.attempt.id,
+            status: outcome,
+            error,
+            retryDelayMs: this.retryDelayMs,
+          });
       }
       latest = await this.tick(input);
     }

@@ -151,6 +151,8 @@ export const workflowRuns = sqliteTable(
     definitionRevisionId: text("definition_revision_id")
       .notNull()
       .references(() => definitionRevisions.id),
+    processDefinitionHash: text("process_definition_hash"),
+    stateVersion: integer("state_version").notNull().default(0),
     sourceType: text("source_type"),
     sourceId: text("source_id"),
     status: text("status").notNull().default("queued"),
@@ -457,6 +459,123 @@ export const executionGovernanceEvents = sqliteTable(
   }),
 );
 
+export const executionProcessDefinitions = sqliteTable(
+  "execution_process_definitions",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    revision: integer("revision").notNull(),
+    contentHash: text("content_hash").notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    definitionJson: text("definition_json").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => ({
+    revisionUniq: uniqueIndex("execution_process_definitions_org_revision_uniq").on(
+      t.organizationId,
+      t.id,
+      t.revision,
+    ),
+    hashIdx: index("execution_process_definitions_org_hash_idx").on(t.organizationId, t.contentHash),
+  }),
+);
+
+export const executionOperatorRuns = sqliteTable(
+  "execution_operator_runs",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    operatorAgentId: text("operator_agent_id").notNull(),
+    scopeType: text("scope_type").notNull(),
+    scopeId: text("scope_id").notNull(),
+    workflowRunId: text("workflow_run_id"),
+    status: text("status").notNull().default("idle"),
+    observedStateVersion: integer("observed_state_version").notNull().default(0),
+    latestDecisionId: text("latest_decision_id"),
+    wakeAt: text("wake_at"),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: text("lease_expires_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => ({
+    scopeUniq: uniqueIndex("execution_operator_runs_org_scope_uniq").on(
+      t.organizationId,
+      t.scopeType,
+      t.scopeId,
+    ),
+    statusIdx: index("execution_operator_runs_org_status_idx").on(t.organizationId, t.status),
+  }),
+);
+
+export const executionControlDecisions = sqliteTable(
+  "execution_control_decisions",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    operatorRunId: text("operator_run_id").notNull().references(() => executionOperatorRuns.id),
+    sequence: integer("sequence").notNull(),
+    observedStateVersion: integer("observed_state_version").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    parametersJson: text("parameters_json").notNull().default("{}"),
+    rationale: text("rationale").notNull(),
+    status: text("status").notNull().default("proposed"),
+    createdAt: text("created_at").notNull(),
+    appliedAt: text("applied_at"),
+  },
+  (t) => ({
+    sequenceUniq: uniqueIndex("execution_control_decisions_run_sequence_uniq").on(
+      t.operatorRunId,
+      t.sequence,
+    ),
+    idempotencyUniq: uniqueIndex("execution_control_decisions_org_idem_uniq").on(
+      t.organizationId,
+      t.idempotencyKey,
+    ),
+  }),
+);
+
+export const executionEscalations = sqliteTable(
+  "execution_escalations",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    operatorRunId: text("operator_run_id"),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    reason: text("reason").notNull(),
+    evidenceIdsJson: text("evidence_ids_json").notNull().default("[]"),
+    status: text("status").notNull().default("open"),
+    resolution: text("resolution"),
+    createdAt: text("created_at").notNull(),
+    resolvedAt: text("resolved_at"),
+  },
+  (t) => ({ statusIdx: index("execution_escalations_org_status_idx").on(t.organizationId, t.status) }),
+);
+
+export const executionOperatorLeases = sqliteTable(
+  "execution_operator_leases",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    operatorRunId: text("operator_run_id").notNull().references(() => executionOperatorRuns.id),
+    owner: text("owner").notNull(),
+    acquiredAt: text("acquired_at").notNull(),
+    heartbeatAt: text("heartbeat_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    releasedAt: text("released_at"),
+  },
+  (t) => ({
+    activeUniq: uniqueIndex("execution_operator_leases_active_uniq")
+      .on(t.organizationId, t.operatorRunId)
+      .where(sql`${t.releasedAt} IS NULL`),
+  }),
+);
+
 export type GoalRow = typeof goals.$inferSelect;
 export type ProjectRow = typeof projects.$inferSelect;
 export type RepositoryRow = typeof repositories.$inferSelect;
@@ -475,3 +594,8 @@ export type ExecutionVerificationRow = typeof executionVerifications.$inferSelec
 export type ExecutionApprovalRow = typeof executionApprovals.$inferSelect;
 export type ExecutionBudgetReservationRow = typeof executionBudgetReservations.$inferSelect;
 export type ExecutionGovernanceEventRow = typeof executionGovernanceEvents.$inferSelect;
+export type ExecutionProcessDefinitionRow = typeof executionProcessDefinitions.$inferSelect;
+export type ExecutionOperatorRunRow = typeof executionOperatorRuns.$inferSelect;
+export type ExecutionControlDecisionRow = typeof executionControlDecisions.$inferSelect;
+export type ExecutionEscalationRow = typeof executionEscalations.$inferSelect;
+export type ExecutionOperatorLeaseRow = typeof executionOperatorLeases.$inferSelect;
