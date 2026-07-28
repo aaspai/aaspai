@@ -1,117 +1,67 @@
 # Concept
 
-## The problem
+aaspai is a company operating system and orchestration control plane for work
+performed through agentic CLIs.
 
-Modern teams want to **delegate** real work to AI agents: a developer to
-write code, an operator to triage issues, a tester to run the suite. Each
-agent runs in its own agentic CLI (Claude Code, Codex, Cursor, OpenClaw…)
-and each CLI has its own way of being configured, scheduled, and observed.
+An agentic CLI can execute a prompt. aaspai owns the surrounding system:
 
-The interesting question is not "can the agent solve this task?" — that is
-the CLI's problem. The interesting question is: **who runs the
-orchestration around it?**
+- which durable goal and work item caused the run;
+- which versioned agent, skills, tools, and knowledge were selected;
+- which workspace, runtime, provider, model, policy, and budget were used;
+- what evidence was produced;
+- who verified it;
+- whether the system should complete, retry, request approval, or escalate.
 
-Today most teams glue cron, shell scripts, and ad-hoc tools together. That
-glue does not version, does not audit, does not survive a team handover,
-and does not generalize from one agent to many.
+## Product model
 
-## The idea
-
-aaspai treats the agent workforce as **configuration**, not as code. You
-write the agents, the knowledge they read, the tools they can call, and
-the loops that wake them as files in a git repository. The runtime reads
-those files, runs the agents, and writes back what happened to a database.
-
-```
-              ┌────────────────────────────────────────┐
-              │            YOUR REPOSITORY             │
-              │                                        │
-              │   .aaspai/                            │
-              │     agents/    ─ versioned in git     │
-              │     knowledge/ ─ versioned in git     │
-              │     loops/     ─ versioned in git     │
-              │   skills/      ─ versioned in git     │
-              │     aaspai.config.ts                  │
-              └────────────────────────────────────────┘
-                              │
-                              ▼
-              ┌────────────────────────────────────────┐
-              │            aaspai runtime              │
-              │                                        │
-              │   CLI  ─ schedules loops, runs agents │
-              │   Worker ─ executes sessions           │
-              │   API   ─ serves queries & webhooks    │
-              └────────────────────────────────────────┘
-                              │
-                              ▼
-              ┌────────────────────────────────────────┐
-              │            STATE                       │
-              │                                        │
-              │   SQLite locally, Postgres in prod     │
-              │   sessions, events, audit, budget      │
-              └────────────────────────────────────────┘
+```text
+Human intent
+  -> company definitions and authority
+  -> goals and dependent work items
+  -> governed agent attempts
+  -> isolated execution through an agentic CLI
+  -> evidence and independent verification
+  -> durable operational state and accepted knowledge
 ```
 
-Two storage tiers, one truth per tier:
+Definitions are files under `.aaspai/` so changes can be reviewed in Git.
+Operational state is stored in the database so claims, retries, approvals,
+events, and audit history survive process restarts.
 
-- **Configuration** is files. A human wrote it; review it in a PR.
-- **State** is rows. The system wrote it during a run; treat it as
-  append-only.
+## Core principles
 
-This split is the central design choice. It means the agents and their
-behaviour are code-reviewable, while the runtime data is free to evolve.
+1. **Agents are versioned roles, not model names.** A role carries purpose,
+   authority, tools, skills, knowledge scope, and provider preferences.
+2. **Work is durable.** Goals decompose into work items with dependencies;
+   autonomous execution is not an untracked prompt call.
+3. **Execution is reproducible.** An attempt pins the definition revision,
+   target commit, execution plan, provider, runtime, and policy.
+4. **Verification is independent.** Completion requires evidence and a
+   checker/policy decision, not merely a successful process exit.
+5. **Knowledge is reviewed.** Runtime memory and raw transcripts are evidence;
+   accepted long-term knowledge is curated into Git.
+6. **Providers and runtimes are replaceable.** Capability contracts isolate
+   orchestration from a particular CLI or compute environment.
+7. **The control plane does not execute work.** API/UI mutations enqueue or
+   govern work; the worker owns execution.
 
-## The five ideas
+## Current product surfaces
 
-1. **Agents are roles, not models.** An agent is a system prompt, a
-   list of tools, a list of skills, and a scope of authority. The model
-   that powers it is a property of the harness, not the agent.
-
-2. **Loops are the unit of recurring work.** A loop is a markdown file
-   with a gate, a budget, a schedule, and a session template. The
-   scheduler wakes the loop, the gate decides whether to run, the budget
-   caps it, the session runs the work.
-
-3. **Knowledge is long-term, versioned memory.** Knowledge is stored in
-   OKF (Open Knowledge Format) files — markdown with a typed YAML
-   frontmatter. The agent's system prompt is built by indexing this
-   knowledge at session start.
-
-4. **The harness is swappable.** The same session can run against
-   `claude_local`, `codex_local`, `cursor_local`, or a deterministic
-   `dry_run_local`. The harness registry is a port; each driver is an
-   adapter. Switch the harness in the agent's `AGENT.md` and the agent
-   now talks to a different model.
-
-5. **State is observable, not magical.** Every session writes to
-   `session_events`. Every gate decision writes to a ledger. The CLI can
-   render any of it back as a markdown STATE file you can paste into a
-   pull request.
+- The CLI initializes and operates a workspace, inspects definitions/state,
+  runs bounded manual sessions, checks providers, and creates durable goals.
+- The API exposes health, loop, session, execution, provider, and company
+  control-plane operations.
+- The worker schedules and executes durable work.
+- The web command center exposes onboarding, company goals, agents,
+  execution, governance, sessions, memory, knowledge, and state.
 
 ## What aaspai is not
 
-- **Not a model.** aaspai does not train or host a model. It orchestrates
-  the agentic CLIs that do.
-- **Not a chat product.** aaspai is a runtime and an orchestration plane.
-  It has an API and a CLI, but it does not ship a chat UI.
-- **Not a hosted SaaS.** aaspai is self-hosted. You run it on your
-  machine, your CI, or your servers. The AGPL license means that if
-  someone else runs it as a service for you, they have to publish their
-  changes.
+- It is not a model host or training system.
+- It is not a replacement for Codex, Claude Code, OpenCode, or another
+  agentic CLI.
+- It is not yet a production-ready multi-tenant hosted service.
+- A deterministic dry run is not evidence that a real provider works.
 
-## Who is it for?
-
-- Engineers who want their agent workforce to be **reviewable** like any
-  other piece of code.
-- Teams that already use Claude Code, Codex, or Cursor and want a
-  **shared substrate** to coordinate them.
-- People who want to **dogfood** their own agent platform to build the
-  agent platform.
-- Anyone who has outgrown cron + shell scripts and wants a real
-  scheduler, a real audit log, and a real budget system.
-
-## The name
-
-aaspai stands for **a**gent **a**s **s**ervice **p**latform with
-**a**gentic **i**nterop. The short form is just "aaspai" (sounds like
-"ASP AI").
+Read [Architecture](./architecture.md) for the implemented boundaries and
+[Getting started](./getting-started.md) for the local workflow.

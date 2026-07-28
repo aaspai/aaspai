@@ -1,46 +1,40 @@
-# aaspai Documentation
+# aaspai documentation
 
-Public documentation for the aaspai project.
-
-## What is aaspai?
-
-aaspai is a **control plane for running AI-agent workforces on top of
-agentic CLIs**. You define agents, knowledge, skills, and recurring loops as
-files in a git repository; aaspai runs them, tracks what they did, and
-streams the results back to your state file.
-
-It is self-hosted, file-config-first, and works with the agentic CLI you
-already use (Claude, Codex, Cursor, OpenClaw, or a deterministic dry-run
-adapter for tests).
+aaspai is a self-hosted control plane for assigning durable work to AI agents
+that run through agentic CLIs. Agent, knowledge, and loop definitions are kept
+in Git; operational state, execution evidence, and governance decisions are
+kept in a database.
 
 ## Start here
 
-| Doc | What's in it |
+| Guide | Purpose |
 |---|---|
-| [Concept](./concept.md) | The problem aaspai solves and the ideas behind it. |
-| [Architecture](./architecture.md) | The four layers, the file/DB split, the port/adapter seam. |
-| [Getting started](./getting-started.md) | Install, initialize a project, run your first agent. |
-| [Deployment](./deployment.md) | Running in production with Postgres and a real harness. |
+| [Getting started](./getting-started.md) | Install the monorepo, initialize a workspace, and inspect the local system. |
+| [Concept](./concept.md) | Understand the product model and its boundaries. |
+| [Architecture](./architecture.md) | See the implemented components, source-of-truth rules, and execution flow. |
+| [Deployment](./deployment.md) | Run the current system and understand its production-readiness limits. |
 
-## Core concepts
+## Core definitions
 
-| Concept | What it is |
-|---|---|
-| [Agents](./concepts/agents.md) | Roles with system prompt, tools, and skills. Versioned in git. |
-| [Loops](./concepts/loops.md) | Recurring scheduled work that wakes an agent on a cadence. |
-| [Knowledge](./concepts/knowledge.md) | Versioned long-term memory in OKF files. |
+| Definition | Location | Guide |
+|---|---|---|
+| Agents | `.aaspai/agents/` | [Agents](./concepts/agents.md) |
+| Knowledge | `.aaspai/knowledge/` | [Knowledge](./concepts/knowledge.md) |
+| Loops | `.aaspai/loops/` | [Loops](./concepts/loops.md) |
+| Project config | `.aaspai/aaspai.config.ts` | [Getting started](./getting-started.md) |
+| Local runtime state | `.aaspai/state.db` | [Architecture](./architecture.md#sources-of-truth) |
 
-## Conventions
+`aaspai init` keeps the complete workspace under `.aaspai/`. Definitions and
+config may be committed; runtime files such as `state.db`, logs, and PID files
+must remain ignored.
 
-- Configuration is **files**. State is **rows**. See
-  [Architecture](./architecture.md#configuration-vs-state).
-- The port/adapter seam lives in
-  [`packages/contracts/`](https://github.com/aaspai/aaspai/tree/main/packages/contracts).
-  Implementation adapters are in `packages/{db,auth,identity,audit,harness,runtime}/`.
-- CLI reference and internal architecture live in the (private) `study/`
-  directory. Public docs only cover the concepts.
+## Documentation policy
+
+The public `docs/` directory describes behavior available in the current
+repository. Forward-looking design and engineering evidence live in the
+internal `study/` directory and are not public product promises. Files under
+`docs/issues/` are historical issue records.
 
 ## License
 
-[AGPL-3.0](../LICENSE). See [`../LICENSE`](../LICENSE) for the full
-text.
+[AGPL-3.0](../LICENSE).

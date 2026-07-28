@@ -1,119 +1,128 @@
 # Architecture
 
-A high-level tour of how aaspai is put together. The deep dive (with the
-phase plan, the storage model, and the CLI reference) lives in the
-private `study/` directory; this document covers only the public shape.
+This document describes the current repository. Future architecture is
+tracked separately and is not implied by this page.
 
-## The four layers
+## System shape
 
-aaspai is built in layers. Each layer depends only on the layers below it.
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  L4  ORCHESTRATION              (deferred)                          │
-│      parent agent (CEO) · workers · projects · tasks                │
-│      heartbeat · policies · channels · memory                      │
-├─────────────────────────────────────────────────────────────────────┤
-│  L3  LOOPS + SESSIONS + SKILLS + TOOLS                              │
-│      loops library · unified execution surface · skill registry    │
-│      tool registry · knowledge layer · file-loader                 │
-├─────────────────────────────────────────────────────────────────────┤
-│  L2  RUNTIME / EXECUTION TARGETS                                   │
-│      local · docker · ssh · sandbox (e2b · daytona · cloudflare)   │
-├─────────────────────────────────────────────────────────────────────┤
-│  L1  ADAPTERS / HARNESS                                            │
-│      claude_local · codex_local · cursor · opencode_local         │
-│      opencode_cli · openclaw · hermes · dry_run_local              │
-├─────────────────────────────────────────────────────────────────────┤
-│  L0  FOUNDATION                                                    │
-│      contracts · config · observability · identity · auth          │
-│      audit · db · crypto · testing                                  │
-└─────────────────────────────────────────────────────────────────────┘
+```text
+Human / automation
+        |
+        v
+CLI ----+---- Web command center
+        |             |
+        v             v
+             API control plane
+                    |
+                    v
+          durable database state
+                    ^
+                    |
+       Worker: scheduler + executor
+                    |
+                    v
+ workspace -> runtime -> agentic CLI
+                    |
+                    v
+       events, artifacts, verification
 ```
 
-| Layer | Role | Representative packages |
+The repository has four applications:
+
+| Application | Current responsibility |
+|---|---|
+| `@aaspai/api` | Hono HTTP control plane for health, loops, sessions, providers, execution, and company operations. Mutating execution routes require an injected auth verifier. |
+| `@aaspai/worker` | Long-running scheduler and autonomous executor. Claims durable work, manages capacity and workspaces, invokes harnesses, and records evidence. |
+| `@aaspai/cli` | Workspace setup, definition inspection, manual sessions/chat, durable goal creation, provider checks, and local daemon operation. |
+| `@aaspai/web` | Next.js command center for onboarding, company goals, agents, execution, governance, sessions, memory, knowledge, and state. It currently uses server-side local workspace/database access. |
+
+## Sources of truth
+
+| Information | Canonical source |
+|---|---|
+| Agent, loop, and knowledge definitions | Git-backed files under `.aaspai/` |
+| Project configuration | `.aaspai/aaspai.config.ts` |
+| Goals, work items, attempts, approvals, sessions, events, and audit records | Database |
+| Raw execution output and artifacts | Durable execution evidence referenced by database records |
+| Accepted organizational knowledge | Reviewed files under `.aaspai/knowledge/` |
+| Product deliverables | The target Git repository and its commits |
+
+The practical rule is: definitions are reviewed in Git; operational
+transitions are recorded in the database. Runtime output must not silently
+rewrite a definition.
+
+Local state defaults to `.aaspai/state.db`. Environment variables can override
+definition paths and preserve compatibility with legacy layouts.
+
+## Package layers
+
+The code is organized by ownership rather than by UI feature:
+
+| Layer | Responsibilities | Main packages |
 |---|---|---|
-| **L0 Foundation** | Ports, adapters, crypto, and the storage seam. Every other layer depends on this. | `contracts`, `db`, `auth`, `identity`, `audit`, `crypto`, `config`, `observability`, `testing` |
-| **L1 Adapters / Harness** | Speak to a specific agentic CLI: Claude Code, Codex, Cursor, OpenCode (CLI or local), OpenClaw, Hermes, or a deterministic dry-run. | `harness` |
-| **L2 Runtime / Execution** | Where the agent actually executes: a local subprocess, a Docker container, a remote SSH host, or a cloud sandbox. | `runtime` |
-| **L3 Orchestration** | The reusable orchestration library: sessions, skills, tools, loops, knowledge, file loading. | `sessions`, `skills`, `tools`, `loops`, `knowledge`, `file-loader` |
-| **L4 Orchestration** (future) | The CEO/parent-agent pattern, multi-project workspaces, heartbeat, channels. | (deferred) |
+| Foundation | contracts, config, persistence, identity, auth, audit, observability, Git | `contracts`, `config`, `db`, `identity`, `auth`, `audit`, `observability`, `crypto`, `git`, `testing` |
+| Execution fabric | harness capabilities, runtimes, sessions, isolated workspaces, execution plans | `harness`, `runtime`, `sessions`, `execution` |
+| Agents and processes | definitions, skills, tools, knowledge, loops | `file-loader`, `skills`, `tools`, `knowledge`, `loops` |
+| Functional work state | goals, work items, attempts, dependencies, verification, approvals | `execution`, `db` |
+| Company control plane | departments, service agents, authority, routing, delegation, escalation, autonomy changes | `company`, `api`, `db` |
 
-## Configuration vs state
+The implementation order is foundation, execution fabric, agents/processes,
+functional work state, then company control plane. The conceptual company
+layer sits above the other layers even though its code is being delivered
+incrementally.
 
-aaspai deliberately splits storage into two tiers:
+## Execution paths
 
-| Tier | What's in it | Format | Backed by | Versioned |
-|---|---|---|---|---|
-| **Configuration** | agents, knowledge, loops, gates, skills, harnesses | Markdown + YAML frontmatter | Files in the repo | **Yes — git** |
-| **State** | wakeups, sessions, events, budget, audit | SQL tables | SQLite locally, Postgres in prod | No — append-only by row |
+Autonomous work follows one governed path:
 
-The rule is simple: **if a human wrote it, it's a file. If the system
-wrote it during a run, it's a row.**
-
-This means:
-
-- A change to an agent is a pull request, not a database migration.
-- A change to the runtime is a release, not a config change.
-- A change to *what happened* is a new row in the events table, not an
-  edit to a log file.
-
-## The port/adapter seam
-
-The single most important abstraction in aaspai is the
-**port/adapter pattern** for storage. There are three ports, all defined
-in [`packages/contracts/`](https://github.com/aaspai/aaspai/tree/main/packages/contracts):
-
-- `AgentConfigSource` — load agents from somewhere (file by default, DB
-  later)
-- `KnowledgeSource` — load knowledge chunks from somewhere
-- `LoopConfigSource` — load loop definitions from somewhere
-
-The default implementation in `packages/file-loader/` reads them from
-the working tree. The default storage for state in `packages/db/` reads
-SQLite. Adapters in `packages/db/` also support Postgres.
-
-The seam lets the same orchestration code run against:
-
-- A local file tree + SQLite (development)
-- A remote git repository + Postgres (production)
-- An in-memory fixture (tests)
-
-## The three apps
-
-aaspai ships three deployable applications in
-[`apps/`](https://github.com/aaspai/aaspai/tree/main/apps):
-
-- **`@aaspai/api`** — Hono-based HTTP API. Serves queries, webhooks,
-  and the public read surface. Backed by `packages/db`.
-- **`@aaspai/worker`** — The long-running daemon that executes
-  scheduled loops, runs sessions, and writes events to the database.
-- **`@aaspai/cli`** — The `aaspai` command. Use it to initialize a
-  project, inspect state, run an agent, and stream a session.
-
-All three depend on the same shared packages; there is no private
-"internal" API between them.
-
-## The runtime data flow
-
-A single session in steady state looks like this:
-
-```
-  1. Scheduler fires a loop  ──►  loop engine  (packages/loops)
-  2. Loop engine reads gate  ──►  gate decides run / skip
-  3. Run accepted             ──►  build a Session
-  4. Session.execute()       ──►  packages/sessions
-  5. Resolve harness         ──►  packages/harness (port)
-  6. Resolve runtime         ──►  packages/runtime  (port)
-  7. Stream TranscriptEntry  ──►  session_events table
-  8. Final result            ──►  sessions row + audit log
+```text
+Goal / workflow
+  -> WorkItem and dependencies
+  -> scheduler claim and capacity locks
+  -> AgentAttempt
+  -> immutable ExecutionPlan
+  -> isolated Workspace
+  -> Runtime
+  -> HarnessAdapter / external CLI
+  -> normalized events and artifacts
+  -> independent verification
+  -> completion, retry, approval, or escalation
 ```
 
-## Where to go next
+The API enqueues work; it does not execute agent sessions inside request
+handlers. The worker owns autonomous execution.
 
-- Read [Concept](./concept.md) to see why the design is shaped this way.
-- Read [Getting started](./getting-started.md) to install aaspai and run
-  your first session.
-- For per-concept deep dives, see
-  [Agents](./concepts/agents.md), [Loops](./concepts/loops.md), and
-  [Knowledge](./concepts/knowledge.md).
+Direct session execution remains available for explicit chat and bounded
+manual runs. It is a compatibility/user-interaction path, not a shortcut for
+autonomous work.
+
+## Important identities
+
+These records are intentionally distinct:
+
+- `AgentDefinition`: versioned role and capability configuration.
+- `WorkItem`: durable unit of coordination.
+- `AgentAttempt`: one governed attempt to complete a work item.
+- `HarnessSession`: one provider/CLI invocation.
+- `Workspace`: isolated mutable checkout.
+- `EnvironmentLease`: allocated execution environment.
+- `Verification`: independent assessment of submitted evidence.
+
+Keeping them separate provides retry history, provider lineage, workspace
+ownership, and auditable verification.
+
+## Current boundaries
+
+- SQLite is the default and best-verified local operating mode.
+- Postgres support exists in the database package, but the complete
+  multi-process production topology is not yet claimed as verified.
+- `dry_run_local` proves orchestration deterministically; it does not prove a
+  real provider integration.
+- Real-provider support must be checked with `provider capabilities`,
+  `provider doctor`, and the opt-in real test suites.
+- The web app is currently a trusted local/server-side control surface, not a
+  separately deployable stateless frontend.
+- Default worker concurrency is deliberately conservative.
+
+See [Deployment](./deployment.md) before exposing the system beyond a trusted
+development environment.
