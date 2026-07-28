@@ -369,6 +369,84 @@ const SQLITE_STATEMENTS = [
     ON execution_governance_events (organization_id, occurred_at)`,
   `CREATE INDEX IF NOT EXISTS execution_governance_events_work_item_idx
     ON execution_governance_events (work_item_id)`,
+  `CREATE TABLE IF NOT EXISTS execution_process_definitions (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    definition_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE (organization_id, id, revision)
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_process_definitions_org_hash_idx
+    ON execution_process_definitions (organization_id, content_hash)`,
+  `CREATE TABLE IF NOT EXISTS execution_operator_runs (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    operator_agent_id TEXT NOT NULL,
+    scope_type TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    workflow_run_id TEXT,
+    status TEXT NOT NULL DEFAULT 'idle',
+    observed_state_version INTEGER NOT NULL DEFAULT 0,
+    latest_decision_id TEXT,
+    wake_at TEXT,
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (organization_id, scope_type, scope_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_operator_runs_org_status_idx
+    ON execution_operator_runs (organization_id, status)`,
+  `CREATE TABLE IF NOT EXISTS execution_control_decisions (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    operator_run_id TEXT NOT NULL REFERENCES execution_operator_runs(id),
+    sequence INTEGER NOT NULL,
+    observed_state_version INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT,
+    parameters_json TEXT NOT NULL DEFAULT '{}',
+    rationale TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    created_at TEXT NOT NULL,
+    applied_at TEXT,
+    UNIQUE (operator_run_id, sequence),
+    UNIQUE (organization_id, idempotency_key)
+  )`,
+  `CREATE TABLE IF NOT EXISTS execution_escalations (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    operator_run_id TEXT,
+    target_type TEXT NOT NULL,
+    target_id TEXT,
+    reason TEXT NOT NULL,
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'open',
+    resolution TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_escalations_org_status_idx
+    ON execution_escalations (organization_id, status)`,
+  `CREATE TABLE IF NOT EXISTS execution_operator_leases (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    operator_run_id TEXT NOT NULL REFERENCES execution_operator_runs(id),
+    owner TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    released_at TEXT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS execution_operator_leases_active_uniq
+    ON execution_operator_leases (organization_id, operator_run_id)
+    WHERE released_at IS NULL`,
   `CREATE TABLE IF NOT EXISTS memory_records (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -623,6 +701,15 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
   {
     check: "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'source_type'",
     sql: "ALTER TABLE workflow_runs ADD COLUMN source_type TEXT",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'process_definition_hash'",
+    sql: "ALTER TABLE workflow_runs ADD COLUMN process_definition_hash TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'state_version'",
+    sql: "ALTER TABLE workflow_runs ADD COLUMN state_version INTEGER NOT NULL DEFAULT 0",
   },
   {
     check: "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'source_id'",

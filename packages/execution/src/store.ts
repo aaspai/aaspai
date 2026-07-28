@@ -50,6 +50,7 @@ import {
   executionVerificationSchema,
 } from "@aaspai/contracts/governance";
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
+import type { ExecutionContext } from "@aaspai/contracts/operator";
 import type { ResolvedAgentProfile } from "@aaspai/contracts/profile";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
@@ -162,6 +163,8 @@ export interface CreateWorkflowRunInput {
   organizationId: string;
   goalId: string;
   definitionRevisionId: string;
+  processDefinitionHash?: string | null;
+  stateVersion?: number;
   sourceType?: string | null;
   sourceId?: string | null;
   idempotencyKey: string;
@@ -272,6 +275,10 @@ export interface AcquireResourceLockInput {
 export class ExecutionStore {
   constructor(private readonly db: SqliteDb) {}
 
+  get database(): SqliteDb {
+    return this.db;
+  }
+
   async createGoal(input: CreateGoalInput) {
     const row = {
       id: input.id ?? makeId("goal"),
@@ -301,8 +308,16 @@ export class ExecutionStore {
     return row;
   }
 
-  async getGoal(goalId: string): Promise<Goal | null> {
-    const rows = await this.db.select().from(goals).where(eq(goals.id, goalId)).limit(1);
+  async getGoal(goalId: string, context?: ExecutionContext): Promise<Goal | null> {
+    const rows = await this.db
+      .select()
+      .from(goals)
+      .where(
+        context
+          ? and(eq(goals.id, goalId), eq(goals.organizationId, context.organizationId))
+          : eq(goals.id, goalId),
+      )
+      .limit(1);
     return rows[0] ? goalSchema.parse(rows[0]) : null;
   }
 
@@ -338,11 +353,21 @@ export class ExecutionStore {
     return row;
   }
 
-  async getDefinitionRevision(id: string): Promise<DefinitionRevision | null> {
+  async getDefinitionRevision(
+    id: string,
+    context?: ExecutionContext,
+  ): Promise<DefinitionRevision | null> {
     const rows = await this.db
       .select()
       .from(definitionRevisions)
-      .where(eq(definitionRevisions.id, id))
+      .where(
+        context
+          ? and(
+              eq(definitionRevisions.id, id),
+              eq(definitionRevisions.organizationId, context.organizationId),
+            )
+          : eq(definitionRevisions.id, id),
+      )
       .limit(1);
     return rows[0] ? definitionRevisionSchema.parse(rows[0]) : null;
   }
@@ -405,6 +430,7 @@ export class ExecutionStore {
     if (workItemId === dependsOnWorkItemId) {
       throw new Error("A work item cannot depend on itself");
     }
+    // ponytail: bounded O(n²) DAG validation; replace with a persisted closure/index if graph size matters.
     const items = await this.listWorkItems(organizationId);
     const child = items.find((item) => item.id === workItemId);
     const dependency = items.find((item) => item.id === dependsOnWorkItemId);
@@ -444,11 +470,21 @@ export class ExecutionStore {
     return executionWorkItemDependencySchema.parse(row);
   }
 
-  async listWorkItemDependencies(workItemId: string): Promise<ExecutionWorkItemDependency[]> {
+  async listWorkItemDependencies(
+    workItemId: string,
+    context?: ExecutionContext,
+  ): Promise<ExecutionWorkItemDependency[]> {
     const rows = await this.db
       .select()
       .from(executionWorkItemDependencies)
-      .where(eq(executionWorkItemDependencies.workItemId, workItemId));
+      .where(
+        context
+          ? and(
+              eq(executionWorkItemDependencies.workItemId, workItemId),
+              eq(executionWorkItemDependencies.organizationId, context.organizationId),
+            )
+          : eq(executionWorkItemDependencies.workItemId, workItemId),
+      );
     return rows.map((row) => executionWorkItemDependencySchema.parse(row));
   }
 
@@ -482,6 +518,7 @@ export class ExecutionStore {
     workItemId: string,
     status: ExecutionWorkItem["status"],
     options: { blockedReason?: string | null; retryAfter?: string | null } = {},
+    context?: ExecutionContext,
   ): Promise<ExecutionWorkItem> {
     await this.db
       .update(executionWorkItems)
@@ -491,17 +528,34 @@ export class ExecutionStore {
         retryAfter: options.retryAfter ?? null,
         updatedAt: now(),
       })
-      .where(eq(executionWorkItems.id, workItemId));
-    const updated = await this.getWorkItem(workItemId);
+      .where(
+        context
+          ? and(
+              eq(executionWorkItems.id, workItemId),
+              eq(executionWorkItems.organizationId, context.organizationId),
+            )
+          : eq(executionWorkItems.id, workItemId),
+      );
+    const updated = await this.getWorkItem(workItemId, context);
     if (!updated) throw new Error(`Work item ${workItemId} not found`);
     return updated;
   }
 
-  async getWorkItem(workItemId: string): Promise<ExecutionWorkItem | null> {
+  async getWorkItem(
+    workItemId: string,
+    context?: ExecutionContext,
+  ): Promise<ExecutionWorkItem | null> {
     const rows = await this.db
       .select()
       .from(executionWorkItems)
-      .where(eq(executionWorkItems.id, workItemId))
+      .where(
+        context
+          ? and(
+              eq(executionWorkItems.id, workItemId),
+              eq(executionWorkItems.organizationId, context.organizationId),
+            )
+          : eq(executionWorkItems.id, workItemId),
+      )
       .limit(1);
     const row = rows[0];
     if (!row) return null;
@@ -525,6 +579,8 @@ export class ExecutionStore {
       organizationId: input.organizationId,
       goalId: input.goalId,
       definitionRevisionId: input.definitionRevisionId,
+      processDefinitionHash: input.processDefinitionHash ?? null,
+      stateVersion: input.stateVersion ?? 0,
       sourceType: input.sourceType ?? null,
       sourceId: input.sourceId ?? null,
       status: input.status ?? "queued",
@@ -669,11 +725,21 @@ export class ExecutionStore {
     return row;
   }
 
-  async listAttemptsForWorkItem(workItemId: string): Promise<AgentAttempt[]> {
+  async listAttemptsForWorkItem(
+    workItemId: string,
+    context?: ExecutionContext,
+  ): Promise<AgentAttempt[]> {
     const rows = await this.db
       .select()
       .from(agentAttempts)
-      .where(eq(agentAttempts.workItemId, workItemId))
+      .where(
+        context
+          ? and(
+              eq(agentAttempts.workItemId, workItemId),
+              eq(agentAttempts.organizationId, context.organizationId),
+            )
+          : eq(agentAttempts.workItemId, workItemId),
+      )
       .orderBy(asc(agentAttempts.attemptNumber));
     return rows.map((row) => agentAttemptSchema.parse(row));
   }
@@ -1809,15 +1875,27 @@ export class ExecutionStore {
     if (["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(nextStatus)) {
       update.finishedAt = timestamp;
     }
-    await this.db.update(agentAttempts).set(update).where(eq(agentAttempts.id, attemptId));
+    const changed = await this.db
+      .update(agentAttempts)
+      .set(update)
+      .where(and(eq(agentAttempts.id, attemptId), eq(agentAttempts.status, current.status)))
+      .returning({ id: agentAttempts.id });
+    if (changed.length !== 1) throw new Error("stale agent attempt transition");
     return { ...current, ...update };
   }
 
-  async getAttempt(attemptId: string): Promise<AgentAttempt | null> {
+  async getAttempt(attemptId: string, context?: ExecutionContext): Promise<AgentAttempt | null> {
     const rows = await this.db
       .select()
       .from(agentAttempts)
-      .where(eq(agentAttempts.id, attemptId))
+      .where(
+        context
+          ? and(
+              eq(agentAttempts.id, attemptId),
+              eq(agentAttempts.organizationId, context.organizationId),
+            )
+          : eq(agentAttempts.id, attemptId),
+      )
       .limit(1);
     return rows[0] ? agentAttemptSchema.parse(rows[0]) : null;
   }

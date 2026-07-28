@@ -15,8 +15,7 @@
  *   - Job queue (Phase 4 — for now we use the wakeups table directly)
  */
 
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { AgentAttempt, ExecutionWorkItem } from "@aaspai/contracts/execution";
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
 import { resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
@@ -29,16 +28,19 @@ import {
   wakeups as wakeupsTable,
 } from "@aaspai/db";
 import {
+  AutonomousWorkExecutor,
   compileProfile,
   DependencyScheduler,
   ExecutionStore,
   HarnessExecutionPlanRunner,
+  LocalExecutionWorkspaceManager,
 } from "@aaspai/execution";
 import {
   FileAgentConfigSource,
   FileKnowledgeSource,
   FileLoopConfigSource,
 } from "@aaspai/file-loader";
+import { LocalGitRepository } from "@aaspai/git";
 import {
   KillSwitch,
   type LoopExecutionLineage,
@@ -86,6 +88,8 @@ export class WorkerDaemon {
   private readonly patternRegistry: PatternRegistry;
   private readonly executionStore: ExecutionStore;
   private readonly executionScheduler: DependencyScheduler;
+  private readonly autonomousExecutor: AutonomousWorkExecutor;
+  private readonly git = new LocalGitRepository();
   /** Test/legacy compatibility seam; production always has the durable runner. */
   private readonly legacySessionExecutor?: (request: Record<string, unknown>) => Promise<{
     sessionId?: string;
@@ -132,6 +136,7 @@ export class WorkerDaemon {
       maxProjectConcurrency: 1,
       retryDelayMs: 1_000,
     });
+    this.autonomousExecutor = new AutonomousWorkExecutor(this.executionStore);
 
     this.killSwitch = new KillSwitch();
     this.patternRegistry = new PatternRegistry();
@@ -527,16 +532,27 @@ export class WorkerDaemon {
           typeof metadata === "object" && metadata !== null && "decision" in metadata
             ? String((metadata as { decision?: unknown }).decision)
             : workItem.description;
-        const result = await this.executeDurableAttempt({
-          attempt,
-          workItem,
+        const result = await this.autonomousExecutor.execute({
+          organizationId: this.organizationId,
+          workflowRunId,
+          workItemId: workItem.id,
           agentId,
-          adapter,
-          prompt,
+          harness: adapter,
+          attempt,
+          runProvider: async () => {
+            const result = await this.executeDurableAttempt({
+              attempt,
+              workItem,
+              agentId,
+              adapter,
+              prompt,
+            });
+            return result.timedOut ? "timed_out" : result.exitCode === 0 ? "succeeded" : "failed";
+          },
         });
-        return result.timedOut ? "timed_out" : result.exitCode === 0 ? "succeeded" : "failed";
+        return result.attempt.status === "succeeded" ? "succeeded" : "failed";
       },
-      { maxTicks: 100 },
+      { maxTicks: 100, executorOwnsAttempt: true },
     );
   }
 
@@ -559,18 +575,41 @@ export class WorkerDaemon {
     const skillRegistry = persistedPlan
       ? null
       : await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
-    const root = resolve(process.env.AASPAI_WORKSPACE_ROOT ?? join("workspace", "worker"));
-    await mkdir(root, { recursive: true });
-    const workspacePath = await mkdtemp(join(root, `${input.attempt.id}-`));
-    const workspace = await this.executionStore.createWorkspace({
+    const repository = (
+      await getDefaultDb()
+        .db.select()
+        .from(repositories)
+        .where(
+          and(
+            eq(repositories.organizationId, this.organizationId),
+            eq(repositories.id, input.workItem.repositoryId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!repository) throw new Error(`Repository ${input.workItem.repositoryId} not found`);
+    const workspaceManager = new LocalExecutionWorkspaceManager(
+      this.git,
+      this.executionStore,
+      async (repositoryId) => {
+        if (repositoryId !== repository.id) throw new Error("repository scope mismatch");
+        return repository.localPath;
+      },
+    );
+    const sourceCommit =
+      input.workItem.sourceCommitSha && input.workItem.sourceCommitSha !== "0000000"
+        ? input.workItem.sourceCommitSha
+        : await this.git.resolveCommit(repository.localPath, repository.defaultBranch);
+    const workspace = await workspaceManager.prepare({
       organizationId: this.organizationId,
       attemptId: input.attempt.id,
-      repositoryId: input.workItem.repositoryId,
-      path: workspacePath,
+      repositoryId: repository.id,
+      repositoryPath: repository.localPath,
+      baseCommitSha: sourceCommit,
+      workspaceRoot: process.env.AASPAI_WORKSPACE_ROOT ?? join("workspace", "worker"),
       branchName: input.workItem.branchName ?? `worker/${input.attempt.id}`,
-      baseCommitSha: input.workItem.sourceCommitSha ?? "0000000",
-      status: "ready",
     });
+    const workspacePath = workspace.path;
     try {
       const materialization = await (skillRegistry ?? new SkillRegistry()).materialize(
         profile.skills.map((entry) => entry.skill),
@@ -584,9 +623,7 @@ export class WorkerDaemon {
       if (materialization.errors.length > 0)
         throw new Error(`Skill materialization failed: ${materialization.errors.join("; ")}`);
     } catch (error) {
-      await this.executionStore.updateWorkspaceStatus(workspace.id, "releasing");
-      await this.executionStore.updateWorkspaceStatus(workspace.id, "released");
-      await rm(workspacePath, { recursive: true, force: true });
+      await workspaceManager.release(workspace.id).catch(() => undefined);
       throw error;
     }
     const adapterConfig = profile.inputs.adapterConfig;
@@ -599,7 +636,7 @@ export class WorkerDaemon {
         attemptId: input.attempt.id,
         sourceSnapshot: {
           repositoryId: input.workItem.repositoryId,
-          commitSha: input.workItem.sourceCommitSha ?? "0000000",
+          commitSha: sourceCommit,
           branchName: input.workItem.branchName ?? "worker",
           capturedAt: new Date().toISOString(),
         },
@@ -622,9 +659,7 @@ export class WorkerDaemon {
         profile,
       });
     } finally {
-      await this.executionStore.updateWorkspaceStatus(workspace.id, "releasing");
-      await this.executionStore.updateWorkspaceStatus(workspace.id, "released");
-      await rm(workspacePath, { recursive: true, force: true });
+      await workspaceManager.release(workspace.id).catch(() => undefined);
     }
   }
 

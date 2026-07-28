@@ -13,6 +13,7 @@ export * from "./identity";
 export * from "./knowledge";
 export * from "./memory";
 export * from "./observability";
+export * from "./operator";
 export * from "./phase2";
 export * from "./primitives";
 export * from "./profile";
