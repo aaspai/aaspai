@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { DEFAULT_CONFIG_PATH } from "@aaspai/file-loader";
 /**
  * aaspai CLI — the user-facing surface.
  *
@@ -53,7 +54,7 @@ program
   .name("aaspai")
   .version(pkgVersion)
   .option("--cwd <path>", "working directory", process.cwd())
-  .option("--config <path>", "path to aaspai.config.ts", "./aaspai.config.ts")
+  .option("--config <path>", "path to aaspai.config.ts", DEFAULT_CONFIG_PATH)
   .option("--no-color", "disable colors")
   .hook("preAction", (thisCommand) => {
     const opts = thisCommand.opts<{ cwd?: string }>();

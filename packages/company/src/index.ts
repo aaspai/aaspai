@@ -822,8 +822,8 @@ function definitionTargetPath(proposal: AutonomyProposal): string {
   if (!slug || slug.includes("..") || slug.includes("\\") || slug.includes("/")) {
     throw new CompanyOperationsError("autonomy proposal target is not a safe definition id");
   }
-  if (proposal.targetType === "agent" && kind === "agent") return `agents/${slug}/AGENT.md`;
-  if (proposal.targetType === "loop" && kind === "loop") return `loops/${slug}/LOOP.md`;
+  if (proposal.targetType === "agent" && kind === "agent") return `.aaspai/agents/${slug}/AGENT.md`;
+  if (proposal.targetType === "loop" && kind === "loop") return `.aaspai/loops/${slug}/LOOP.md`;
   throw new CompanyOperationsError("autonomy proposal target does not match its definition type");
 }
 

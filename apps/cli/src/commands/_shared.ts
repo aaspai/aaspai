@@ -59,8 +59,7 @@ session database is the audit trail for prompts, results, and events.
 
 - Read \`STATE.md\`, the relevant agent definitions, and recent session history
   before acting on an existing task.
-- Keep configuration in versioned files under \`agents/\`, \`knowledge/\`, and
-  \`loops/\`. Keep runtime state under \`.aaspai/\`.
+- Keep configuration and runtime state under \`.aaspai/\`.
 - All agent execution and state changes go through the aaspai session/runtime
   APIs. Do not invent a second orchestration path.
 - Never put secrets in prompts, logs, commits, or agent files.
@@ -162,7 +161,7 @@ unless the recorded result or command output proves it.
 
 For every wake, including a Codex CLI session:
 
-1. Read \`AGENTS.md\`, \`STATE.md\`, and the relevant knowledge/agent files.
+1. Read \`.aaspai/AGENTS.md\`, \`STATE.md\`, and the relevant knowledge/agent files.
 2. Inspect recent sessions with \`aaspai session list\` and identify unfinished,
    failed, or blocked work.
 3. Inspect the repository status and current branch before proposing changes.
@@ -513,9 +512,9 @@ export default defineConfig({
     adapter: "claude_local",
     runtime: { kind: "local" },
   },
-  agents: { root: "./agents" },
-  knowledge: { root: "./knowledge" },
-  loops: { root: "./loops" },
+  agents: { root: "./.aaspai/agents" },
+  knowledge: { root: "./.aaspai/knowledge" },
+  loops: { root: "./.aaspai/loops" },
 });
 `,
   GITIGNORE_APPEND: `
@@ -527,5 +526,8 @@ export default defineConfig({
 .aaspai/views/
 .aaspai/events/
 .aaspai/tmp/
+.aaspai/*.pid
+.aaspai/*.log
+.aaspai/frontend-onboarding.json
 `,
 } as const;

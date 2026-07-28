@@ -15,7 +15,7 @@ const log = getLogger("file-loader.knowledge-source");
 
 /**
  * File-based `KnowledgeSource`. Reads OKF-compliant markdown files from
- * a knowledge directory (default `./knowledge`).
+ * a knowledge directory (default `./.aaspai/knowledge`).
  */
 export class FileKnowledgeSource implements KnowledgeSource {
   private readonly cache = new Map<string, Readonly<KnowledgeConcept>>();

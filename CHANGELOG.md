@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Organized `.aaspai/` workspace layout** — `aaspai init` now keeps
+  configuration, agent definitions, knowledge, loops, and runtime state under
+  `.aaspai/`. Existing root-level workspaces migrate automatically without
+  overwriting files already present at the destination.
 - **Layer Two execution evidence** (`packages/execution`, `packages/runtime`,
   `packages/harness`, `packages/sessions`) — plan-backed WorkItems now execute
   through real local, Docker, SSH, and Daytona runtime boundaries with durable

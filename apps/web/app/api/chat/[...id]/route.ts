@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
+import {
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_KNOWLEDGE_DIR,
+  FileAgentConfigSource,
+  FileKnowledgeSource,
+} from "@aaspai/file-loader";
 import { Sessions } from "@aaspai/sessions";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -43,8 +48,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const _model = body.model ?? agent.model ?? "default";
 
   const root = workspaceRoot();
-  const agentSource = new FileAgentConfigSource(join(root, "agents"));
-  const knowledgeSource = new FileKnowledgeSource(join(root, "knowledge"));
+  const agentSource = new FileAgentConfigSource(join(root, DEFAULT_AGENTS_DIR));
+  const knowledgeSource = new FileKnowledgeSource(join(root, DEFAULT_KNOWLEDGE_DIR));
   await agentSource.start();
   await knowledgeSource.start();
 

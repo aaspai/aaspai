@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { FileAgentConfigSource, FileKnowledgeSource } from "@aaspai/file-loader";
+import {
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_KNOWLEDGE_DIR,
+  FileAgentConfigSource,
+  FileKnowledgeSource,
+} from "@aaspai/file-loader";
 import { Sessions } from "@aaspai/sessions";
 import { loadSkillDirectory } from "@aaspai/skills";
 import { Command } from "commander";
@@ -9,9 +14,11 @@ export function sessionCommand(): Command {
   const cmd = new Command("session").description("Session operations");
 
   async function makeSessions(): Promise<Sessions> {
-    const agentSource = new FileAgentConfigSource(process.env.AASPAI_AGENTS_DIR ?? "./agents");
+    const agentSource = new FileAgentConfigSource(
+      process.env.AASPAI_AGENTS_DIR ?? DEFAULT_AGENTS_DIR,
+    );
     const knowledgeSource = new FileKnowledgeSource(
-      process.env.AASPAI_KNOWLEDGE_DIR ?? "./knowledge",
+      process.env.AASPAI_KNOWLEDGE_DIR ?? DEFAULT_KNOWLEDGE_DIR,
     );
     const skills = await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
     return new Sessions({ agentSource, knowledgeSource, skillRegistry: skills });

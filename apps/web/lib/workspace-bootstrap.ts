@@ -1,5 +1,12 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  AASPAI_DIR,
+  DEFAULT_AGENTS_DIR,
+  DEFAULT_JSON_CONFIG_PATH,
+  DEFAULT_KNOWLEDGE_DIR,
+  DEFAULT_LOOPS_DIR,
+} from "@aaspai/file-loader";
 import { workspaceRoot } from "./aaspai";
 
 export type FrontendWorkspaceOptions = {
@@ -62,17 +69,16 @@ export async function ensureFrontendWorkspace(
         ? new Date().toISOString()
         : (stored?.completedAt ?? ""),
   };
-  await mkdir(join(root, ".aaspai"), { recursive: true });
-  await mkdir(join(root, "projects"), { recursive: true });
-  await mkdir(join(root, "knowledge", "company"), { recursive: true });
-  await mkdir(join(root, "loops"), { recursive: true });
+  await mkdir(join(root, AASPAI_DIR), { recursive: true });
+  await mkdir(join(root, DEFAULT_KNOWLEDGE_DIR, "company"), { recursive: true });
+  await mkdir(join(root, DEFAULT_LOOPS_DIR), { recursive: true });
   await writeFile(
-    join(root, "aaspai.config.json"),
-    `${JSON.stringify({ database: { url: "sqlite:./.aaspai/state.db" }, organization: { id: "default", name: companyName }, agents: { root: "./agents" }, knowledge: { root: "./knowledge" }, loops: { root: "./loops" } }, null, 2)}\n`,
+    join(root, DEFAULT_JSON_CONFIG_PATH),
+    `${JSON.stringify({ database: { url: "sqlite:./.aaspai/state.db" }, organization: { id: "default", name: companyName }, agents: { root: "./.aaspai/agents" }, knowledge: { root: "./.aaspai/knowledge" }, loops: { root: "./.aaspai/loops" } }, null, 2)}\n`,
     "utf8",
   );
   await writeFile(
-    join(root, "AGENTS.md"),
+    join(root, AASPAI_DIR, "AGENTS.md"),
     `# ${companyName}\n\nThis company is operated through auditable aaspai goals, work items, and sessions.\n`,
     "utf8",
   );
@@ -85,7 +91,7 @@ export async function ensureFrontendWorkspace(
   }
   for (const [id, title, role, reportsTo, defaultAdapter] of agents) {
     const adapter = id === "ceo" ? onboarding.ceoProvider : defaultAdapter;
-    const directory = join(root, "agents", id);
+    const directory = join(root, DEFAULT_AGENTS_DIR, id);
     await mkdir(directory, { recursive: true });
     const body =
       id === "ceo"

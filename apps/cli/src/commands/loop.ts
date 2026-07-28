@@ -6,7 +6,7 @@ import {
   repositories,
 } from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
-import { FileLoopConfigSource } from "@aaspai/file-loader";
+import { DEFAULT_LOOPS_DIR, FileLoopConfigSource } from "@aaspai/file-loader";
 import {
   KillSwitch,
   LoopRunner,
@@ -23,7 +23,7 @@ export function loopCommand(): Command {
   const cmd = new Command("loop").description("Loop operations");
 
   function source(): FileLoopConfigSource {
-    return new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? "./loops");
+    return new FileLoopConfigSource(process.env.AASPAI_LOOPS_DIR ?? DEFAULT_LOOPS_DIR);
   }
 
   function registry(): PatternRegistry {

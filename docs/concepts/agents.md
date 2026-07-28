@@ -2,7 +2,7 @@
 
 An **agent** in aaspai is a role with a system prompt, a list of tools, a
 set of skills, and a scope of authority. Agents are defined as markdown
-files with YAML frontmatter, live in the `agents/` directory, and are
+files with YAML frontmatter, live in the `.aaspai/agents/` directory, and are
 **versioned in git**.
 
 ## Why files?
@@ -15,10 +15,10 @@ unchangeable without database access.
 
 ## Anatomy of an agent
 
-Every agent is a directory under `agents/<id>/` with these files:
+Every agent is a directory under `.aaspai/agents/<id>/` with these files:
 
 ```
-agents/
+.aaspai/agents/
 └── developer/
     ├── AGENT.md          # the agent's definition (frontmatter + markdown)
     ├── config.yaml       # adapterConfig + runtimeConfig (typed)
@@ -71,7 +71,7 @@ The important structural fields:
 | `reportsTo` / `manages` / `peers` | The org chart. The CEO/parent pattern uses these. |
 | `tools` | Allow/deny/require-approval list. Enforced by the runtime. |
 | `skills` | Skill references. Skills are versioned separately and pinned in `skills.lock.json`. |
-| `knowledge` | Glob include/exclude over the `knowledge/` directory. |
+| `knowledge` | Glob include/exclude over the `.aaspai/knowledge/` directory. |
 
 The body of `AGENT.md` is the system prompt. Anything you would put in a
 Claude Code or Codex system prompt goes here.

@@ -28,7 +28,7 @@ State lives in Postgres. Configuration lives in a git repository that
 the API and worker mount as a read-only volume.
 
 ```
-/etc/aaspai/
+/etc/aaspai/.aaspai/
 ├── aaspai.config.ts     # the project config
 ├── agents/              # versioned in git
 ├── knowledge/           # versioned in git
@@ -44,7 +44,7 @@ yarn workspace @aaspai/db start migrate
 
 ## Configuration
 
-`aaspai.config.ts` is the project-level config. It declares:
+`.aaspai/aaspai.config.ts` is the project-level config. It declares:
 
 - Where to find agents, knowledge, and loops (the `file-loader`
   sources).
