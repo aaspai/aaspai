@@ -41,4 +41,43 @@ describe("runProcess cancellation", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("shim works");
   });
+
+  it("can run with an explicit environment without inheriting worker secrets", async () => {
+    process.env.AASPAI_TEST_WORKER_SECRET = "worker-only";
+    try {
+      const result = await runProcess({
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write(JSON.stringify({secret:process.env.AASPAI_TEST_WORKER_SECRET,token:process.env.AASPAI_ATTEMPT_TOKEN,path:Boolean(process.env.PATH ?? process.env.Path)}))",
+        ],
+        env: {
+          AASPAI_ATTEMPT_TOKEN: "ephemeral",
+          ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+          ...(process.env.Path ? { Path: process.env.Path } : {}),
+        },
+        inheritEnv: false,
+      });
+
+      expect(JSON.parse(result.stdout)).toEqual({
+        token: "ephemeral",
+        path: true,
+      });
+    } finally {
+      delete process.env.AASPAI_TEST_WORKER_SECRET;
+    }
+  });
+
+  it("keeps environment inheritance as the direct-process default", async () => {
+    process.env.AASPAI_TEST_DIRECT_ENV = "inherited";
+    try {
+      const result = await runProcess({
+        command: process.execPath,
+        args: ["-e", "process.stdout.write(process.env.AASPAI_TEST_DIRECT_ENV ?? '')"],
+      });
+      expect(result.stdout).toBe("inherited");
+    } finally {
+      delete process.env.AASPAI_TEST_DIRECT_ENV;
+    }
+  });
 });

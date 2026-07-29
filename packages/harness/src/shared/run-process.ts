@@ -75,9 +75,18 @@ function resolveWindowsCommand(
  */
 export async function runProcess(options: RunProcessOptions): Promise<RunProcessResult> {
   const startedAt = new Date();
-  const { command, args, cwd, env: envOverrides, stdin, timeoutMs, signal: abortSignal } = options;
+  const {
+    command,
+    args,
+    cwd,
+    env: envOverrides,
+    inheritEnv,
+    stdin,
+    timeoutMs,
+    signal: abortSignal,
+  } = options;
   const workingDir = cwd ?? process.cwd();
-  const env = { ...process.env, ...(envOverrides ?? {}) };
+  const env = { ...(inheritEnv === false ? {} : process.env), ...(envOverrides ?? {}) };
   const resolved = resolveWindowsCommand(command, args, env);
 
   // On Windows, `spawn` can't directly execute a `.cmd` (or `.bat`)

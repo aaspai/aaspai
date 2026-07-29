@@ -6,7 +6,7 @@ import type { DbHandle } from "@aaspai/db";
 import { createDb, runMigrations, sessionEvents } from "@aaspai/db";
 import { asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { HarnessExecutionPlanRunner } from "../src/harness-runner";
+import { assertRuntimeIdentity, HarnessExecutionPlanRunner } from "../src/harness-runner";
 import { ExecutionStore } from "../src/store";
 
 describe("HarnessExecutionPlanRunner", () => {
@@ -27,6 +27,7 @@ describe("HarnessExecutionPlanRunner", () => {
     await handle.close();
     delete process.env.AASPAI_DB;
     delete process.env.OPENCODE_CLI;
+    delete process.env.AASPAI_TEST_WORKER_SECRET;
     await rm(testDirectory, { recursive: true, force: true });
   });
 
@@ -79,9 +80,10 @@ describe("HarnessExecutionPlanRunner", () => {
   it("runs opencode_cli in the assigned workspace and preserves its provider session ID", async () => {
     const attemptId = "attempt_opencode_fixture";
     const workspace = await makeAttemptAndWorkspace(attemptId, "opencode_cli");
+    process.env.AASPAI_TEST_WORKER_SECRET = "worker-only";
     const fixtureCode = [
       "const emit = (value) => console.log(JSON.stringify(value));",
-      "require('node:fs').writeFileSync('credential-seen.txt', String(Boolean(process.env.AASPAI_ATTEMPT_TOKEN)));",
+      "require('node:fs').writeFileSync('environment-seen.json', JSON.stringify({token:process.env.AASPAI_ATTEMPT_TOKEN,secret:process.env.AASPAI_TEST_WORKER_SECRET,path:Boolean(process.env.PATH ?? process.env.Path)}));",
       'emit({ type: "session.created", sessionID: "oc_fixture" });',
       'emit({ type: "text", sessionID: "oc_fixture", part: { type: "text", text: `cwd=${process.cwd()}` } });',
       'emit({ type: "step_finish", sessionID: "oc_fixture", part: { tokens: { input: 3, output: 4 }, cost: 0 } });',
@@ -102,11 +104,13 @@ describe("HarnessExecutionPlanRunner", () => {
       },
       ephemeralEnv: { AASPAI_ATTEMPT_TOKEN: "short-lived-test-token" },
       onExecuted: async () => {
-        expect(
-          await import("node:fs/promises").then((fs) =>
-            fs.readFile(path.join(workspace.path, "credential-seen.txt"), "utf8"),
-          ),
-        ).toBe("true");
+        const seen = await import("node:fs/promises").then((fs) =>
+          fs.readFile(path.join(workspace.path, "environment-seen.json"), "utf8"),
+        );
+        expect(JSON.parse(seen)).toEqual({
+          token: "short-lived-test-token",
+          path: true,
+        });
       },
     });
 
@@ -177,6 +181,42 @@ describe("HarnessExecutionPlanRunner", () => {
       releasedAt: null,
     };
   }
+});
+
+describe("assertRuntimeIdentity", () => {
+  it("accepts the selected local workspace", () => {
+    expect(() =>
+      assertRuntimeIdentity({ kind: "local", envPassthrough: false }, "F:/workspace", {
+        kind: "local",
+        cwd: "F:/workspace",
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects a different runtime kind", () => {
+    expect(() =>
+      assertRuntimeIdentity({ kind: "local", envPassthrough: false }, "F:/workspace", {
+        kind: "docker",
+        cwd: "/workspace",
+        containerId: "container-1",
+      }),
+    ).toThrow(/requested local, got docker/);
+  });
+
+  it("rejects a sandbox from a different provider", () => {
+    expect(() =>
+      assertRuntimeIdentity(
+        { kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" },
+        "F:/workspace",
+        {
+          kind: "sandbox",
+          cwd: "/workspace",
+          remoteCwd: "/workspace",
+          connectionIdentity: "e2b:lease-1",
+        },
+      ),
+    ).toThrow(/sandbox target/);
+  });
 });
 
 function planFor(attemptId: string, harness: string): ExecutionPlan {

@@ -76,6 +76,8 @@ export const runProcessOptionsSchema = z
     args: z.array(z.string().max(4_096)).max(256).default([]),
     cwd: z.string().trim().min(1).max(8_192).optional(),
     env: z.record(z.string(), z.string()).optional(),
+    /** Inherit the host process environment. Governed execution disables this. */
+    inheritEnv: z.boolean().optional(),
     stdin: z
       .string()
       .max(16 * 1024 * 1024)
