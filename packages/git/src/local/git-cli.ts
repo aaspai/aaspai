@@ -108,8 +108,8 @@ export class LocalGitRepository implements GitRepository {
     return await this.resolveCommit(path);
   }
 
-  async diff(path: string): Promise<string> {
-    return await this.output(["diff", "HEAD"], path);
+  async diff(path: string, fromRef = "HEAD", toRef?: string): Promise<string> {
+    return await this.output(["diff", "--binary", fromRef, ...(toRef ? [toRef] : [])], path);
   }
 
   async push(path: string, remote: string, branchName: string): Promise<void> {

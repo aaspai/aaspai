@@ -30,6 +30,7 @@ export abstract class SdkSandboxDriver<TRawSandbox> implements SandboxDriver {
   protected abstract createSandbox(input: {
     remoteCwd: string;
     timeoutMs?: number;
+    reuseLease?: boolean;
   }): Promise<{ raw: TRawSandbox; remoteCwd: string; metadata: Record<string, unknown> }>;
 
   /**
@@ -63,10 +64,14 @@ export abstract class SdkSandboxDriver<TRawSandbox> implements SandboxDriver {
 
   // ───── public API ─────
 
-  async acquire(remoteCwd: string, options?: { timeoutMs?: number }): Promise<SandboxLease> {
+  async acquire(
+    remoteCwd: string,
+    options?: { timeoutMs?: number; reuseLease?: boolean },
+  ): Promise<SandboxLease> {
     const created = await this.createSandbox({
       remoteCwd,
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options?.reuseLease !== undefined ? { reuseLease: options.reuseLease } : {}),
     });
     const providerLeaseId = this.leaseId(created.raw);
     this.activeLeases.set(providerLeaseId, created.raw);
@@ -77,11 +82,10 @@ export abstract class SdkSandboxDriver<TRawSandbox> implements SandboxDriver {
     };
   }
 
-  async resume(providerLeaseId: string): Promise<SandboxLease | null> {
+  async resume(providerLeaseId: string, remoteCwd = "/"): Promise<SandboxLease | null> {
     const raw = await this.reconnect(providerLeaseId);
     if (!raw) return null;
     this.activeLeases.set(providerLeaseId, raw);
-    const remoteCwd = ((raw as { workingDir?: string }).workingDir ?? "/") as string;
     return {
       providerLeaseId,
       remoteCwd,

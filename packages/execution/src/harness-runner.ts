@@ -30,6 +30,10 @@ export interface ExecuteHarnessPlanInput {
   agent?: HarnessAgentInput;
   profile?: ResolvedAgentProfile;
   signal?: AbortSignal;
+  /** Runtime-only credentials. Never persisted in the plan or session config. */
+  ephemeralEnv?: Record<string, string>;
+  /** Persist restored workspace output before the attempt becomes terminal. */
+  onExecuted?: (result: AdapterExecutionResult) => Promise<void>;
 }
 
 /** Executes a persisted plan through a registered provider adapter. */
@@ -162,6 +166,7 @@ export class HarnessExecutionPlanRunner {
             const result = await target.run(targetInput, {
               ...options,
               cwd: input.workspace.path,
+              env: { ...options.env, ...input.ephemeralEnv },
               timeoutMs:
                 options.timeoutMs === undefined || input.plan.timeoutMs === null
                   ? (options.timeoutMs ?? undefined)
@@ -232,6 +237,13 @@ export class HarnessExecutionPlanRunner {
       };
     }
 
+    if (input.onExecuted) {
+      try {
+        await input.onExecuted(result);
+      } catch (error) {
+        persistenceFailure = error instanceof Error ? error : new Error(String(error));
+      }
+    }
     if (persistenceFailure) {
       result = {
         ...result,

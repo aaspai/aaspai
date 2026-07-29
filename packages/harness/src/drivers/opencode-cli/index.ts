@@ -495,7 +495,10 @@ function buildOpencodeJson(config: ResolvedConfig): Record<string, unknown> {
  *   - extraEnv: env vars to merge (XDG_CONFIG_HOME, OPENCODE_*)
  *   - cleanup(): removes any temp file we wrote
  */
-function prepareConfigInjection(config: ResolvedConfig): {
+function prepareConfigInjection(
+  config: ResolvedConfig,
+  inline = false,
+): {
   extraEnv: Record<string, string>;
   cleanup: () => void;
 } {
@@ -506,7 +509,12 @@ function prepareConfigInjection(config: ResolvedConfig): {
   const jsonDoc = buildOpencodeJson(config);
   const hasJson = Object.keys(jsonDoc).length > 0;
   const hasMcp = Object.keys(config.mcpServers).length > 0;
-  if (hasJson || hasMcp || config.xdgConfigHome) {
+  if (inline && (hasJson || hasMcp)) {
+    extraEnv.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+      ...jsonDoc,
+      ...(hasMcp ? { mcp: config.mcpServers } : {}),
+    });
+  } else if (hasJson || hasMcp || config.xdgConfigHome) {
     const base = config.xdgConfigHome
       ? config.xdgConfigHome
       : join(tmpdir(), `aaspai-opencode-cfg-${randomUUID()}`);
@@ -692,7 +700,7 @@ async function runOpencodeCli(
     args.push(prompt);
   }
 
-  const { extraEnv, cleanup } = prepareConfigInjection(config);
+  const { extraEnv, cleanup } = prepareConfigInjection(config, Boolean(options.execution));
 
   if (options.execution) {
     try {
@@ -700,7 +708,10 @@ async function runOpencodeCli(
         cli,
         args,
         cwd: workdir,
-        env: { ...process.env, ...extraEnv } as Record<string, string>,
+        // The runtime owns its base environment and credential transport.
+        // Forwarding the worker host environment leaks unrelated secrets and
+        // sends unusable host PATH/HOME values into remote Linux runtimes.
+        env: extraEnv,
         signal,
         onLog,
         execution: options.execution,

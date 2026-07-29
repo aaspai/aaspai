@@ -35,6 +35,7 @@
     "test": "vitest run",
     "test:real": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real.ts",
     "test:real:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-daytona-real.ts",
+    "snapshot:daytona": "node ../../node_modules/tsx/dist/cli.mjs scripts/create-daytona-snapshot.ts",
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {

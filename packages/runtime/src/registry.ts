@@ -46,6 +46,7 @@ function capabilitiesFor(info: RuntimeTargetInfo): ProviderCapabilities {
       artifacts: false,
     };
   }
+  if (info.capabilities) return info.capabilities;
   return {
     execute: true,
     streaming: true,

@@ -22,7 +22,7 @@ const DAYTONA_CAPABILITIES: ProviderCapabilities = {
   workspaceIsolation: true,
   restore: true,
   resume: true,
-  artifacts: true,
+  artifacts: false,
   billing: "metered_api",
 };
 

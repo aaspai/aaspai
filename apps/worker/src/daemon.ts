@@ -15,7 +15,9 @@
  *   - Job queue (Phase 4 — for now we use the wakeups table directly)
  */
 
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AgentAttempt, ExecutionWorkItem } from "@aaspai/contracts/execution";
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
 import { resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
@@ -76,6 +78,121 @@ function safeJsonParse(s: string | null): unknown {
   } catch {
     return null;
   }
+}
+
+const ARTIFACT_KINDS = new Set([
+  "diff",
+  "patch",
+  "log",
+  "transcript",
+  "test_result",
+  "result",
+  "other",
+] as const);
+
+interface DeclaredArtifact {
+  path: string;
+  kind: "diff" | "patch" | "log" | "transcript" | "test_result" | "result" | "other";
+  mediaType: string;
+}
+
+interface AttemptCredential {
+  id: string;
+  token: string;
+  expiresAt: string;
+}
+
+function declaredArtifacts(metadata: unknown): DeclaredArtifact[] {
+  const value =
+    metadata && typeof metadata === "object"
+      ? (metadata as { declaredArtifacts?: unknown }).declaredArtifacts
+      : undefined;
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 32) {
+    throw new Error("metadata.declaredArtifacts must be an array of at most 32 files");
+  }
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`Declared artifact ${index} must be an object`);
+    }
+    const item = entry as { path?: unknown; kind?: unknown; mediaType?: unknown };
+    if (typeof item.path !== "string" || !item.path.trim() || item.path.length > 8_192) {
+      throw new Error(`Declared artifact ${index} has an invalid path`);
+    }
+    const kind = item.kind ?? "result";
+    if (typeof kind !== "string" || !ARTIFACT_KINDS.has(kind as DeclaredArtifact["kind"])) {
+      throw new Error(`Declared artifact ${index} has an invalid kind`);
+    }
+    if (
+      item.mediaType !== undefined &&
+      (typeof item.mediaType !== "string" || !item.mediaType.trim() || item.mediaType.length > 256)
+    ) {
+      throw new Error(`Declared artifact ${index} has an invalid mediaType`);
+    }
+    return {
+      path: item.path,
+      kind: kind as DeclaredArtifact["kind"],
+      mediaType:
+        item.mediaType ??
+        (extname(item.path).toLowerCase() === ".html"
+          ? "text/html"
+          : extname(item.path).toLowerCase() === ".css"
+            ? "text/css"
+            : "application/octet-stream"),
+    };
+  });
+}
+
+async function issueAttemptCredential(
+  organizationId: string,
+  attemptId: string,
+): Promise<AttemptCredential | null> {
+  const baseUrl = process.env.AASPAI_GATEWAY_CONTROL_URL?.replace(/\/+$/, "");
+  const controlToken = process.env.AASPAI_GATEWAY_CONTROL_TOKEN;
+  if (!baseUrl && !controlToken) return null;
+  if (!baseUrl || !controlToken) {
+    throw new Error(
+      "Both AASPAI_GATEWAY_CONTROL_URL and AASPAI_GATEWAY_CONTROL_TOKEN are required",
+    );
+  }
+  const response = await fetch(`${baseUrl}/v1/attempt-credentials`, {
+    method: "POST",
+    signal: AbortSignal.timeout(10_000),
+    headers: {
+      authorization: `Bearer ${controlToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ organizationId, attemptId }),
+  });
+  if (!response.ok) throw new Error(`Credential gateway issue failed (${response.status})`);
+  const value = (await response.json()) as Partial<AttemptCredential>;
+  if (
+    typeof value.id !== "string" ||
+    !value.id ||
+    typeof value.token !== "string" ||
+    !value.token ||
+    typeof value.expiresAt !== "string" ||
+    !Number.isFinite(Date.parse(value.expiresAt)) ||
+    Date.parse(value.expiresAt) <= Date.now()
+  ) {
+    throw new Error("Credential gateway returned an invalid attempt credential");
+  }
+  return value as AttemptCredential;
+}
+
+async function revokeAttemptCredential(credential: AttemptCredential): Promise<void> {
+  const baseUrl = process.env.AASPAI_GATEWAY_CONTROL_URL?.replace(/\/+$/, "");
+  const controlToken = process.env.AASPAI_GATEWAY_CONTROL_TOKEN;
+  if (!baseUrl || !controlToken) throw new Error("Credential gateway control config disappeared");
+  const response = await fetch(
+    `${baseUrl}/v1/attempt-credentials/${encodeURIComponent(credential.id)}`,
+    {
+      method: "DELETE",
+      signal: AbortSignal.timeout(10_000),
+      headers: { authorization: `Bearer ${controlToken}` },
+    },
+  );
+  if (!response.ok) throw new Error(`Credential gateway revoke failed (${response.status})`);
 }
 
 export class WorkerDaemon {
@@ -615,6 +732,7 @@ export class WorkerDaemon {
       branchName: input.workItem.branchName ?? `worker/${input.attempt.id}`,
     });
     const workspacePath = workspace.path;
+    const materializedPaths: string[] = [];
     try {
       const materialization = await (skillRegistry ?? new SkillRegistry()).materialize(
         profile.skills.map((entry) => entry.skill),
@@ -627,45 +745,147 @@ export class WorkerDaemon {
       );
       if (materialization.errors.length > 0)
         throw new Error(`Skill materialization failed: ${materialization.errors.join("; ")}`);
+      materializedPaths.push(...materialization.written, ...materialization.symlinked);
     } catch (error) {
       await workspaceManager.release(workspace.id).catch(() => undefined);
       throw error;
     }
-    const adapterConfig = profile.inputs.adapterConfig;
-    const plan =
-      persistedPlan ??
-      (await this.executionStore.createPlan({
-        organizationId: this.organizationId,
-        definitionRevisionId: input.workItem.definitionRevisionId ?? "revision:missing",
-        workItemId: input.workItem.id,
-        attemptId: input.attempt.id,
-        sourceSnapshot: {
-          repositoryId: input.workItem.repositoryId,
-          commitSha: sourceCommit,
-          branchName: input.workItem.branchName ?? "worker",
-          capturedAt: new Date().toISOString(),
-        },
-        target: {
-          ...profile.runtime.target,
-          ...(profile.runtime.target.kind === "local" ? { cwd: workspacePath } : {}),
-        },
-        harness: input.adapter,
-        agentId: input.agentId,
-        idempotencyKey: input.attempt.id,
-        prompt: input.prompt,
-        harnessConfig: adapterConfig,
-        runtimeConfig: { workspacePolicy: "disposable" },
-        profile,
-      }));
+    const adapterConfig = {
+      ...profile.inputs.adapterConfig,
+      ...(input.adapter === "opencode_cli" &&
+      profile.skills.length > 0 &&
+      !Array.isArray(profile.inputs.adapterConfig.skillsPaths)
+        ? { skillsPaths: [".opencode_cli/skills"] }
+        : {}),
+    };
+    let credential: AttemptCredential | null = null;
+    let credentialRevoked = false;
     try {
+      const plan =
+        persistedPlan ??
+        (await this.executionStore.createPlan({
+          organizationId: this.organizationId,
+          definitionRevisionId: input.workItem.definitionRevisionId ?? "revision:missing",
+          workItemId: input.workItem.id,
+          attemptId: input.attempt.id,
+          sourceSnapshot: {
+            repositoryId: input.workItem.repositoryId,
+            commitSha: sourceCommit,
+            branchName: input.workItem.branchName ?? "worker",
+            capturedAt: new Date().toISOString(),
+          },
+          target: {
+            ...profile.runtime.target,
+            ...(profile.runtime.target.kind === "local" ? { cwd: workspacePath } : {}),
+          },
+          harness: input.adapter,
+          agentId: input.agentId,
+          idempotencyKey: input.attempt.id,
+          prompt: input.prompt,
+          harnessConfig: adapterConfig,
+          runtimeConfig: { workspacePolicy: "disposable" },
+          profile,
+        }));
+      credential = await issueAttemptCredential(this.organizationId, input.attempt.id);
+
       return await new HarnessExecutionPlanRunner(this.executionStore).run({
         plan,
         workspace: { ...workspace, status: "ready" },
         profile,
+        ...(credential ? { ephemeralEnv: { AASPAI_ATTEMPT_TOKEN: credential.token } } : {}),
+        onExecuted: async (result) => {
+          if (credential) {
+            await revokeAttemptCredential(credential);
+            credentialRevoked = true;
+          }
+          await Promise.all(
+            materializedPaths.map((path) => rm(path, { recursive: true, force: true })),
+          );
+          await this.persistAttemptOutput({
+            result,
+            attempt: input.attempt,
+            workItem: input.workItem,
+            workspacePath,
+            sourceCommit,
+          });
+        },
       });
     } finally {
+      if (credential && !credentialRevoked) {
+        await revokeAttemptCredential(credential).catch((error) =>
+          log.error("attempt credential revocation failed", {
+            attemptId: input.attempt.id,
+            err: String(error),
+          }),
+        );
+      }
       await workspaceManager.release(workspace.id).catch(() => undefined);
     }
+  }
+
+  private async persistAttemptOutput(input: {
+    result: AdapterExecutionResult;
+    attempt: AgentAttempt;
+    workItem: ExecutionWorkItem;
+    workspacePath: string;
+    sourceCommit: string;
+  }): Promise<void> {
+    const successful = input.result.exitCode === 0 && !input.result.timedOut;
+    const commit = successful
+      ? await this.git.commit(input.workspacePath, `aaspai attempt ${input.attempt.id}`)
+      : null;
+    const head = commit ?? (await this.git.resolveCommit(input.workspacePath));
+    const patch = await this.git.diff(input.workspacePath, input.sourceCommit, head);
+    const attemptRoot = resolve(
+      process.env.AASPAI_ARTIFACTS_ROOT ?? join(".aaspai", "artifacts"),
+      input.attempt.id,
+    );
+    await mkdir(attemptRoot, { recursive: true });
+    if (patch) {
+      const patchPath = join(attemptRoot, "changes.patch");
+      await writeFile(patchPath, patch, "utf8");
+      await this.recordArtifact(input.attempt.id, "patch", patchPath, "text/x-diff");
+    }
+
+    const workspaceRoot = await realpath(input.workspacePath);
+    for (const declaration of declaredArtifacts(input.workItem.metadata)) {
+      if (isAbsolute(declaration.path)) throw new Error("Declared artifact path must be relative");
+      const source = await realpath(resolve(workspaceRoot, declaration.path));
+      const safePath = relative(workspaceRoot, source);
+      if (!safePath || safePath.startsWith("..") || isAbsolute(safePath)) {
+        throw new Error(`Declared artifact escapes the workspace: ${declaration.path}`);
+      }
+      if (!(await stat(source)).isFile()) {
+        throw new Error(`Declared artifact is not a file: ${declaration.path}`);
+      }
+      const destination = join(attemptRoot, "files", safePath);
+      await mkdir(resolve(destination, ".."), { recursive: true });
+      await copyFile(source, destination);
+      await this.recordArtifact(
+        input.attempt.id,
+        declaration.kind,
+        destination,
+        declaration.mediaType,
+      );
+    }
+  }
+
+  private async recordArtifact(
+    attemptId: string,
+    kind: DeclaredArtifact["kind"],
+    path: string,
+    mediaType: string,
+  ): Promise<void> {
+    const bytes = await readFile(path);
+    await this.executionStore.createArtifact({
+      organizationId: this.organizationId,
+      attemptId,
+      kind,
+      path,
+      mediaType,
+      sizeBytes: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
   }
 
   private async compileAutonomousProfile(input: {

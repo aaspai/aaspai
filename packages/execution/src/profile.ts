@@ -38,7 +38,8 @@ export interface CompileProfileInput {
 export async function compileProfile(input: CompileProfileInput): Promise<ResolvedAgentProfile> {
   const agent = await input.agentSource.get(input.agentId);
   const adapter = input.adapter ?? agent.adapter;
-  const adapterInfo = getAdapter(adapter as never).info;
+  const adapterModule = getAdapter(adapter as never);
+  const adapterInfo = adapterModule.info;
   if (adapterInfo.status !== "ready") throw new Error(`Harness ${adapter} is unavailable`);
 
   const target = resolveAgentTarget(agent, input.target);
@@ -59,7 +60,15 @@ export async function compileProfile(input: CompileProfileInput): Promise<Resolv
       throw new Error(`Knowledge concept not found: ${ref}`);
     }
   }
-  const toolDecisions = resolveTools(agent, input.toolRegistry);
+  const adapterDescription = await (
+    adapterModule as typeof adapterModule & {
+      describe?: () => Promise<{ nativeTools?: string[] }> | { nativeTools?: string[] };
+    }
+  ).describe?.();
+  const nativeTools = new Set<string>(
+    (adapterDescription?.nativeTools ?? []).map((name: string) => name.toLowerCase()),
+  );
+  const toolDecisions = resolveTools(agent, input.toolRegistry, nativeTools);
   const unresolved = toolDecisions.find((decision) => !decision.allowed || !decision.ready);
   if (unresolved) {
     throw new Error(
@@ -148,13 +157,27 @@ async function resolveSkills(agent: AgentConfig, registry: SkillRegistry, adapte
   return result.sort((a, b) => `${a.key}@${a.version}`.localeCompare(`${b.key}@${b.version}`));
 }
 
-function resolveTools(agent: AgentConfig, registry: ToolRegistry): ResolvedAgentProfile["tools"] {
+function resolveTools(
+  agent: AgentConfig,
+  registry: ToolRegistry,
+  nativeTools: ReadonlySet<string>,
+): ResolvedAgentProfile["tools"] {
   const config = agent.tools as { allow?: unknown; deny?: unknown; require_approval_for?: unknown };
   const allow = stringArray(config.allow);
   const deny = new Set(stringArray(config.deny));
   const approval = new Set(stringArray(config.require_approval_for));
-  const names = allow.length > 0 ? allow : registry.list().map((tool) => tool.name);
+  const names = allow;
   return names.sort().map((name) => {
+    if (nativeTools.has(name.toLowerCase())) {
+      return {
+        name,
+        allowed: !deny.has(name),
+        ready: true,
+        denialReason: deny.has(name) ? "tool denied by policy" : undefined,
+        requiresApproval: approval.has(name),
+        tool: { name, description: "Harness-native tool", risk: "safe" },
+      };
+    }
     const tool = registry.get(name);
     if (!tool)
       return {

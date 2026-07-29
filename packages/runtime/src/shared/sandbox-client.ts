@@ -30,9 +30,12 @@ export interface SandboxLease {
 
 export interface SandboxDriver {
   /** Acquire a new lease. Returns the lease descriptor. */
-  acquire(remoteCwd: string, options?: { timeoutMs?: number }): Promise<SandboxLease>;
+  acquire(
+    remoteCwd: string,
+    options?: { timeoutMs?: number; reuseLease?: boolean },
+  ): Promise<SandboxLease>;
   /** Reconnect to an existing lease by providerLeaseId. Returns null if expired. */
-  resume(providerLeaseId: string): Promise<SandboxLease | null>;
+  resume(providerLeaseId: string, remoteCwd?: string): Promise<SandboxLease | null>;
   /** Release the lease — pause if reuseLease, destroy otherwise. */
   release(lease: SandboxLease, options?: { reuseLease?: boolean }): Promise<void>;
   /** Force-destroy the lease, ignoring reuseLease. */
