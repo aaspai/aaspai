@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ExecutionPlan, ExecutionWorkspace } from "@aaspai/contracts/execution";
 import type {
   AdapterExecutionContext,
@@ -8,6 +9,7 @@ import type {
 import { adapterTypeSchema, HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
 import type { JsonObject } from "@aaspai/contracts/primitives";
 import { type ResolvedAgentProfile, resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
+import type { ExecutionTarget, RunProcessResult } from "@aaspai/contracts/runtime";
 import { getAdapter } from "@aaspai/harness";
 import { resolveTarget } from "@aaspai/runtime";
 import { assertHarnessExecutable, assertRuntimeReady } from "./capabilities.js";
@@ -179,7 +181,12 @@ export class HarnessExecutionPlanRunner {
             const result = await target.run(targetInput, {
               ...options,
               cwd: input.workspace.path,
-              env: { ...options.env, ...input.ephemeralEnv },
+              env: {
+                ...managedEnvironmentBaseline(input.plan.target.kind),
+                ...managedAdapterEnvironment(options.env, adapterConfig),
+                ...input.ephemeralEnv,
+              },
+              inheritEnv: false,
               timeoutMs:
                 options.timeoutMs === undefined || input.plan.timeoutMs === null
                   ? (options.timeoutMs ?? undefined)
@@ -200,6 +207,7 @@ export class HarnessExecutionPlanRunner {
                 await options.onLog?.(stream, chunk);
               },
             });
+            assertRuntimeIdentity(input.plan.target, input.workspace.path, result.runtimeIdentity);
             actualRuntimeIdentity = result.runtimeIdentity;
             return result;
           },
@@ -247,6 +255,21 @@ export class HarnessExecutionPlanRunner {
         summary: "Harness adapter execution failed",
         usageBasis: "per_run",
         clearSession: false,
+      };
+    }
+
+    if (
+      result.exitCode === 0 &&
+      requiresRuntimeExecution(adapterType) &&
+      actualRuntimeIdentity === undefined
+    ) {
+      result = {
+        ...result,
+        exitCode: 1,
+        errorCode: "runtime_identity_missing",
+        errorFamily: "internal",
+        errorMessage: "Managed adapter did not execute through the selected runtime",
+        summary: "Managed runtime execution was not observed",
       };
     }
 
@@ -310,6 +333,164 @@ export class HarnessExecutionPlanRunner {
       throw new Error(`Execution workspace is not ready: ${input.workspace.status}`);
     }
   }
+}
+
+const MANAGED_ENV_BASELINE_KEYS = [
+  "PATH",
+  "Path",
+  "PATHEXT",
+  "SystemRoot",
+  "WINDIR",
+  "ComSpec",
+  "HOME",
+  "USERPROFILE",
+  "TMP",
+  "TEMP",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "TERM",
+  "SHELL",
+] as const;
+
+const MANAGED_AGENT_ENV_KEYS = new Set([
+  "AASPAI_AGENT_ID",
+  "AASPAI_ORGANIZATION_ID",
+  "AASPAI_AGENT_NAME",
+  "AASPAI_ADAPTER_TYPE",
+  "AASPAI_RUN_ID",
+  "AASPAI_SESSION_ID",
+  "AASPAI_SESSION_DISPLAY_ID",
+  "AASPAI_CWD",
+  "AASPAI_PROTOCOL_VERSION",
+]);
+
+const MANAGED_OPENCODE_ENV_KEYS = new Set([
+  "XDG_CONFIG_HOME",
+  "OPENCODE_CONFIG",
+  "OPENCODE_CONFIG_CONTENT",
+  "OPENCODE_DISABLE_PROJECT_CONFIG",
+  "OPENCODE_ALLOW_ALL_MODELS",
+  "OPENCODE_SERVER_PASSWORD",
+  "OPENCODE_SERVER_USERNAME",
+  "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+  "OPENCODE_PURE",
+  "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+  "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+]);
+
+function managedEnvironmentBaseline(kind: ExecutionTarget["kind"]): Record<string, string> {
+  if (kind !== "local") return {};
+  return Object.fromEntries(
+    MANAGED_ENV_BASELINE_KEYS.flatMap((key) => {
+      const value = process.env[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  );
+}
+
+function managedAdapterEnvironment(
+  candidate: Record<string, string> | undefined,
+  adapterConfig: JsonObject,
+): Record<string, string> {
+  const configured =
+    typeof adapterConfig.env === "object" &&
+    adapterConfig.env !== null &&
+    !Array.isArray(adapterConfig.env)
+      ? new Set(Object.keys(adapterConfig.env))
+      : new Set<string>();
+  return Object.fromEntries(
+    Object.entries(candidate ?? {}).filter(
+      ([key]) =>
+        MANAGED_AGENT_ENV_KEYS.has(key) ||
+        MANAGED_OPENCODE_ENV_KEYS.has(key) ||
+        configured.has(key),
+    ),
+  );
+}
+
+function requiresRuntimeExecution(adapter: AdapterType): boolean {
+  return ["claude_local", "codex_local", "opencode_cli"].includes(adapter);
+}
+
+export function assertGovernedRuntimeIsolation(
+  adapter: string,
+  target: ExecutionTarget,
+  governed: boolean,
+): void {
+  if (governed && target.kind === "local" && requiresRuntimeExecution(adapter as AdapterType)) {
+    throw new Error("Governed maker and checker agents require an isolated execution runtime");
+  }
+}
+
+export function assertRuntimeIdentity(
+  requested: ExecutionTarget,
+  workspacePath: string,
+  actual: RunProcessResult["runtimeIdentity"],
+): asserts actual is NonNullable<RunProcessResult["runtimeIdentity"]> {
+  if (!actual) throw new Error("Selected runtime did not report its identity");
+  if (actual.kind !== requested.kind) {
+    throw new Error(`Runtime identity mismatch: requested ${requested.kind}, got ${actual.kind}`);
+  }
+
+  if (requested.kind === "local") {
+    if (normalizeLocalPath(actual.cwd) !== normalizeLocalPath(workspacePath)) {
+      throw new Error(
+        `Runtime identity mismatch: requested local workspace ${workspacePath}, got ${actual.cwd}`,
+      );
+    }
+    return;
+  }
+
+  if (requested.kind === "docker") {
+    if (!actual.containerId) {
+      throw new Error("Runtime identity mismatch: Docker execution did not report a container ID");
+    }
+    if (
+      requested.remoteCwd &&
+      normalizeRemotePath(actual.cwd) !== normalizeRemotePath(requested.remoteCwd)
+    ) {
+      throw new Error(
+        `Runtime identity mismatch: requested Docker cwd ${requested.remoteCwd}, got ${actual.cwd}`,
+      );
+    }
+    return;
+  }
+
+  if (requested.kind === "ssh") {
+    const expectedConnection = `${requested.username}@${requested.host}:${requested.port}`;
+    const expectedCwd = normalizeRemotePath(requested.remoteCwd);
+    const actualCwd = normalizeRemotePath(actual.remoteCwd ?? actual.cwd);
+    if (
+      actual.host !== requested.host ||
+      (actualCwd !== expectedCwd && !actualCwd.startsWith(`${expectedCwd}/`)) ||
+      actual.connectionIdentity !== expectedConnection
+    ) {
+      throw new Error("Runtime identity mismatch: SSH target does not match the execution plan");
+    }
+    return;
+  }
+
+  const expectedLeaseId =
+    typeof requested.metadata?.providerLeaseId === "string"
+      ? requested.metadata.providerLeaseId
+      : null;
+  if (
+    expectedLeaseId
+      ? actual.connectionIdentity !== `${requested.provider}:${expectedLeaseId}`
+      : !actual.connectionIdentity?.startsWith(`${requested.provider}:`)
+  ) {
+    throw new Error("Runtime identity mismatch: sandbox target does not match the execution plan");
+  }
+}
+
+function normalizeLocalPath(value: string): string {
+  const normalized = path.resolve(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function normalizeRemotePath(value: string): string {
+  return value.replaceAll("\\", "/").replace(/\/+$/, "") || "/";
 }
 
 export function enforceRuntimeToolPolicy(

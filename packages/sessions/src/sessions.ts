@@ -197,7 +197,7 @@ export class Sessions {
     // so Sessions.cancel(id) can stop a live child via signal abort.
     const controller = new AbortController();
     this.runningSessions.set(sessionId, { controller, adapter });
-    let seq = 0;
+    let seq = await this.getNextSeq(sessionId);
     let sessionEventPersistenceError: Error | undefined;
     const recordEvent = async (
       stream: "stdout" | "stderr",

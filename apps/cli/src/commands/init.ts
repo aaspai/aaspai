@@ -26,17 +26,14 @@ export function initCommand(): Command {
         [".aaspai/agents/ceo/relations.yaml", "reportsTo: null\nmanages: []\npeers: []\n"],
         [".aaspai/agents/operator/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_OPERATOR],
         [".aaspai/agents/operator/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
-        [".aaspai/agents/operator/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
         [".aaspai/agents/operator/skills.lock.json", "[]\n"],
         [".aaspai/agents/operator/relations.yaml", "reportsTo: null\n"],
         [".aaspai/agents/developer/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_DEVELOPER],
         [".aaspai/agents/developer/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
-        [".aaspai/agents/developer/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
         [".aaspai/agents/developer/skills.lock.json", "[]\n"],
         [".aaspai/agents/developer/relations.yaml", "reportsTo: agent/operator\n"],
         [".aaspai/agents/tester/AGENT.md", SCAFFOLD_TEMPLATES.AGENT_TESTER],
         [".aaspai/agents/tester/config.yaml", "adapterConfig: {}\nruntimeConfig: {}\n"],
-        [".aaspai/agents/tester/tools.yaml", "allow: []\ndeny: []\nrequire_approval_for: []\n"],
         [".aaspai/agents/tester/skills.lock.json", "[]\n"],
         [".aaspai/agents/tester/relations.yaml", "reportsTo: agent/operator\n"],
         [".aaspai/knowledge/_index.md", SCAFFOLD_TEMPLATES.KNOWLEDGE_INDEX],
@@ -45,10 +42,6 @@ export function initCommand(): Command {
         [".aaspai/loops/daily-triage/LOOP.md", SCAFFOLD_TEMPLATES.LOOP_DAILY_TRIAGE],
         [".aaspai/loops/daily-triage/gate.yaml", SCAFFOLD_TEMPLATES.LOOP_GATE],
         [".aaspai/loops/daily-triage/budget.yaml", SCAFFOLD_TEMPLATES.LOOP_BUDGET],
-        [
-          ".aaspai/loops/daily-triage/schedule.yaml",
-          'kind: cron\nexpression: "0 8 * * 1-5"\ntimezone: UTC\n',
-        ],
       ];
 
       let created = 0;

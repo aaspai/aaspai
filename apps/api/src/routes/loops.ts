@@ -135,7 +135,7 @@ export function registerLoopRoutes(app: Hono, options: { authVerifier?: AuthVeri
             agentId: loop.agent,
             payloadJson: JSON.stringify(body.payload ?? body),
             status: "queued",
-            idempotencyKey: `trigger:${loop.id}:${idempotencyKey}`,
+            idempotencyKey: `trigger:${auth.principal.organizationId}:${loop.id}:${idempotencyKey}`,
             requestedAt: new Date().toISOString(),
           } as never);
       } catch (error) {

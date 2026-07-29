@@ -1,14 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { createDb, runMigrations } from "@aaspai/db";
+import { createDb, runMigrations, type SqliteDb } from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { KillSwitch, LoopRunner, type ResolvedLoopPattern, type WorkItem } from "../src/index";
+import {
+  KillSwitch,
+  LoopRunner,
+  PatternRegistry,
+  type ResolvedLoopPattern,
+  Scheduler,
+  StateStore,
+  type WorkItem,
+} from "../src/index";
 
 describe("durable LoopRunner", () => {
   let store: ExecutionStore;
   let close: () => Promise<void>;
+  let db: SqliteDb;
   let testDirectory: string;
   let lineage: {
     goalId: string;
@@ -22,6 +31,7 @@ describe("durable LoopRunner", () => {
     await mkdir(testDirectory, { recursive: true });
     const handle = createDbForTest(path.join(testDirectory, "state.db"));
     runMigrations(handle);
+    db = handle.db;
     store = new ExecutionStore(handle.db);
     close = handle.close;
     const organizationId = "org_loop_runner";
@@ -195,6 +205,66 @@ describe("durable LoopRunner", () => {
       workItems: [{ id: "work_prior", status: "failed" }],
     });
     expect(seen[1]).toEqual(seen[0]);
+  });
+
+  it("reports the previous run as lastRun", async () => {
+    const firstLoop = pattern("L1", []);
+    const runner = new LoopRunner({
+      organizationId: "org_loop_runner",
+      execution: { store, lineage },
+      stateStore: new StateStore(db),
+    });
+    const first = await runner.run(firstLoop, {
+      triggerKey: "previous-run",
+      now: new Date("2026-07-29T10:00:00.000Z"),
+    });
+    const previous = await store.getWorkflowRun(first.runId);
+    const seen: Array<{ lastRun?: { at: string; outcome: string } }> = [];
+    const secondLoop = pattern("L1", []);
+    secondLoop.pattern.id = firstLoop.pattern.id;
+    secondLoop.discover = async (state) => {
+      seen.push(state as { lastRun?: { at: string; outcome: string } });
+      return [];
+    };
+
+    await runner.run(secondLoop, {
+      triggerKey: "current-run",
+      now: new Date("2026-07-29T10:01:00.000Z"),
+    });
+
+    expect(seen[0]?.lastRun).toEqual({
+      at: previous?.finishedAt ?? previous?.startedAt ?? previous?.createdAt,
+      outcome: "succeeded",
+      summary: "0 work items",
+    });
+  });
+
+  it("coalesces scheduled occurrences while a workflow run is active", async () => {
+    const loop = pattern("L1", []);
+    loop.pattern.schedule = { kind: "interval", seconds: 900 };
+    const registry = new PatternRegistry();
+    registry.register(loop);
+    const scheduler = new Scheduler(registry, new KillSwitch(), {
+      organizationId: "org_loop_runner",
+      db,
+    });
+    const active = await store.createWorkflowRun({
+      organizationId: "org_loop_runner",
+      goalId: lineage.goalId,
+      definitionRevisionId: lineage.definitionRevisionId,
+      sourceType: "loop",
+      sourceId: loop.pattern.id,
+      idempotencyKey: `loop:${loop.pattern.id}:active`,
+    });
+    const boundary = new Date(Math.floor(Date.now() / 900_000) * 900_000);
+
+    await expect(scheduler.dueOccurrences(boundary)).resolves.toEqual([]);
+
+    loop.pattern.concurrencyPolicy = "always_enqueue";
+    await expect(scheduler.dueOccurrences(boundary)).resolves.toHaveLength(1);
+    loop.pattern.concurrencyPolicy = "coalesce_if_active";
+    await store.updateWorkflowRunStatus(active.id, "succeeded");
+    await expect(scheduler.dueOccurrences(boundary)).resolves.toHaveLength(1);
   });
 
   it("marks the durable run failed when discovery throws", async () => {

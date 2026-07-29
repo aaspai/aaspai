@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { InMemoryAuthVerifier } from "@aaspai/auth";
 import { authPrincipalSchema } from "@aaspai/contracts";
 import { closeDefaultDb, getDefaultDb, runMigrations } from "@aaspai/db";
+import { ExecutionStore } from "@aaspai/execution";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApiApp } from "./server.js";
 
@@ -29,6 +30,28 @@ describe("M11 scheduling API", () => {
     await mkdir(testRoot, { recursive: true });
     process.env.AASPAI_DB = `sqlite:${testDb}`;
     runMigrations(getDefaultDb());
+    const store = new ExecutionStore(getDefaultDb().db);
+    await store.createGoal({
+      id: "goal_m11_api",
+      organizationId: "org_m11_api",
+      title: "M11 goal",
+    });
+    await store.createProject({
+      id: "project_m11_api",
+      organizationId: "org_m11_api",
+      goalId: "goal_m11_api",
+      title: "M11 project",
+    });
+    for (const id of ["repo_primary", "repo_secondary"]) {
+      await store.createRepository({
+        id,
+        organizationId: "org_m11_api",
+        projectId: "project_m11_api",
+        purpose: "project",
+        provider: "local",
+        localPath: `workspace/m11/api/${id}`,
+      });
+    }
   });
 
   afterAll(async () => {

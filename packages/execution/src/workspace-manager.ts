@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { ExecutionWorkspace } from "@aaspai/contracts/execution";
 import type { GitRepository } from "@aaspai/git";
@@ -26,6 +26,14 @@ export interface PrepareLocalWorkspacesInput {
     repositoryPath: string;
     baseCommitSha: string;
   }>;
+}
+
+export interface PrepareDisposableWorkspaceInput {
+  organizationId: string;
+  attemptId: string;
+  repositoryId: string;
+  workspaceRoot: string;
+  baseCommitSha?: string;
 }
 
 export type RepositoryPathResolver = (repositoryId: string) => string | Promise<string>;
@@ -94,6 +102,26 @@ export class LocalExecutionWorkspaceManager {
     }
   }
 
+  async prepareDisposable(input: PrepareDisposableWorkspaceInput): Promise<ExecutionWorkspace> {
+    const workspacePath = this.pathFor(input.workspaceRoot, input.attemptId);
+    const workspace = await this.store.createWorkspace({
+      organizationId: input.organizationId,
+      attemptId: input.attemptId,
+      repositoryId: input.repositoryId,
+      path: workspacePath,
+      branchName: `disposable/${input.attemptId}`,
+      baseCommitSha: input.baseCommitSha ?? "0000000",
+      status: "creating",
+    });
+    try {
+      await mkdir(workspacePath, { recursive: true });
+      return await this.store.updateWorkspaceStatus(workspace.id, "ready");
+    } catch (error) {
+      await this.store.updateWorkspaceStatus(workspace.id, "failed");
+      throw error;
+    }
+  }
+
   /** Prepare one isolated Git worktree per repository and roll back partial success. */
   async prepareMany(input: PrepareLocalWorkspacesInput): Promise<ExecutionWorkspace[]> {
     if (input.repositories.length === 0) throw new Error("At least one repository is required");
@@ -141,6 +169,20 @@ export class LocalExecutionWorkspaceManager {
         `${workspace.repositoryId}:${workspace.branchName}`,
       );
       if (lock) await this.store.releaseResourceLock(lock.id);
+      return await this.store.updateWorkspaceStatus(workspaceId, "released");
+    } catch (error) {
+      await this.store.updateWorkspaceStatus(workspaceId, "failed");
+      throw error;
+    }
+  }
+
+  async releaseDisposable(workspaceId: string): Promise<ExecutionWorkspace> {
+    const workspace = await this.store.getWorkspace(workspaceId);
+    if (!workspace) throw new Error(`Execution workspace ${workspaceId} not found`);
+    if (workspace.status === "released") return workspace as ExecutionWorkspace;
+    await this.store.updateWorkspaceStatus(workspaceId, "releasing");
+    try {
+      await rm(workspace.path, { recursive: true, force: true });
       return await this.store.updateWorkspaceStatus(workspaceId, "released");
     } catch (error) {
       await this.store.updateWorkspaceStatus(workspaceId, "failed");

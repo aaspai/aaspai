@@ -89,6 +89,9 @@ export const executionWorkItems = sqliteTable(
     deliveryMode: text("delivery_mode").notNull().default("commit"),
     deliveryStatus: text("delivery_status").notNull().default("pending"),
     deliveryRef: text("delivery_ref"),
+    deliveryCommitSha: text("delivery_commit_sha"),
+    deliveryClaimOwner: text("delivery_claim_owner"),
+    deliveryLeaseExpiresAt: text("delivery_lease_expires_at"),
     // Nullable lineage link. It is intentionally not a SQL FK because the
     // work-item table is declared before workflow_runs in this schema module.
     workflowRunId: text("workflow_run_id"),
@@ -487,8 +490,11 @@ export const executionExternalActions = sqliteTable(
     connector: text("connector").notNull(),
     operation: text("operation").notNull(),
     payloadJson: text("payload_json").notNull().default("{}"),
+    fingerprint: text("fingerprint").notNull().default(""),
     idempotencyKey: text("idempotency_key").notNull(),
     status: text("status").notNull().default("pending"),
+    claimOwner: text("claim_owner"),
+    leaseExpiresAt: text("lease_expires_at"),
     resultJson: text("result_json"),
     error: text("error"),
     createdAt: text("created_at").notNull(),

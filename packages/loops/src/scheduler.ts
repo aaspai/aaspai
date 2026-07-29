@@ -116,7 +116,7 @@ export class Scheduler {
       ) {
         continue;
       }
-      const [lastRun, lastWakeup] = await Promise.all([
+      const [lastRun, lastWakeup, activeRun] = await Promise.all([
         this.db
           .select({
             createdAt: workflowRuns.createdAt,
@@ -146,7 +146,22 @@ export class Scheduler {
           )
           .orderBy(desc(wakeupsTable.requestedAt))
           .limit(1),
+        resolved.pattern.concurrencyPolicy === "always_enqueue"
+          ? Promise.resolve([])
+          : this.db
+              .select({ id: workflowRuns.id })
+              .from(workflowRuns)
+              .where(
+                and(
+                  eq(workflowRuns.organizationId, organizationId),
+                  eq(workflowRuns.sourceType, "loop"),
+                  eq(workflowRuns.sourceId, resolved.pattern.id),
+                  inArray(workflowRuns.status, ["queued", "running"]),
+                ),
+              )
+              .limit(1),
       ]);
+      if (activeRun[0]) continue;
       const last = [lastRun[0], lastWakeup[0]]
         .filter((row): row is { createdAt: string; idempotencyKey: string } => Boolean(row))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];

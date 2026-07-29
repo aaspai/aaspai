@@ -39,7 +39,12 @@ export class StateStore {
 
   async view(
     loopId: string,
-    opts: { organizationId?: string; recentDays?: number; limit?: number } = {},
+    opts: {
+      organizationId?: string;
+      recentDays?: number;
+      limit?: number;
+      excludeWorkflowRunId?: string;
+    } = {},
   ): Promise<LoopStateView> {
     const organizationId = opts.organizationId ?? "default";
     const limit = opts.limit ?? 50;
@@ -49,7 +54,7 @@ export class StateStore {
 
     const dayStart = new Date();
     dayStart.setUTCHours(0, 0, 0, 0);
-    const [recentWakeups, runs, control, budgetRows] = await Promise.all([
+    const [recentWakeups, allRuns, control, budgetRows] = await Promise.all([
       this.db
         .select()
         .from(wakeups)
@@ -67,7 +72,7 @@ export class StateStore {
           ),
         )
         .orderBy(desc(workflowRuns.createdAt))
-        .limit(limit),
+        .limit(limit + (opts.excludeWorkflowRunId ? 1 : 0)),
       this.db
         .select({ paused: loopControls.paused })
         .from(loopControls)
@@ -87,6 +92,9 @@ export class StateStore {
           ),
         ),
     ]);
+    const runs = opts.excludeWorkflowRunId
+      ? allRuns.filter((run) => run.id !== opts.excludeWorkflowRunId).slice(0, limit)
+      : allRuns;
 
     const runIds = runs.map((run) => run.id);
     const workRows = runIds.length
@@ -148,7 +156,7 @@ export class StateStore {
     for (const item of workRows) {
       const ref = { kind: "work_item", id: item.id, title: item.title };
       if (["failed", "blocked", "awaiting_approval"].includes(item.status)) highPriority.push(ref);
-      else if (["completed", "verified", "approved"].includes(item.status)) watch.push(ref);
+      else if (item.status === "completed") watch.push(ref);
       else noise.push(ref);
     }
 

@@ -35,6 +35,12 @@ export interface PullRequestInput {
   readonly draft?: boolean;
 }
 
+export interface PullRequestLookup {
+  readonly repository: string;
+  readonly head: string;
+  readonly base: string;
+}
+
 export interface PullRequest {
   readonly number: number;
   readonly url: string;
@@ -58,12 +64,13 @@ export interface GitRepository {
   removeWorktree(path: string, worktreePath: string): Promise<void>;
   commit(path: string, message: string): Promise<string | null>;
   diff(path: string, fromRef?: string, toRef?: string): Promise<string>;
-  push(path: string, remote: string, branchName: string): Promise<void>;
+  push(path: string, remote: string, branchName: string, commitSha?: string): Promise<void>;
 }
 
 export interface PullRequestProvider {
   create(input: PullRequestInput): Promise<PullRequest>;
   get(repository: string, number: number): Promise<PullRequest>;
+  find?(input: PullRequestLookup): Promise<PullRequest | null>;
 }
 
 export function validateBranchName(branchName: string): string {

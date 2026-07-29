@@ -112,8 +112,17 @@ export class LocalGitRepository implements GitRepository {
     return await this.output(["diff", "--binary", fromRef, ...(toRef ? [toRef] : [])], path);
   }
 
-  async push(path: string, remote: string, branchName: string): Promise<void> {
+  async push(path: string, remote: string, branchName: string, commitSha?: string): Promise<void> {
     validateBranchName(branchName);
+    if (commitSha !== undefined) {
+      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(commitSha)) {
+        throw new Error(`Invalid commit SHA: ${commitSha}`);
+      }
+      await this.runner.run(["push", remote, `${commitSha}:refs/heads/${branchName}`], {
+        cwd: path,
+      });
+      return;
+    }
     await this.runner.run(["push", "--set-upstream", remote, branchName], { cwd: path });
   }
 

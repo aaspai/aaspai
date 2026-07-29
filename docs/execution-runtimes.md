@@ -34,6 +34,14 @@ Multiple agents receive separate attempts, workspaces, runtime leases, and
 harness sessions. A provider session ID is resumable only with compatible
 runtime and workspace identity.
 
+Governed maker and checker CLIs fail closed on the plain host runtime. Starter
+definitions use isolated Daytona workspaces; configure `DAYTONA_API_KEY` and
+optionally `DAYTONA_SNAPSHOT` before autonomous runs.
+
+Independent checkers must end with the structured
+`AASPAI_CHECK_RESULT={"verdict":"passed|failed|concerns","summary":"..."}`
+line. A zero exit code without this verdict is not verification evidence.
+
 ## Credential direction
 
 Runtime images should contain CLIs and development tools, but no credentials.

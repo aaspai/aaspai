@@ -74,6 +74,30 @@ describe("local Git capability", () => {
     );
   });
 
+  it("pushes an exact commit SHA to an explicit branch ref", async () => {
+    const fake = runner({});
+    const git = new LocalGitRepository(fake);
+    const commitSha = "0123456789abcdef0123456789abcdef01234567";
+
+    await git.push("F:/repo", "origin", "delivery/work_1", commitSha);
+
+    expect(fake.run).toHaveBeenCalledWith(
+      ["push", "origin", `${commitSha}:refs/heads/delivery/work_1`],
+      { cwd: "F:/repo" },
+    );
+  });
+
+  it("preserves branch-only push behavior", async () => {
+    const fake = runner({});
+    const git = new LocalGitRepository(fake);
+
+    await git.push("F:/repo", "origin", "delivery/work_1");
+
+    expect(fake.run).toHaveBeenCalledWith(["push", "--set-upstream", "origin", "delivery/work_1"], {
+      cwd: "F:/repo",
+    });
+  });
+
   it("creates GitHub pull requests through the CLI provider", async () => {
     const fake: PullRequestCommandRunner = {
       run: vi.fn(async () => ({
@@ -111,6 +135,54 @@ describe("local Git capability", () => {
       "Governance change",
       "--body",
       "Approved change",
+    ]);
+  });
+
+  it("finds an existing GitHub pull request by repository and branches", async () => {
+    const fake: PullRequestCommandRunner = {
+      run: vi.fn(async () => ({
+        stdout: JSON.stringify([
+          {
+            number: 12,
+            url: "https://github.com/org/repo/pull/12",
+            state: "OPEN",
+            headRefName: "autonomy/proposal",
+            baseRefName: "main",
+          },
+        ]),
+        stderr: "",
+      })),
+    };
+    const provider = new LocalGitHubPullRequestProvider(fake);
+
+    await expect(
+      provider.find({
+        repository: "git@github.com:org/repo.git",
+        head: "autonomy/proposal",
+        base: "main",
+      }),
+    ).resolves.toEqual({
+      number: 12,
+      url: "https://github.com/org/repo/pull/12",
+      state: "open",
+      head: "autonomy/proposal",
+      base: "main",
+    });
+    expect(fake.run).toHaveBeenCalledWith([
+      "pr",
+      "list",
+      "--repo",
+      "org/repo",
+      "--head",
+      "autonomy/proposal",
+      "--base",
+      "main",
+      "--state",
+      "all",
+      "--limit",
+      "2",
+      "--json",
+      "number,url,state,headRefName,baseRefName",
     ]);
   });
 });

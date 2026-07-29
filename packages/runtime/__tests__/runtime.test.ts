@@ -26,8 +26,20 @@ import {
   sshExecutionTargetSchema,
 } from "@aaspai/runtime";
 import { describe, expect, it } from "vitest";
+import { buildRemoteExecutionCommand } from "../src/drivers/ssh/index";
 
 describe("runtime contract", () => {
+  it("quotes SSH commands and forwards only explicit remote environment values", () => {
+    const command = buildRemoteExecutionCommand("/tmp/work", "/tmp/work/pid", {
+      command: "agent cli",
+      args: ["say 'hello'"],
+      env: { TOKEN: "secret value" },
+    });
+    expect(command).toContain("'TOKEN=secret value'");
+    expect(command).toContain(`${shellQuote("agent cli")} ${shellQuote("say 'hello'")}`);
+    expect(command).not.toContain("process.env");
+  });
+
   it("exposes a stable protocol version", () => {
     expect(RUNTIME_PROTOCOL_VERSION).toBe(1);
   });

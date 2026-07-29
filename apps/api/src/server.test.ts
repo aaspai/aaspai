@@ -37,6 +37,45 @@ describe("execution API authorization", () => {
     await mkdir(testRoot, { recursive: true });
     process.env.AASPAI_DB = `sqlite:${testDb}`;
     runMigrations(getDefaultDb());
+    const store = new ExecutionStore(getDefaultDb().db);
+    await store.createGoal({ id: "goal_api", organizationId: "org_a", title: "API goal" });
+    await store.createProject({
+      id: "project_api",
+      organizationId: "org_a",
+      goalId: "goal_api",
+      title: "API project",
+    });
+    await store.createRepository({
+      id: "repo_api",
+      organizationId: "org_a",
+      projectId: "project_api",
+      purpose: "project",
+      provider: "local",
+      localPath: "workspace/m1/api-auth/repo-a",
+    });
+    await store.createGoal({ id: "goal_api_b", organizationId: "org_b", title: "Other goal" });
+    await store.createProject({
+      id: "project_api_b",
+      organizationId: "org_b",
+      goalId: "goal_api_b",
+      title: "Other project",
+    });
+    await store.createRepository({
+      id: "repo_api_b",
+      organizationId: "org_b",
+      projectId: "project_api_b",
+      purpose: "project",
+      provider: "local",
+      localPath: "workspace/m1/api-auth/repo-b",
+    });
+    await store.createDefinitionRevision({
+      id: "revision_api_b",
+      organizationId: "org_b",
+      repositoryId: "repo_api_b",
+      commitSha: "abcdef1",
+      sourcePath: ".",
+      contentHash: "other-revision",
+    });
   });
 
   afterAll(async () => {
@@ -98,6 +137,15 @@ describe("execution API authorization", () => {
           repositoryId: "repo_api",
           deliveryMode: "pull-request",
           idempotencyKey: "invalid-delivery-mode",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await request({
+          workKind: "general",
+          deliveryMode: "pull_request",
+          idempotencyKey: "general-pr-delivery",
         })
       ).status,
     ).toBe(400);
@@ -168,6 +216,52 @@ describe("execution API authorization", () => {
       },
     );
     expect(crossCompany.status).toBe(403);
+  });
+
+  it("rejects cross-organization and mismatched work-item lineage", async () => {
+    const app = createApiApp({ authVerifier: verifier });
+    const request = (body: Record<string, unknown>) =>
+      app.request("/v1/execution/work-items", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer write-org-a",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          title: "Invalid lineage",
+          idempotencyKey: `invalid-lineage-${String(body.repositoryId ?? body.projectId)}`,
+          ...body,
+        }),
+      });
+    expect(
+      (
+        await request({
+          goalId: "goal_api_b",
+          projectId: "project_api_b",
+          repositoryId: "repo_api_b",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await request({
+          goalId: "goal_api",
+          projectId: "project_api",
+          repositoryId: "repo_api",
+          repositoryIds: ["repo_api", "repo_api_b"],
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await request({
+          goalId: "goal_api",
+          projectId: "project_api",
+          repositoryId: "repo_api",
+          definitionRevisionId: "revision_api_b",
+        })
+      ).status,
+    ).toBe(400);
   });
 
   it("enforces read and write scopes", async () => {

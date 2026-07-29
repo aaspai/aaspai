@@ -1,3 +1,4 @@
+import type { WorkItemStatus } from "@aaspai/contracts/execution";
 import type { WorkItem } from "@aaspai/contracts/phase2";
 import {
   and,
@@ -12,7 +13,14 @@ import {
 } from "@aaspai/db";
 import type { DiscoverFn } from "../pattern.js";
 
-const ACTIVE = ["proposed", "ready", "running", "awaiting_verification", "awaiting_approval"];
+const ACTIVE = [
+  "proposed",
+  "ready",
+  "claimed",
+  "in_progress",
+  "awaiting_verification",
+  "awaiting_approval",
+] satisfies readonly WorkItemStatus[];
 
 export const discoverPrWork = workItemDiscovery(
   /\b(pr|pull request|review|rebase|merge)\b/i,
@@ -22,14 +30,10 @@ export const discoverDependencyWork = workItemDiscovery(
   /\b(dependenc|package|upgrade|cve|security)\w*/i,
   ACTIVE,
 );
-export const discoverChangelogWork = workItemDiscovery(
-  null,
-  ["completed", "verified", "approved"],
-  1,
-);
+export const discoverChangelogWork = workItemDiscovery(null, ["completed"], 1);
 export const discoverPostMergeWork = workItemDiscovery(
   /\b(merge|cleanup|todo|dead code|feature flag)\w*/i,
-  ["completed", "verified", "approved"],
+  ["completed"],
 );
 
 export const discoverCiFailures: DiscoverFn = async (_state, ctx) => {
@@ -82,7 +86,11 @@ export const discoverIssueWakeups: DiscoverFn = async (_state, ctx) => {
     );
 };
 
-function workItemDiscovery(pattern: RegExp | null, statuses: string[], recentDays = 7): DiscoverFn {
+function workItemDiscovery(
+  pattern: RegExp | null,
+  statuses: readonly WorkItemStatus[],
+  recentDays = 7,
+): DiscoverFn {
   return async (_state, ctx) => {
     const rows = await getDefaultDb()
       .db.select()
@@ -90,7 +98,7 @@ function workItemDiscovery(pattern: RegExp | null, statuses: string[], recentDay
       .where(
         and(
           eq(executionWorkItems.organizationId, ctx.organizationId),
-          inArray(executionWorkItems.status, statuses),
+          inArray(executionWorkItems.status, [...statuses]),
           gte(executionWorkItems.updatedAt, daysAgo(ctx.now, recentDays)),
         ),
       )

@@ -64,9 +64,18 @@ export class DependencyScheduler {
     assertHarnessExecutable(input.harness);
     const now = (input.now ?? new Date()).toISOString();
     await this.store.reconcileExpiredLocks(now);
-    const items = (await this.store.listWorkItems(input.organizationId, input.goalId)).filter(
+    const candidates = (await this.store.listWorkItems(input.organizationId, input.goalId)).filter(
       (item) => item.workflowRunId === null || item.workflowRunId === input.workflowRunId,
     );
+    const items = (
+      await Promise.all(
+        candidates.map((item) =>
+          item.workflowRunId === input.workflowRunId
+            ? item
+            : this.store.assignWorkItemToWorkflow(item.id, input.workflowRunId),
+        ),
+      )
+    ).filter((item): item is ExecutionWorkItem => item !== null);
     const dependencies = new Map<
       string,
       Awaited<ReturnType<ExecutionStore["listWorkItemDependencies"]>>
@@ -186,7 +195,7 @@ export class DependencyScheduler {
     let latest: SchedulerTickResult = await this.tick(input);
     for (let tick = 0; tick < maxTicks; tick++) {
       if (latest.dispatched.length === 0) {
-        await this.finishWorkflowRun(input.workflowRunId, latest.progress);
+        await this.store.reconcileWorkflowRun(input.workflowRunId);
         return latest;
       }
       for (const dispatched of latest.dispatched) {
@@ -210,28 +219,8 @@ export class DependencyScheduler {
       }
       latest = await this.tick(input);
     }
-    await this.finishWorkflowRun(input.workflowRunId, latest.progress);
+    await this.store.reconcileWorkflowRun(input.workflowRunId);
     return latest;
-  }
-
-  private async finishWorkflowRun(
-    workflowRunId: string,
-    progress: SchedulerTickResult["progress"],
-  ): Promise<void> {
-    if (
-      progress.total === 0 ||
-      progress.active > 0 ||
-      progress.ready > 0 ||
-      progress.proposed > 0 ||
-      progress.awaitingVerification > 0 ||
-      progress.awaitingApproval > 0
-    ) {
-      return;
-    }
-    const status = progress.completed === progress.total ? "succeeded" : "failed";
-    const run = await this.store.getWorkflowRun(workflowRunId);
-    if (run && run.status !== status)
-      await this.store.updateWorkflowRunStatus(workflowRunId, status);
   }
 
   private async listActiveAttempts(items: ExecutionWorkItem[]): Promise<AgentAttempt[]> {

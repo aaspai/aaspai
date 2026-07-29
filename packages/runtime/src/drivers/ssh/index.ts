@@ -156,12 +156,8 @@ async function runOverSsh(
     }
 
     // 3. Run the actual command remotely
-    const cmd =
-      options.args.length === 0
-        ? options.command
-        : `${options.command} ${options.args.map(shellQuote).join(" ")}`;
     const remotePidFile = `${remoteWorkdir}/.aaspai-remote-pid`;
-    const tracked = `cd ${shellQuote(remoteWorkdir)} && printf '%s' "$$" > ${shellQuote(remotePidFile)} && exec ${cmd}`;
+    const tracked = buildRemoteExecutionCommand(remoteWorkdir, remotePidFile, options);
     const runArgs = buildSshArgs(target, tracked);
 
     return await new Promise<RunProcessResult>((resolve) => {
@@ -247,6 +243,26 @@ async function runOverSsh(
     const cleanupArgs = buildSshArgs(target, `rm -rf ${shellQuote(remoteWorkdir)}`);
     spawn(sshBin, cleanupArgs, { stdio: "ignore", windowsHide: true }).on("error", () => undefined);
   }
+}
+
+export function buildRemoteExecutionCommand(
+  remoteWorkdir: string,
+  remotePidFile: string,
+  options: Pick<RunProcessOptions, "command" | "args" | "env">,
+): string {
+  const environment = Object.entries(options.env ?? {}).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error(`Invalid SSH environment variable name: ${key}`);
+    }
+    return shellQuote(`${key}=${value}`);
+  });
+  const command = [
+    "env",
+    ...environment,
+    shellQuote(options.command),
+    ...options.args.map(shellQuote),
+  ];
+  return `cd ${shellQuote(remoteWorkdir)} && printf '%s' "$$" > ${shellQuote(remotePidFile)} && exec ${command.join(" ")}`;
 }
 
 /**
