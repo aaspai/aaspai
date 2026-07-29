@@ -164,6 +164,7 @@ const SQLITE_STATEMENTS = [
     delivery_mode TEXT NOT NULL DEFAULT 'commit',
     delivery_status TEXT NOT NULL DEFAULT 'pending',
     delivery_ref TEXT,
+    delivery_commit_sha TEXT,
     workflow_run_id TEXT,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
@@ -405,8 +406,11 @@ const SQLITE_STATEMENTS = [
     connector TEXT NOT NULL,
     operation TEXT NOT NULL,
     payload_json TEXT NOT NULL DEFAULT '{}',
+    fingerprint TEXT NOT NULL DEFAULT '',
     idempotency_key TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
+    claim_owner TEXT,
+    lease_expires_at TEXT,
     result_json TEXT,
     error TEXT,
     created_at TEXT NOT NULL,
@@ -807,8 +811,28 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
     sql: "ALTER TABLE execution_work_items ADD COLUMN delivery_ref TEXT",
   },
   {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'delivery_commit_sha'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN delivery_commit_sha TEXT",
+  },
+  {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'harness_session_id'",
     sql: "ALTER TABLE agent_attempts ADD COLUMN harness_session_id TEXT",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_external_actions') WHERE name = 'fingerprint'",
+    sql: "ALTER TABLE execution_external_actions ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_external_actions') WHERE name = 'claim_owner'",
+    sql: "ALTER TABLE execution_external_actions ADD COLUMN claim_owner TEXT",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_external_actions') WHERE name = 'lease_expires_at'",
+    sql: "ALTER TABLE execution_external_actions ADD COLUMN lease_expires_at TEXT",
   },
   {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'role'",

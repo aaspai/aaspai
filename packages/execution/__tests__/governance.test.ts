@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { createDb, runMigrations } from "@aaspai/db";
+import { createDb, eq, executionExternalActions, runMigrations } from "@aaspai/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DependencyScheduler } from "../src/scheduler";
 import { ExecutionStore, evaluateExecutionPolicy } from "../src/store";
@@ -40,12 +40,24 @@ describe("execution governance", () => {
     const scheduler = new DependencyScheduler(store, { retryDelayMs: 0 });
     await scheduler.run(
       { ...fixture.runInput, agentId: "maker", harness: "dry_run_local" },
-      async () => "succeeded",
+      async ({ attempt }) => {
+        await store.recordDeliveryCommit(item.id, attempt.id, "1234567");
+        return "succeeded";
+      },
     );
 
     await expect(store.getWorkItem(item.id)).resolves.toMatchObject({
       status: "awaiting_verification",
     });
+    await expect(store.recordDeliveryCommit(item.id, "not-the-maker", "7654321")).rejects.toThrow(
+      "maker attempt",
+    );
+    const maker = (await store.listAttemptsForWorkItem(item.id)).find(
+      (attempt) => attempt.role === "maker",
+    );
+    await expect(
+      store.recordDeliveryCommit(item.id, maker?.id ?? "missing", "7654321"),
+    ).rejects.toThrow("immutable");
     const verification = await store.getVerificationForWorkItem(item.id);
     expect(verification?.status).toBe("pending");
     await expect(
@@ -115,6 +127,7 @@ describe("execution governance", () => {
     const item = await store.createWorkItem({
       ...fixture.lineage,
       title: "Rejected change",
+      deliveryMode: "none",
       idempotencyKey: `rejected:${randomUUID()}`,
       governance: { verification: { required: true } },
     });
@@ -147,6 +160,7 @@ describe("execution governance", () => {
     const item = await store.createWorkItem({
       ...fixture.lineage,
       title: "Forgery guard",
+      deliveryMode: "none",
       idempotencyKey: `forgery:${randomUUID()}`,
       governance: { verification: { required: true, minEvidence: 1 } },
     });
@@ -189,6 +203,7 @@ describe("execution governance", () => {
     const item = await store.createWorkItem({
       ...fixture.lineage,
       title: "Denied change",
+      deliveryMode: "none",
       idempotencyKey: `denied:${randomUUID()}`,
       governance: { policy: { actions: { execute: { allowed: false } } } },
     });
@@ -209,6 +224,7 @@ describe("execution governance", () => {
     const item = await store.createWorkItem({
       ...fixture.lineage,
       title: "Budgeted change",
+      deliveryMode: "none",
       maxAttempts: 2,
       idempotencyKey: `budgeted:${randomUUID()}`,
       governance: { budget: { limits: [{ scope: "organization", runs: 1 }] } },
@@ -245,8 +261,146 @@ describe("execution governance", () => {
       payload: { channel: "ops" },
       idempotencyKey: "notification-1",
     };
-    await expect(store.claimExternalAction(input)).resolves.toMatchObject({ created: true });
-    await expect(store.claimExternalAction(input)).resolves.toMatchObject({ created: false });
+    const [first, second] = await Promise.all([
+      store.claimExternalAction(input),
+      store.claimExternalAction(input),
+    ]);
+    const acquired = [first, second].find((claim) => claim.disposition === "acquired");
+    expect([first.disposition, second.disposition].sort()).toEqual(["acquired", "in_progress"]);
+    if (!acquired?.ownerId) throw new Error("External action was not exclusively claimed");
+    await store.completeExternalAction(acquired.action.id, acquired.ownerId, {
+      status: "succeeded",
+      result: { ok: true },
+    });
+    await expect(store.claimExternalAction(input)).resolves.toMatchObject({
+      created: false,
+      disposition: "replay",
+    });
+    await expect(
+      store.claimExternalAction({ ...input, operation: "delete_message" }),
+    ).rejects.toThrow("Idempotency key is already bound");
+  });
+
+  it("recovers expired external-action leases without accepting the old owner", async () => {
+    const fixture = await createFixture(store);
+    const item = await store.createWorkItem({
+      ...fixture.lineage,
+      workKind: "external_action",
+      deliveryMode: "none",
+      title: "Recover notification",
+      idempotencyKey: `external-recovery:${randomUUID()}`,
+    });
+    const input = {
+      organizationId: fixture.organizationId,
+      workItemId: item.id,
+      connector: "slack",
+      operation: "post_message",
+      payload: { channel: "ops" },
+      idempotencyKey: "notification-recovery",
+    };
+    const first = await store.claimExternalAction(input);
+    await store.database
+      .update(executionExternalActions)
+      .set({ leaseExpiresAt: new Date(0).toISOString() })
+      .where(eq(executionExternalActions.id, first.action.id));
+    const recovered = await store.claimExternalAction(input);
+    expect(recovered.disposition).toBe("acquired");
+    await expect(
+      store.completeExternalAction(first.action.id, first.ownerId ?? "missing", {
+        status: "succeeded",
+        result: {},
+      }),
+    ).rejects.toThrow("no longer owned");
+    await expect(
+      store.completeExternalAction(recovered.action.id, recovered.ownerId ?? "missing", {
+        status: "succeeded",
+        result: {},
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+  });
+
+  it("allows exactly one concurrent approval decision", async () => {
+    const fixture = await createFixture(store);
+    const item = await store.createWorkItem({
+      ...fixture.lineage,
+      deliveryMode: "none",
+      title: "Concurrent approval",
+      idempotencyKey: `approval-race:${randomUUID()}`,
+      governance: { approval: { required: true, actorType: "human" } },
+    });
+    await new DependencyScheduler(store).run(
+      { ...fixture.runInput, agentId: "maker", harness: "dry_run_local" },
+      async () => "succeeded",
+    );
+    const approval = (await store.listApprovalsForWorkItem(item.id))[0];
+    if (!approval) throw new Error("Approval was not created");
+    const outcomes = await Promise.allSettled([
+      store.decideApproval({
+        approvalId: approval.id,
+        actorId: "reviewer_one",
+        actorType: "human",
+        status: "approved",
+      }),
+      store.decideApproval({
+        approvalId: approval.id,
+        actorId: "reviewer_two",
+        actorType: "human",
+        status: "rejected",
+      }),
+    ]);
+    expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const events = await store.listGovernanceEvents(fixture.organizationId, item.id);
+    expect(events.filter((event) => event.action.startsWith("approval."))).toHaveLength(1);
+  });
+
+  it("requires persisted artifact evidence and rejects invalid delivery combinations", async () => {
+    const fixture = await createFixture(store);
+    await expect(
+      store.createWorkItem({
+        ...fixture.lineage,
+        workKind: "general",
+        deliveryMode: "commit",
+        title: "Invalid delivery",
+        idempotencyKey: `invalid-delivery:${randomUUID()}`,
+      }),
+    ).rejects.toThrow("general work cannot use commit delivery");
+    const item = await store.createWorkItem({
+      ...fixture.lineage,
+      workKind: "general",
+      deliveryMode: "artifact",
+      title: "Artifact delivery",
+      idempotencyKey: `artifact-delivery:${randomUUID()}`,
+      governance: { approval: { required: true, actorType: "human" } },
+    });
+    await new DependencyScheduler(store).run(
+      { ...fixture.runInput, agentId: "maker", harness: "dry_run_local" },
+      async () => "succeeded",
+    );
+    const approval = (await store.listApprovalsForWorkItem(item.id))[0];
+    const maker = (await store.listAttemptsForWorkItem(item.id)).find(
+      (attempt) => attempt.role === "maker",
+    );
+    if (!approval || !maker) throw new Error("Governed artifact fixture was not created");
+    const decision = {
+      approvalId: approval.id,
+      actorId: "human_reviewer",
+      actorType: "human" as const,
+      status: "approved" as const,
+    };
+    await expect(store.decideApproval(decision)).rejects.toThrow("persisted artifact");
+    await store.createArtifact({
+      organizationId: fixture.organizationId,
+      attemptId: maker.id,
+      kind: "other",
+      path: "report.md",
+      mediaType: "text/markdown",
+      sizeBytes: 4,
+      sha256: "1".repeat(64),
+    });
+    await expect(store.decideApproval(decision)).resolves.toMatchObject({
+      workItem: { status: "completed", deliveryStatus: "delivered" },
+    });
   });
 });
 

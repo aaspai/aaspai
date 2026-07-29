@@ -2,7 +2,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { AuthVerifier } from "@aaspai/auth";
 import { type ExecutionGovernanceInput, executionGovernanceSchema } from "@aaspai/contracts";
 import { getDefaultDb } from "@aaspai/db";
-import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
+import {
+  DependencyScheduler,
+  ExecutionStore,
+  ExternalActionConflictError,
+} from "@aaspai/execution";
 import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 import { LocalGitHubPullRequestProvider, LocalGitRepository } from "@aaspai/git";
 import type { Hono } from "hono";
@@ -50,6 +54,24 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       body.workKind === "general" || body.workKind === "external_action"
         ? body.workKind
         : "repository";
+    const deliveryMode =
+      body.deliveryMode === "none" ||
+      body.deliveryMode === "artifact" ||
+      body.deliveryMode === "pull_request"
+        ? body.deliveryMode
+        : "commit";
+    if (
+      (workKind === "external_action" && deliveryMode !== "none") ||
+      (workKind === "general" && !["none", "artifact"].includes(deliveryMode))
+    ) {
+      return c.json(
+        {
+          error: "invalid_request",
+          message: `${workKind} work cannot use ${deliveryMode} delivery`,
+        },
+        400,
+      );
+    }
     if (workKind === "repository" && typeof body.repositoryId !== "string") {
       return c.json(
         { error: "invalid_request", message: "repositoryId is required for repository work" },
@@ -57,27 +79,64 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       );
     }
     const store = new ExecutionStore(getDefaultDb().db);
+    const context = {
+      organizationId: auth.principal.organizationId,
+      actorId: auth.principal.userId,
+      correlationId: c.req.header("x-request-id") ?? "api-work-item-create",
+    };
+    const goal = await store.getGoal(body.goalId as string, context);
+    const project = await store.getProject(body.projectId as string, context);
+    if (!goal || !project || project.goalId !== goal.id) {
+      return c.json(
+        { error: "invalid_lineage", message: "Goal and project lineage is invalid" },
+        400,
+      );
+    }
+    if (
+      body.repositoryIds !== undefined &&
+      (!Array.isArray(body.repositoryIds) ||
+        body.repositoryIds.some((value) => typeof value !== "string" || value.length === 0))
+    ) {
+      return c.json({ error: "invalid_lineage", message: "Repository lineage is invalid" }, 400);
+    }
     let repositoryId =
       typeof body.repositoryId === "string" && body.repositoryId
         ? body.repositoryId
-        : (
-            await store.listRepositoriesForProject(body.projectId as string, {
-              organizationId: auth.principal.organizationId,
-              actorId: auth.principal.userId,
-              correlationId: c.req.header("x-request-id") ?? "api-work-item-create",
-            })
-          )[0]?.id;
+        : (await store.listRepositoriesForProject(project.id, context))[0]?.id;
     if (!repositoryId) {
       repositoryId = (
         await store.createRepository({
-          id: `repo:general:${body.projectId as string}`,
+          id: `repo:general:${project.id}`,
           organizationId: auth.principal.organizationId,
-          projectId: body.projectId as string,
+          projectId: project.id,
           purpose: "project",
           provider: "local",
           localPath: process.cwd(),
         })
       ).id;
+    }
+    const repositoryIds = [
+      ...new Set([
+        repositoryId,
+        ...(Array.isArray(body.repositoryIds) ? (body.repositoryIds as string[]) : []),
+      ]),
+    ];
+    const ownedRepositories = await Promise.all(
+      repositoryIds.map((id) => store.getRepository(id, context)),
+    );
+    if (
+      ownedRepositories.some((repository) => !repository || repository.projectId !== project.id)
+    ) {
+      return c.json({ error: "invalid_lineage", message: "Repository lineage is invalid" }, 400);
+    }
+    if (typeof body.definitionRevisionId === "string") {
+      const revision = await store.getDefinitionRevision(body.definitionRevisionId, context);
+      if (!revision || !repositoryIds.includes(revision.repositoryId)) {
+        return c.json(
+          { error: "invalid_lineage", message: "Definition revision lineage is invalid" },
+          400,
+        );
+      }
     }
 
     let governance: ExecutionGovernanceInput | undefined;
@@ -93,7 +152,12 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     }
     const externalAction =
       workKind === "external_action" ? parseExternalActionPlan(body.externalAction) : null;
-    if (workKind === "external_action" && (!externalAction || !governance?.approval?.required)) {
+    if (
+      workKind === "external_action" &&
+      (!externalAction ||
+        !governance?.approval?.required ||
+        governance.approval.actorType !== "human")
+    ) {
       return c.json(
         {
           error: "invalid_request",
@@ -107,16 +171,9 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       goalId: body.goalId as string,
       projectId: body.projectId as string,
       repositoryId,
-      repositoryIds: Array.isArray(body.repositoryIds)
-        ? body.repositoryIds.filter((value): value is string => typeof value === "string")
-        : undefined,
+      repositoryIds,
       workKind,
-      deliveryMode:
-        body.deliveryMode === "none" ||
-        body.deliveryMode === "artifact" ||
-        body.deliveryMode === "pull_request"
-          ? body.deliveryMode
-          : "commit",
+      deliveryMode,
       title: body.title as string,
       description: typeof body.description === "string" ? body.description : undefined,
       definitionRevisionId:
@@ -245,26 +302,45 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
         409,
       );
     }
-    const claimed = await store.claimExternalAction({
-      organizationId: item.organizationId,
-      workItemId: item.id,
-      connector: body.connector,
-      operation: body.operation,
-      payload: isRecord(body.payload) ? body.payload : {},
-      idempotencyKey: body.idempotencyKey,
-    });
-    if (!claimed.created && claimed.action.status === "succeeded") {
-      return c.json({ data: claimed.action, duplicate: true }, 200);
+    let claimed: Awaited<ReturnType<ExecutionStore["claimExternalAction"]>>;
+    try {
+      claimed = await store.claimExternalAction({
+        organizationId: item.organizationId,
+        workItemId: item.id,
+        connector: body.connector,
+        operation: body.operation,
+        payload: isRecord(body.payload) ? body.payload : {},
+        idempotencyKey: body.idempotencyKey,
+      });
+    } catch (error) {
+      if (error instanceof ExternalActionConflictError) {
+        return c.json({ error: "idempotency_conflict", message: error.message }, 409);
+      }
+      throw error;
     }
+    if (claimed.disposition === "replay") {
+      return c.json({ data: publicExternalAction(claimed.action), duplicate: true }, 200);
+    }
+    if (claimed.disposition === "in_progress" || !claimed.ownerId) {
+      return c.json(
+        { data: publicExternalAction(claimed.action), duplicate: true, inProgress: true },
+        202,
+      );
+    }
+    const ownerId = claimed.ownerId;
     const connectorEnv = `AASPAI_CONNECTOR_${body.connector.toUpperCase().replace(/-/g, "_")}`;
     const endpoint = process.env[`${connectorEnv}_URL`];
     if (!endpoint) {
-      const action = await store.completeExternalAction(claimed.action.id, {
+      const action = await store.completeExternalAction(claimed.action.id, ownerId, {
         status: "failed",
         error: `${connectorEnv}_URL is not configured`,
       });
       return c.json(
-        { error: "connector_unavailable", message: "Connector is not configured", data: action },
+        {
+          error: "connector_unavailable",
+          message: "Connector is not configured",
+          data: publicExternalAction(action),
+        },
         503,
       );
     }
@@ -296,7 +372,7 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       if (!response.ok)
         throw new Error(`Connector returned ${response.status}: ${text.slice(0, 512)}`);
       const result = text ? safeJsonObject(text) : {};
-      const action = await store.completeExternalAction(claimed.action.id, {
+      const action = await store.completeExternalAction(claimed.action.id, ownerId, {
         status: "succeeded",
         result,
       });
@@ -308,14 +384,19 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
         reason: "idempotent external action completed",
         metadata: { externalActionId: action.id },
       });
-      return c.json({ data: action }, 200);
+      return c.json({ data: publicExternalAction(action) }, 200);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const action = await store.completeExternalAction(claimed.action.id, {
-        status: "failed",
-        error: message,
-      });
-      return c.json({ error: "connector_failed", message, data: action }, 502);
+      const action = await store
+        .completeExternalAction(claimed.action.id, ownerId, {
+          status: "failed",
+          error: message,
+        })
+        .catch(() => claimed.action);
+      return c.json(
+        { error: "connector_failed", message, data: publicExternalAction(action) },
+        502,
+      );
     }
   });
 
@@ -552,9 +633,32 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     if (pendingApproval.organizationId !== auth.principal.organizationId) {
       return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
     }
-    const actorType =
-      body.actorType === "operator" || body.actorType === "supervisor" ? body.actorType : "human";
-    if (actorType !== "human" && !auth.principal.roles.includes(actorType)) {
+    const requestedActorType = pendingApproval.actorType;
+    if (!["human", "operator", "supervisor"].includes(requestedActorType)) {
+      return c.json(
+        { error: "approval_role_denied", message: "Approval role is not authorized" },
+        403,
+      );
+    }
+    const actorType = requestedActorType as "human" | "operator" | "supervisor";
+    if (
+      actorType === "human" &&
+      (auth.principal.authMethod !== "session" ||
+        !auth.principal.sessionId ||
+        auth.principal.twoFactorRedirect === true)
+    ) {
+      return c.json(
+        {
+          error: "interactive_approval_required",
+          message: "Human approval requires a verified interactive session",
+        },
+        403,
+      );
+    }
+    if (
+      (actorType === "operator" || actorType === "supervisor") &&
+      !auth.principal.roles.includes(actorType)
+    ) {
       return c.json(
         { error: "approval_role_denied", message: "Approval role is not authorized" },
         403,
@@ -676,6 +780,13 @@ function boundedConcurrency(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(32, Math.max(1, Math.floor(value)))
     : fallback;
+}
+
+function publicExternalAction(
+  action: Awaited<ReturnType<ExecutionStore["claimExternalAction"]>>["action"],
+) {
+  const { claimOwner: _claimOwner, fingerprint: _fingerprint, ...publicAction } = action;
+  return publicAction;
 }
 
 function publicHarnessSession(session: Awaited<ReturnType<ExecutionStore["getHarnessSession"]>>) {

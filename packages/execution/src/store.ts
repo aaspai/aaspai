@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { type CompanyHealth, companyHealthSchema } from "@aaspai/contracts";
 import type {
   AgentAttempt,
@@ -31,6 +31,7 @@ import {
   executionWorkspaceSchema,
   goalSchema,
   loopOutputSchema,
+  projectSchema,
   repositorySchema,
   resourceLockSchema,
   workflowRunSchema,
@@ -81,6 +82,7 @@ import {
   isNull,
   loopOutputs,
   lte,
+  or,
   projects,
   repositories,
   resourceLocks,
@@ -313,6 +315,19 @@ export class ExecutionStore {
     return row;
   }
 
+  async getProject(projectId: string, context?: ExecutionContext): Promise<Project | null> {
+    const rows = await this.db
+      .select()
+      .from(projects)
+      .where(
+        context
+          ? and(eq(projects.id, projectId), eq(projects.organizationId, context.organizationId))
+          : eq(projects.id, projectId),
+      )
+      .limit(1);
+    return rows[0] ? projectSchema.parse(rows[0]) : null;
+  }
+
   async getGoal(goalId: string, context?: ExecutionContext): Promise<Goal | null> {
     const rows = await this.db
       .select()
@@ -409,6 +424,11 @@ export class ExecutionStore {
   }
 
   async createWorkItem(input: CreateWorkItemInput) {
+    const workKind = input.workKind ?? "repository";
+    const deliveryMode = input.deliveryMode ?? "commit";
+    if (!isDeliveryModeAllowed(workKind, deliveryMode)) {
+      throw new Error(`${workKind} work cannot use ${deliveryMode} delivery`);
+    }
     const existing = await this.db
       .select()
       .from(executionWorkItems)
@@ -434,10 +454,11 @@ export class ExecutionStore {
       projectId: input.projectId,
       repositoryId: input.repositoryId,
       repositoryIdsJson: JSON.stringify(repositoryIds),
-      workKind: input.workKind ?? "repository",
-      deliveryMode: input.deliveryMode ?? "commit",
+      workKind,
+      deliveryMode,
       deliveryStatus: "pending",
       deliveryRef: null,
+      deliveryCommitSha: null,
       workflowRunId: input.workflowRunId ?? null,
       title: input.title,
       description: input.description ?? "",
@@ -1218,58 +1239,123 @@ export class ExecutionStore {
     status: Exclude<ApprovalStatus, "requested" | "expired" | "cancelled">;
     reason?: string;
   }): Promise<{ approval: ExecutionApproval; workItem: ExecutionWorkItem }> {
-    const rows = await this.db
-      .select()
-      .from(executionApprovals)
-      .where(eq(executionApprovals.id, input.approvalId))
-      .limit(1);
-    const current = rows[0] ? parseApproval(rows[0]) : null;
-    if (!current) throw new Error(`Approval ${input.approvalId} not found`);
-    if (current.status !== "requested") throw new Error("Approval is no longer requested");
-    if (current.expiresAt && current.expiresAt <= now()) {
-      await this.db
+    const decidedAt = now();
+    const outcome = this.db.transaction((tx) => {
+      const current = tx
+        .select()
+        .from(executionApprovals)
+        .where(eq(executionApprovals.id, input.approvalId))
+        .limit(1)
+        .get();
+      if (!current) throw new Error(`Approval ${input.approvalId} not found`);
+      if (current.status !== "requested") throw new Error("Approval is no longer requested");
+      if (current.expiresAt && current.expiresAt <= decidedAt) {
+        tx.update(executionApprovals)
+          .set({ status: "expired", decidedAt })
+          .where(
+            and(eq(executionApprovals.id, current.id), eq(executionApprovals.status, "requested")),
+          )
+          .run();
+        return { expired: true as const, workItemId: current.workItemId };
+      }
+      if (current.actorType !== input.actorType) {
+        throw new Error("Approval actor type is not authorized");
+      }
+      const workItem = tx
+        .select()
+        .from(executionWorkItems)
+        .where(eq(executionWorkItems.id, current.workItemId))
+        .limit(1)
+        .get();
+      if (!workItem) throw new Error(`Work item ${current.workItemId} not found`);
+      if (workItem.status !== "awaiting_approval") {
+        throw new Error("Work item is not awaiting approval");
+      }
+      if (
+        (workItem.deliveryMode === "commit" || workItem.deliveryMode === "pull_request") &&
+        !workItem.deliveryCommitSha
+      ) {
+        throw new Error(`${workItem.deliveryMode} delivery requires maker commit evidence`);
+      }
+      if (workItem.deliveryMode === "artifact") {
+        const persistedArtifact = workItem.claimedByAttemptId
+          ? tx
+              .select({ id: artifacts.id })
+              .from(artifacts)
+              .where(eq(artifacts.attemptId, workItem.claimedByAttemptId))
+              .limit(1)
+              .get()
+          : null;
+        if (!persistedArtifact) {
+          throw new Error("Artifact delivery requires a persisted artifact");
+        }
+      }
+      const changedApproval = tx
         .update(executionApprovals)
-        .set({ status: "expired", decidedAt: now() })
-        .where(eq(executionApprovals.id, current.id));
-      throw new Error("Approval has expired");
-    }
-    if (current.actorType !== input.actorType)
-      throw new Error("Approval actor type is not authorized");
-    const pendingWorkItem = await this.getWorkItem(current.workItemId);
-    if (!pendingWorkItem) throw new Error(`Work item ${current.workItemId} not found`);
-    if (pendingWorkItem.status !== "awaiting_approval")
-      throw new Error("Work item is not awaiting approval");
-    await this.db
-      .update(executionApprovals)
-      .set({
-        status: input.status,
-        actorId: input.actorId,
-        reason: input.reason ?? "",
-        decidedAt: now(),
-      })
-      .where(eq(executionApprovals.id, current.id));
-    const workItem = await this.getWorkItem(current.workItemId);
-    if (!workItem) throw new Error(`Work item ${current.workItemId} not found`);
-    if (input.status === "approved") await this.finalizeWorkItem(workItem.id);
-    else
-      await this.updateWorkItemStatus(workItem.id, "blocked", {
-        blockedReason: input.reason ?? input.status,
-      });
-    await this.recordGovernanceEvent({
-      organizationId: current.organizationId,
-      workItemId: current.workItemId,
-      action: `approval.${input.status}`,
-      decision: input.status === "approved" ? "allowed" : "denied",
-      reason: input.reason ?? input.status,
-      metadata: { approvalId: current.id, actorId: input.actorId, actorType: input.actorType },
+        .set({
+          status: input.status,
+          actorId: input.actorId,
+          reason: input.reason ?? "",
+          decidedAt,
+        })
+        .where(
+          and(
+            eq(executionApprovals.id, current.id),
+            eq(executionApprovals.status, "requested"),
+            eq(executionApprovals.actorType, input.actorType),
+          ),
+        )
+        .returning({ id: executionApprovals.id })
+        .all();
+      if (changedApproval.length !== 1) throw new Error("Approval is no longer requested");
+      const approved = input.status === "approved";
+      const changedWorkItem = tx
+        .update(executionWorkItems)
+        .set(
+          approved
+            ? {
+                status: "completed",
+                blockedReason: null,
+                deliveryStatus: workItem.deliveryMode === "pull_request" ? "ready" : "delivered",
+                updatedAt: decidedAt,
+              }
+            : {
+                status: "blocked",
+                blockedReason: input.reason ?? input.status,
+                updatedAt: decidedAt,
+              },
+        )
+        .where(
+          and(
+            eq(executionWorkItems.id, current.workItemId),
+            eq(executionWorkItems.status, "awaiting_approval"),
+          ),
+        )
+        .returning({ id: executionWorkItems.id })
+        .all();
+      if (changedWorkItem.length !== 1) throw new Error("Work item is not awaiting approval");
+      tx.insert(executionGovernanceEvents)
+        .values({
+          id: makeId("governance"),
+          organizationId: current.organizationId,
+          workItemId: current.workItemId,
+          attemptId: null,
+          action: `approval.${input.status}`,
+          decision: approved ? "allowed" : "denied",
+          reason: input.reason ?? input.status,
+          metadataJson: JSON.stringify({
+            approvalId: current.id,
+            actorId: input.actorId,
+            actorType: input.actorType,
+          }),
+          occurredAt: decidedAt,
+        })
+        .run();
+      return { expired: false as const, workItemId: current.workItemId };
     });
-    const approvalRows = await this.db
-      .select()
-      .from(executionApprovals)
-      .where(eq(executionApprovals.id, current.id))
-      .limit(1);
-    const approval = approvalRows[0] ? parseApproval(approvalRows[0]) : null;
-    const updatedWorkItem = await this.getWorkItem(workItem.id);
+    if (outcome.expired) throw new Error("Approval has expired");
+    const approval = await this.getApproval(input.approvalId);
+    const updatedWorkItem = await this.getWorkItem(outcome.workItemId);
     if (!approval || !updatedWorkItem) throw new Error("Approval decision disappeared");
     return { approval, workItem: updatedWorkItem };
   }
@@ -1305,6 +1391,25 @@ export class ExecutionStore {
   private async finalizeWorkItem(workItemId: string): Promise<void> {
     const item = await this.getWorkItem(workItemId);
     if (!item) throw new Error(`Work item ${workItemId} not found`);
+    if (
+      (item.deliveryMode === "commit" || item.deliveryMode === "pull_request") &&
+      !item.deliveryCommitSha
+    ) {
+      throw new Error(`${item.deliveryMode} delivery requires maker commit evidence`);
+    }
+    if (item.deliveryMode === "artifact") {
+      const claim = (
+        await this.db
+          .select({ attemptId: executionWorkItems.claimedByAttemptId })
+          .from(executionWorkItems)
+          .where(eq(executionWorkItems.id, item.id))
+          .limit(1)
+      )[0];
+      const persistedArtifacts = claim?.attemptId ? await this.listArtifacts(claim.attemptId) : [];
+      if (persistedArtifacts.length === 0) {
+        throw new Error("Artifact delivery requires a persisted artifact");
+      }
+    }
     const deliveryStatus = item.deliveryMode === "pull_request" ? "ready" : "delivered";
     await this.db
       .update(executionWorkItems)
@@ -1315,6 +1420,48 @@ export class ExecutionStore {
         updatedAt: now(),
       })
       .where(eq(executionWorkItems.id, workItemId));
+  }
+
+  async recordDeliveryCommit(
+    workItemId: string,
+    makerAttemptId: string,
+    commitSha: string,
+  ): Promise<ExecutionWorkItem> {
+    if (!/^[0-9a-f]{7,64}$/i.test(commitSha)) throw new Error("Commit SHA is invalid");
+    const attempt = await this.getAttempt(makerAttemptId);
+    if (!attempt || attempt.workItemId !== workItemId || attempt.role !== "maker") {
+      throw new Error("Commit evidence must come from the work item's maker attempt");
+    }
+    const current = (
+      await this.db
+        .select()
+        .from(executionWorkItems)
+        .where(eq(executionWorkItems.id, workItemId))
+        .limit(1)
+    )[0];
+    if (!current) throw new Error(`Work item ${workItemId} not found`);
+    if (current.claimedByAttemptId !== makerAttemptId) {
+      throw new Error("Commit evidence must come from the currently claimed maker attempt");
+    }
+    if (!["commit", "pull_request"].includes(current.deliveryMode)) {
+      throw new Error("Commit evidence is not valid for this delivery mode");
+    }
+    if (current.deliveryCommitSha && current.deliveryCommitSha !== commitSha) {
+      throw new Error("Maker commit evidence is immutable");
+    }
+    if (!current.deliveryCommitSha) {
+      await this.db
+        .update(executionWorkItems)
+        .set({ deliveryCommitSha: commitSha, updatedAt: now() })
+        .where(
+          and(eq(executionWorkItems.id, workItemId), isNull(executionWorkItems.deliveryCommitSha)),
+        );
+    }
+    const updated = await this.getWorkItem(workItemId);
+    if (!updated || updated.deliveryCommitSha !== commitSha) {
+      throw new Error("Maker commit evidence is immutable");
+    }
+    return updated;
   }
 
   async completeDelivery(input: {
@@ -1409,7 +1556,19 @@ export class ExecutionStore {
     operation: string;
     payload: Record<string, unknown>;
     idempotencyKey: string;
-  }): Promise<{ action: typeof executionExternalActions.$inferSelect; created: boolean }> {
+    leaseMs?: number;
+  }): Promise<{
+    action: typeof executionExternalActions.$inferSelect;
+    created: boolean;
+    disposition: "acquired" | "in_progress" | "replay";
+    ownerId: string | null;
+  }> {
+    const ownerId = randomUUID();
+    const claimedAt = now();
+    const leaseExpiresAt = new Date(
+      Date.now() + Math.max(1_000, Math.min(input.leaseMs ?? 60_000, 300_000)),
+    ).toISOString();
+    const fingerprint = externalActionFingerprint(input);
     const row = {
       id: makeId("external_action"),
       organizationId: input.organizationId,
@@ -1417,19 +1576,22 @@ export class ExecutionStore {
       connector: input.connector,
       operation: input.operation,
       payloadJson: JSON.stringify(input.payload),
+      fingerprint,
       idempotencyKey: input.idempotencyKey,
-      status: "pending",
+      status: "running",
+      claimOwner: ownerId,
+      leaseExpiresAt,
       resultJson: null,
       error: null,
-      createdAt: now(),
+      createdAt: claimedAt,
       completedAt: null,
     } satisfies typeof executionExternalActions.$inferInsert;
     try {
       await this.db.insert(executionExternalActions).values(row);
-      return { action: row, created: true };
+      return { action: row, created: true, disposition: "acquired", ownerId };
     } catch (error) {
       if (!/unique constraint failed/i.test(String(error))) throw error;
-      const existing = (
+      let existing = (
         await this.db
           .select()
           .from(executionExternalActions)
@@ -1443,34 +1605,111 @@ export class ExecutionStore {
           .limit(1)
       )[0];
       if (!existing) throw error;
-      return { action: existing, created: false };
+      const existingFingerprint =
+        existing.fingerprint ||
+        externalActionFingerprint({
+          organizationId: existing.organizationId,
+          workItemId: existing.workItemId,
+          connector: existing.connector,
+          operation: existing.operation,
+          payload: safeRecord(existing.payloadJson),
+        });
+      if (existingFingerprint !== fingerprint) {
+        throw new ExternalActionConflictError(
+          "Idempotency key is already bound to a different external action",
+        );
+      }
+      if (existing.status === "succeeded") {
+        return { action: existing, created: false, disposition: "replay", ownerId: null };
+      }
+      if (
+        existing.status === "running" &&
+        existing.leaseExpiresAt &&
+        existing.leaseExpiresAt > claimedAt
+      ) {
+        return { action: existing, created: false, disposition: "in_progress", ownerId: null };
+      }
+      const changed = await this.db
+        .update(executionExternalActions)
+        .set({
+          status: "running",
+          fingerprint,
+          claimOwner: ownerId,
+          leaseExpiresAt,
+          resultJson: null,
+          error: null,
+          completedAt: null,
+        })
+        .where(
+          and(
+            eq(executionExternalActions.id, existing.id),
+            or(
+              inArray(executionExternalActions.status, ["pending", "failed"]),
+              and(
+                eq(executionExternalActions.status, "running"),
+                or(
+                  isNull(executionExternalActions.leaseExpiresAt),
+                  lte(executionExternalActions.leaseExpiresAt, claimedAt),
+                ),
+              ),
+            ),
+          ),
+        )
+        .returning()
+        .all();
+      if (changed[0]) {
+        return {
+          action: changed[0],
+          created: false,
+          disposition: "acquired",
+          ownerId,
+        };
+      }
+      existing = (
+        await this.db
+          .select()
+          .from(executionExternalActions)
+          .where(eq(executionExternalActions.id, existing.id))
+          .limit(1)
+      )[0];
+      if (!existing) throw new Error("External action claim disappeared");
+      return {
+        action: existing,
+        created: false,
+        disposition: existing.status === "succeeded" ? "replay" : "in_progress",
+        ownerId: null,
+      };
     }
   }
 
   async completeExternalAction(
     id: string,
+    ownerId: string,
     outcome:
       | { status: "succeeded"; result: Record<string, unknown> }
       | { status: "failed"; error: string },
   ): Promise<typeof executionExternalActions.$inferSelect> {
-    await this.db
+    const changed = await this.db
       .update(executionExternalActions)
       .set({
         status: outcome.status,
+        claimOwner: null,
+        leaseExpiresAt: null,
         resultJson: outcome.status === "succeeded" ? JSON.stringify(outcome.result) : null,
         error: outcome.status === "failed" ? outcome.error : null,
         completedAt: now(),
       })
-      .where(eq(executionExternalActions.id, id));
-    const row = (
-      await this.db
-        .select()
-        .from(executionExternalActions)
-        .where(eq(executionExternalActions.id, id))
-        .limit(1)
-    )[0];
-    if (!row) throw new Error(`External action ${id} not found`);
-    return row;
+      .where(
+        and(
+          eq(executionExternalActions.id, id),
+          eq(executionExternalActions.status, "running"),
+          eq(executionExternalActions.claimOwner, ownerId),
+        ),
+      )
+      .returning()
+      .all();
+    if (!changed[0]) throw new Error("External action claim is no longer owned by this request");
+    return changed[0];
   }
 
   private async reserveBudget(
@@ -2521,6 +2760,8 @@ function isActiveResourceLockConflict(error: unknown): boolean {
 
 class BudgetExhaustedError extends Error {}
 
+export class ExternalActionConflictError extends Error {}
+
 function parseWorkItem(row: typeof executionWorkItems.$inferSelect): ExecutionWorkItem {
   const {
     claimedByAttemptId: _claimedByAttemptId,
@@ -2574,6 +2815,52 @@ function parseVerification(row: typeof executionVerifications.$inferSelect): Exe
 
 function parseApproval(row: typeof executionApprovals.$inferSelect): ExecutionApproval {
   return executionApprovalSchema.parse(row);
+}
+
+function externalActionFingerprint(input: {
+  organizationId: string;
+  workItemId: string;
+  connector: string;
+  operation: string;
+  payload: Record<string, unknown>;
+}): string {
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        organizationId: input.organizationId,
+        workItemId: input.workItemId,
+        connector: input.connector,
+        operation: input.operation,
+        payload: input.payload,
+      }),
+    )
+    .digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, sortJson(entry)]),
+  );
+}
+
+function safeRecord(value: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function budgetScopeId(
@@ -2658,6 +2945,15 @@ function isActiveAttemptStatus(status: AgentAttempt["status"]): boolean {
 
 function isTerminalAttemptStatus(status: AgentAttempt["status"]): boolean {
   return ["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(status);
+}
+
+function isDeliveryModeAllowed(
+  workKind: ExecutionWorkItem["workKind"],
+  deliveryMode: ExecutionWorkItem["deliveryMode"],
+): boolean {
+  if (workKind === "external_action") return deliveryMode === "none";
+  if (workKind === "general") return deliveryMode === "none" || deliveryMode === "artifact";
+  return true;
 }
 
 function makeId(prefix: string): string {

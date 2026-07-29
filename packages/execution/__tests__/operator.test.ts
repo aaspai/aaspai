@@ -121,9 +121,19 @@ describe("operator process vertical", () => {
     expect(started.run.latestDecisionId).toMatch(/^decision\//);
 
     const context = { organizationId, actorId: "worker/1", correlationId: "corr/1" };
-    await service.tick(context, started.run.id, { runProvider: async () => "succeeded" });
-    await service.tick(context, started.run.id, { runProvider: async () => "succeeded" });
-    await service.tick(context, started.run.id, { runProvider: async () => "succeeded" });
+    const runProvider = async ({
+      attempt,
+      workItem,
+    }: {
+      attempt: { id: string };
+      workItem: { id: string };
+    }) => {
+      await store.recordDeliveryCommit(workItem.id, attempt.id, "1234567");
+      return "succeeded" as const;
+    };
+    await service.tick(context, started.run.id, { runProvider });
+    await service.tick(context, started.run.id, { runProvider });
+    await service.tick(context, started.run.id, { runProvider });
     const completed = await service.tick(context, started.run.id);
     expect(completed.run.status).toBe("completed");
     expect(

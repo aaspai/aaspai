@@ -223,6 +223,7 @@ async function createItem(
     goalId: fixture.goal.id,
     projectId: fixture.project.id,
     repositoryId: fixture.repository.id,
+    deliveryMode: "none",
     branchName: options.branchName,
     title,
     idempotencyKey: `${key}:${randomUUID()}`,
