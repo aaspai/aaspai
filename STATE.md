@@ -1,18 +1,19 @@
 # State
 
-## Status: Ready for PR
+## Status: Complete
 
 Last wake: 2026-07-29 (agent/loop runtime and lifecycle hardening)
 
 ## Issues
 
-- `docs/issues/005-managed-runtime-bypass.md` — resolved; awaiting CI.
+- `docs/issues/005-managed-runtime-bypass.md` — resolved in PR #66; CI passed.
 
 ## Recent Sessions
 
 - 2026-07-29: re-reviewed governed execution against the original gap list and Hermes lifecycle model.
 - 2026-07-29: started `fix/agent-loop-runtime-lifecycle` to close the confirmed trust-boundary and durability gaps.
 - 2026-07-29: completed runtime, governance, delivery, workflow, loop, session, and scaffold hardening; lint, typecheck, and the full workspace test suite pass.
+- 2026-07-29: PR #66 passed the combined lint, typecheck, test, and build check.
 - 2026-07-21: loop/changelog-drafter wakeup (x2) — no config exists.
 - 2026-07-21: loop/issue-triage wakeup — no config exists.
 - 2026-07-21: loop/pr-babysitter wakeup — no config exists.
@@ -22,7 +23,7 @@ Last wake: 2026-07-29 (agent/loop runtime and lifecycle hardening)
 
 ### Immediate
 
-- Open the hardening PR and check CI.
+- None.
 
 ### Deferred
 
