@@ -816,6 +816,16 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
     sql: "ALTER TABLE execution_work_items ADD COLUMN delivery_commit_sha TEXT",
   },
   {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'delivery_claim_owner'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN delivery_claim_owner TEXT",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'delivery_lease_expires_at'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN delivery_lease_expires_at TEXT",
+  },
+  {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'harness_session_id'",
     sql: "ALTER TABLE agent_attempts ADD COLUMN harness_session_id TEXT",
   },
@@ -886,6 +896,22 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
 // rows that need to be ordered by their original autoincrement id.
 const DATA_NORMALIZATION = [
   "UPDATE session_events SET seq = id WHERE seq = 0",
+  `UPDATE execution_work_items
+    SET status = 'blocked',
+        delivery_status = 'failed',
+        blocked_reason = 'Legacy delivery has no immutable commit evidence; rerun the work item'
+    WHERE delivery_commit_sha IS NULL
+      AND delivery_mode IN ('commit', 'pull_request')
+      AND (
+        status IN ('awaiting_verification', 'awaiting_approval')
+        OR delivery_status IN ('ready', 'delivering')
+      )`,
+  `UPDATE execution_external_actions
+    SET status = 'running',
+        claim_owner = 'legacy_' || id,
+        lease_expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+10 minutes')
+    WHERE status IN ('pending', 'running')
+      AND claim_owner IS NULL`,
   `UPDATE execution_work_items
     SET delivery_status = 'delivered'
     WHERE status = 'completed'

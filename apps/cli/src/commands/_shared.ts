@@ -298,8 +298,7 @@ knowledge:
     - "**"
   exclude: []
 runtime:
-  default: { kind: local }
-  fallback: { kind: local }
+  default: { kind: sandbox, provider: daytona, remoteCwd: /workspace }
 budget:
   perRun: { tokens: 50000, costUsd: 0.00 }
   perDay: { tokens: 500000, costUsd: 0.00, runs: 50 }
@@ -337,8 +336,8 @@ title: "Developer"
 description: >
   Writes code. Reports to the ceo.
 timestamp: 2026-07-21T00:00:00Z
-adapter: claude_local
-model: claude-sonnet-4-6
+adapter: opencode_cli
+model: opencode-go/mimo-v2.5
 role: engineer
 reportsTo: agent/ceo
 manages: []
@@ -361,8 +360,7 @@ knowledge:
     - "**"
   exclude: []
 runtime:
-  default: { kind: local }
-  fallback: { kind: local }
+  default: { kind: sandbox, provider: daytona, remoteCwd: /workspace }
 budget:
   perRun: { tokens: 80000, costUsd: 3.00 }
   perDay: { tokens: 800000, costUsd: 30.00, runs: 50 }
@@ -381,8 +379,8 @@ title: "Tester"
 description: >
   Writes and runs tests. Reports to the ceo.
 timestamp: 2026-07-21T00:00:00Z
-adapter: codex_local
-model: gpt-5-codex
+adapter: opencode_cli
+model: opencode-go/mimo-v2.5
 role: qa
 reportsTo: agent/ceo
 manages: []
@@ -404,8 +402,7 @@ knowledge:
     - "**"
   exclude: []
 runtime:
-  default: { kind: local }
-  fallback: { kind: local }
+  default: { kind: sandbox, provider: daytona, remoteCwd: /workspace }
 budget:
   perRun: { tokens: 50000, costUsd: 2.00 }
   perDay: { tokens: 500000, costUsd: 20.00, runs: 50 }

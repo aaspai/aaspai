@@ -121,9 +121,11 @@ export const executionWorkItemSchema = z
     deliveryRef: z.string().trim().max(2_048).nullable().default(null),
     deliveryCommitSha: z
       .string()
-      .regex(/^[0-9a-f]{7,64}$/i)
+      .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i)
       .nullable()
       .default(null),
+    deliveryClaimOwner: identifierSchema.nullable().default(null),
+    deliveryLeaseExpiresAt: isoTimestampSchema.nullable().default(null),
     workflowRunId: identifierSchema.nullable().default(null),
     title: z.string().trim().min(1).max(512),
     description: z.string().max(16_384).default(""),

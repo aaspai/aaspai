@@ -57,9 +57,12 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     const deliveryMode =
       body.deliveryMode === "none" ||
       body.deliveryMode === "artifact" ||
+      body.deliveryMode === "commit" ||
       body.deliveryMode === "pull_request"
         ? body.deliveryMode
-        : "commit";
+        : workKind === "repository"
+          ? "commit"
+          : "none";
     if (
       (workKind === "external_action" && deliveryMode !== "none") ||
       (workKind === "general" && !["none", "artifact"].includes(deliveryMode))
@@ -95,25 +98,27 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     if (
       body.repositoryIds !== undefined &&
       (!Array.isArray(body.repositoryIds) ||
+        body.repositoryIds.length > 32 ||
         body.repositoryIds.some((value) => typeof value !== "string" || value.length === 0))
     ) {
       return c.json({ error: "invalid_lineage", message: "Repository lineage is invalid" }, 400);
     }
+    const projectRepositories = await store.listRepositoriesForProject(project.id, context);
     let repositoryId =
       typeof body.repositoryId === "string" && body.repositoryId
         ? body.repositoryId
-        : (await store.listRepositoriesForProject(project.id, context))[0]?.id;
+        : projectRepositories[0]?.id;
     if (!repositoryId) {
-      repositoryId = (
-        await store.createRepository({
-          id: `repo:general:${project.id}`,
-          organizationId: auth.principal.organizationId,
-          projectId: project.id,
-          purpose: "project",
-          provider: "local",
-          localPath: process.cwd(),
-        })
-      ).id;
+      const repository = await store.createRepository({
+        id: `repo:general:${project.id}`,
+        organizationId: auth.principal.organizationId,
+        projectId: project.id,
+        purpose: "project",
+        provider: "local",
+        localPath: process.cwd(),
+      });
+      repositoryId = repository.id;
+      projectRepositories.push(repository);
     }
     const repositoryIds = [
       ...new Set([
@@ -121,12 +126,8 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
         ...(Array.isArray(body.repositoryIds) ? (body.repositoryIds as string[]) : []),
       ]),
     ];
-    const ownedRepositories = await Promise.all(
-      repositoryIds.map((id) => store.getRepository(id, context)),
-    );
-    if (
-      ownedRepositories.some((repository) => !repository || repository.projectId !== project.id)
-    ) {
+    const ownedRepositoryIds = new Set(projectRepositories.map((repository) => repository.id));
+    if (repositoryIds.some((id) => !ownedRepositoryIds.has(id))) {
       return c.json({ error: "invalid_lineage", message: "Repository lineage is invalid" }, 400);
     }
     if (typeof body.definitionRevisionId === "string") {
@@ -203,7 +204,7 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     if (
       item.status !== "completed" ||
       item.deliveryMode !== "pull_request" ||
-      !["ready", "failed"].includes(item.deliveryStatus)
+      !["ready", "failed", "delivering"].includes(item.deliveryStatus)
     ) {
       return c.json(
         { error: "not_deliverable", message: "Work item is not ready for delivery" },
@@ -214,16 +215,21 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     if (!claimed) {
       return c.json({ error: "delivery_in_progress", message: "Delivery is already running" }, 409);
     }
+    const deliveryOwner = claimed.deliveryClaimOwner;
+    if (!deliveryOwner) {
+      return c.json({ error: "delivery_failed", message: "Delivery claim owner is missing" }, 500);
+    }
     const repository = await store.getRepository(item.repositoryId, {
       organizationId: auth.principal.organizationId,
       actorId: auth.principal.userId,
       correlationId: c.req.header("x-request-id") ?? "api-work-item-deliver",
     });
-    if (!repository?.remoteUrl || !item.branchName) {
+    if (!repository?.remoteUrl || !claimed.branchName || !claimed.deliveryCommitSha) {
       await store.completeDelivery({
         workItemId: item.id,
+        ownerId: deliveryOwner,
         status: "failed",
-        error: "Pull-request delivery requires repository.remoteUrl and branchName",
+        error: "Pull-request delivery requires repository, branch, and commit evidence",
       });
       return c.json(
         { error: "delivery_failed", message: "Repository delivery data is missing" },
@@ -232,25 +238,36 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     }
     try {
       const git = options.git ?? new LocalGitRepository();
-      await git.push(repository.localPath, "origin", item.branchName);
-      const pullRequest = await (
-        options.pullRequests ?? new LocalGitHubPullRequestProvider()
-      ).create({
-        repository: repository.remoteUrl,
-        head: item.branchName,
-        base: repository.defaultBranch,
-        title: item.title,
-        body: item.description || `Automated delivery for ${item.id}`,
-      });
+      await git.push(repository.localPath, "origin", claimed.branchName, claimed.deliveryCommitSha);
+      const provider = options.pullRequests ?? new LocalGitHubPullRequestProvider();
+      const pullRequest =
+        (await provider.find?.({
+          repository: repository.remoteUrl,
+          head: claimed.branchName,
+          base: repository.defaultBranch,
+        })) ??
+        (await provider.create({
+          repository: repository.remoteUrl,
+          head: claimed.branchName,
+          base: repository.defaultBranch,
+          title: item.title,
+          body: item.description || `Automated delivery for ${item.id}`,
+        }));
       const delivered = await store.completeDelivery({
         workItemId: item.id,
+        ownerId: deliveryOwner,
         status: "delivered",
         ref: pullRequest.url,
       });
       return c.json({ data: delivered, pullRequest }, 200);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await store.completeDelivery({ workItemId: item.id, status: "failed", error: message });
+      await store.completeDelivery({
+        workItemId: item.id,
+        ownerId: deliveryOwner,
+        status: "failed",
+        error: message,
+      });
       return c.json({ error: "delivery_failed", message }, 502);
     }
   });
@@ -344,6 +361,7 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
         503,
       );
     }
+    let result: Record<string, unknown>;
     try {
       const url = new URL(endpoint);
       if (
@@ -371,11 +389,24 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       const text = await response.text();
       if (!response.ok)
         throw new Error(`Connector returned ${response.status}: ${text.slice(0, 512)}`);
-      const result = text ? safeJsonObject(text) : {};
+      result = text ? safeJsonObject(text) : {};
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       const action = await store.completeExternalAction(claimed.action.id, ownerId, {
-        status: "succeeded",
-        result,
+        status: "failed",
+        error: message,
       });
+      return c.json(
+        { error: "connector_failed", message, data: publicExternalAction(action) },
+        502,
+      );
+    }
+    const action = await store.completeExternalAction(claimed.action.id, ownerId, {
+      status: "succeeded",
+      result,
+    });
+    let governanceWarning: string | undefined;
+    try {
       await store.recordGovernanceEvent({
         organizationId: item.organizationId,
         workItemId: item.id,
@@ -384,20 +415,16 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
         reason: "idempotent external action completed",
         metadata: { externalActionId: action.id },
       });
-      return c.json({ data: publicExternalAction(action) }, 200);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const action = await store
-        .completeExternalAction(claimed.action.id, ownerId, {
-          status: "failed",
-          error: message,
-        })
-        .catch(() => claimed.action);
-      return c.json(
-        { error: "connector_failed", message, data: publicExternalAction(action) },
-        502,
-      );
+    } catch {
+      governanceWarning = "governance_event_persistence_failed";
     }
+    return c.json(
+      {
+        data: publicExternalAction(action),
+        ...(governanceWarning ? { warning: governanceWarning } : {}),
+      },
+      200,
+    );
   });
 
   app.get("/v1/execution/work-items/:id", async (c) => {

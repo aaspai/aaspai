@@ -277,6 +277,13 @@ describe("e2e: Sessions.execute() → opencode_cli adapter", () => {
       configJson: "{}",
       status: "queued",
     });
+    await db.db.insert(schema.sessionEvents).values({
+      sessionId: durableSessionId,
+      ts: new Date().toISOString(),
+      kind: "system",
+      payloadJson: JSON.stringify({ text: "queued by control plane" }),
+      seq: 4,
+    });
     const sessions = new Sessions({
       agentSource: buildAgentSource([makeAgent({ id: "agent/test" })]),
       knowledgeSource: buildKnowledgeSource(),
@@ -303,6 +310,13 @@ describe("e2e: Sessions.execute() → opencode_cli adapter", () => {
       .where(eq(schema.sessions.id, durableSessionId));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ status: "succeeded", sessionId: "ses_provider" });
+    const events = await db.db
+      .select()
+      .from(schema.sessionEvents)
+      .where(eq(schema.sessionEvents.sessionId, durableSessionId))
+      .orderBy(schema.sessionEvents.seq);
+    expect(events[0]?.seq).toBe(4);
+    expect(events.slice(1).every((event) => event.seq > 4)).toBe(true);
   }, 15_000);
 
   it("records a session row, session_events, and updates to succeeded on happy path", async () => {

@@ -413,6 +413,16 @@ function requiresRuntimeExecution(adapter: AdapterType): boolean {
   return ["claude_local", "codex_local", "opencode_cli"].includes(adapter);
 }
 
+export function assertGovernedRuntimeIsolation(
+  adapter: string,
+  target: ExecutionTarget,
+  governed: boolean,
+): void {
+  if (governed && target.kind === "local" && requiresRuntimeExecution(adapter as AdapterType)) {
+    throw new Error("Governed maker and checker agents require an isolated execution runtime");
+  }
+}
+
 export function assertRuntimeIdentity(
   requested: ExecutionTarget,
   workspacePath: string,
@@ -449,10 +459,11 @@ export function assertRuntimeIdentity(
 
   if (requested.kind === "ssh") {
     const expectedConnection = `${requested.username}@${requested.host}:${requested.port}`;
+    const expectedCwd = normalizeRemotePath(requested.remoteCwd);
+    const actualCwd = normalizeRemotePath(actual.remoteCwd ?? actual.cwd);
     if (
       actual.host !== requested.host ||
-      normalizeRemotePath(actual.remoteCwd ?? actual.cwd) !==
-        normalizeRemotePath(requested.remoteCwd) ||
+      (actualCwd !== expectedCwd && !actualCwd.startsWith(`${expectedCwd}/`)) ||
       actual.connectionIdentity !== expectedConnection
     ) {
       throw new Error("Runtime identity mismatch: SSH target does not match the execution plan");
@@ -460,10 +471,14 @@ export function assertRuntimeIdentity(
     return;
   }
 
+  const expectedLeaseId =
+    typeof requested.metadata?.providerLeaseId === "string"
+      ? requested.metadata.providerLeaseId
+      : null;
   if (
-    normalizeRemotePath(actual.remoteCwd ?? actual.cwd) !==
-      normalizeRemotePath(requested.remoteCwd) ||
-    !actual.connectionIdentity?.startsWith(`${requested.provider}:`)
+    expectedLeaseId
+      ? actual.connectionIdentity !== `${requested.provider}:${expectedLeaseId}`
+      : !actual.connectionIdentity?.startsWith(`${requested.provider}:`)
   ) {
     throw new Error("Runtime identity mismatch: sandbox target does not match the execution plan");
   }

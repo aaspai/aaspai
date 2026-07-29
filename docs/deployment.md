@@ -1,5 +1,13 @@
 # Deployment
 
+## Upgrade safety
+
+Stop every API and worker process before upgrading the database, then start
+only the new version. The delivery and external-action claim protocols are not
+safe with old and new binaries sharing one database. Migration quarantines
+legacy commit/PR work that lacks immutable commit evidence; rerun those blocked
+work items instead of delivering an unverified branch tip.
+
 The current repository is suitable for local development and controlled
 evaluation. It is not yet documented as a production-ready, horizontally
 scaled service.

@@ -16,7 +16,16 @@
  */
 
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import { OperationalGovernanceService } from "@aaspai/company";
 import type { AgentAttempt, ExecutionWorkItem } from "@aaspai/contracts/execution";
@@ -33,6 +42,7 @@ import {
 } from "@aaspai/db";
 import {
   AutonomousWorkExecutor,
+  assertGovernedRuntimeIsolation,
   compileProfile,
   DependencyScheduler,
   ExecutionStore,
@@ -141,7 +151,7 @@ function declaredArtifacts(metadata: unknown): DeclaredArtifact[] {
     if (typeof item.path !== "string" || !item.path.trim() || item.path.length > 8_192) {
       throw new Error(`Declared artifact ${index} has an invalid path`);
     }
-    const kind = item.kind ?? "result";
+    const kind = item.kind ?? "other";
     if (typeof kind !== "string" || !ARTIFACT_KINDS.has(kind as DeclaredArtifact["kind"])) {
       throw new Error(`Declared artifact ${index} has an invalid kind`);
     }
@@ -165,11 +175,27 @@ function declaredArtifacts(metadata: unknown): DeclaredArtifact[] {
   });
 }
 
+async function listWorkspaceFiles(
+  root: string,
+  directory = root,
+  paths: string[] = [],
+): Promise<string[]> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (paths.length >= 1_024) {
+      throw new Error("Checker workspace file limit exceeded");
+    }
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) await listWorkspaceFiles(root, path, paths);
+    else paths.push(relative(root, path).replace(/\\/g, "/"));
+  }
+  return paths.sort();
+}
+
 async function issueAttemptCredential(
   organizationId: string,
   attemptId: string,
 ): Promise<AttemptCredential | null> {
-  const baseUrl = process.env.AASPAI_GATEWAY_CONTROL_URL?.replace(/\/+$/, "");
+  const baseUrl = gatewayControlUrl(process.env.AASPAI_GATEWAY_CONTROL_URL);
   const controlToken = process.env.AASPAI_GATEWAY_CONTROL_TOKEN;
   if (!baseUrl && !controlToken) return null;
   if (!baseUrl || !controlToken) {
@@ -203,7 +229,7 @@ async function issueAttemptCredential(
 }
 
 async function revokeAttemptCredential(credential: AttemptCredential): Promise<void> {
-  const baseUrl = process.env.AASPAI_GATEWAY_CONTROL_URL?.replace(/\/+$/, "");
+  const baseUrl = gatewayControlUrl(process.env.AASPAI_GATEWAY_CONTROL_URL);
   const controlToken = process.env.AASPAI_GATEWAY_CONTROL_TOKEN;
   if (!baseUrl || !controlToken) throw new Error("Credential gateway control config disappeared");
   const response = await fetch(
@@ -215,6 +241,57 @@ async function revokeAttemptCredential(credential: AttemptCredential): Promise<v
     },
   );
   if (!response.ok) throw new Error(`Credential gateway revoke failed (${response.status})`);
+}
+
+export function gatewayControlUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const url = new URL(value);
+  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error("AASPAI_GATEWAY_CONTROL_URL must use HTTPS except on loopback");
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+
+export interface CheckerVerdict {
+  status: "passed" | "failed" | "concerns";
+  summary: string;
+}
+
+export function parseCheckerVerdict(output: string | undefined): CheckerVerdict | null {
+  const line = output
+    ?.split(/\r?\n/)
+    .reverse()
+    .find((candidate) => candidate.trim().startsWith("AASPAI_CHECK_RESULT="));
+  if (!line) return null;
+  try {
+    const value = JSON.parse(line.trim().slice("AASPAI_CHECK_RESULT=".length)) as {
+      verdict?: unknown;
+      summary?: unknown;
+    };
+    if (
+      !["passed", "failed", "concerns"].includes(String(value.verdict)) ||
+      typeof value.summary !== "string" ||
+      !value.summary.trim()
+    ) {
+      return null;
+    }
+    return {
+      status: value.verdict as CheckerVerdict["status"],
+      summary: value.summary.trim().slice(0, 8_192),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function requiredCheckerCommit(
+  workItem: Pick<ExecutionWorkItem, "deliveryCommitSha">,
+): string {
+  if (!workItem.deliveryCommitSha) {
+    throw new Error("Checker requires the maker's immutable delivery commit");
+  }
+  return workItem.deliveryCommitSha;
 }
 
 export class WorkerDaemon {
@@ -240,7 +317,9 @@ export class WorkerDaemon {
     status?: string;
   }>;
   private loopLineage: LoopExecutionLineage | null = null;
+  private unwatchAgents: (() => void) | null = null;
   private unwatchLoops: (() => void) | null = null;
+  private agentReconcile: Promise<void> = Promise.resolve();
 
   private tickHandle: NodeJS.Timeout | null = null;
   private pollHandle: NodeJS.Timeout | null = null;
@@ -311,22 +390,12 @@ export class WorkerDaemon {
     await this.agentSource.start();
     await this.knowledgeSource.start();
     await this.loopSource.start();
-    const agentDefinitions = await Promise.all(
-      (await this.agentSource.list()).map(async (id) => {
-        const agent = await this.agentSource.get(id);
-        return {
-          id: agent.id,
-          reportsTo: agent.reportsTo,
-          manages: agent.manages,
-          peers: agent.peers,
-          metadata: { definitionSource: "git" },
-        };
-      }),
-    );
-    await new OperationalGovernanceService(getDefaultDb().db).reconcileAgentDefinitions(
-      this.organizationId,
-      agentDefinitions,
-    );
+    await this.reconcileAgentDefinitions();
+    this.unwatchAgents = this.agentSource.watch(() => {
+      this.agentReconcile = this.agentReconcile
+        .then(() => this.reconcileAgentDefinitions())
+        .catch((err) => log.error("agent relationship refresh failed", { err: String(err) }));
+    });
     const prunedMemories = await createLocalMemoryProvider(getDefaultDb().db).pruneExpired(
       this.organizationId,
     );
@@ -364,9 +433,6 @@ export class WorkerDaemon {
   private installShutdownHandlers(): void {
     const handle = (signal: NodeJS.Signals) => {
       log.info("received shutdown signal", { signal });
-      // stop() is async but we can't await a signal handler.
-      // Mark shuttingDown immediately so pollWakeups/claimAndRun bail.
-      this.shuttingDown = true;
       void this.stop()
         .then(() => process.exit(0))
         .catch((err) => {
@@ -385,6 +451,8 @@ export class WorkerDaemon {
     log.info("worker stopping");
     if (this.tickHandle) clearInterval(this.tickHandle);
     if (this.pollHandle) clearInterval(this.pollHandle);
+    this.unwatchAgents?.();
+    this.unwatchAgents = null;
     this.unwatchLoops?.();
     this.unwatchLoops = null;
     this.scheduler.stop();
@@ -396,6 +464,7 @@ export class WorkerDaemon {
         log.warn("in-flight work ended with error during shutdown", { err: String(err) });
       }
     }
+    await this.agentReconcile;
     await this.agentSource.stop();
     await this.knowledgeSource.stop();
     await this.loopSource.stop();
@@ -405,6 +474,25 @@ export class WorkerDaemon {
       /* already closed */
     }
     log.info("worker stopped");
+  }
+
+  private async reconcileAgentDefinitions(): Promise<void> {
+    const definitions = await Promise.all(
+      (await this.agentSource.list()).map(async (id) => {
+        const agent = await this.agentSource.get(id);
+        return {
+          id: agent.id,
+          reportsTo: agent.reportsTo,
+          manages: agent.manages,
+          peers: agent.peers,
+          metadata: { definitionSource: "git" },
+        };
+      }),
+    );
+    await new OperationalGovernanceService(getDefaultDb().db).reconcileAgentDefinitions(
+      this.organizationId,
+      definitions,
+    );
   }
 
   isRunning(): boolean {
@@ -688,6 +776,11 @@ export class WorkerDaemon {
         traceId: wakeupId,
         durableSessionId: request.sessionId,
       });
+      if (!["succeeded", "completed"].includes(result.status ?? "")) {
+        throw new Error(
+          `session ${result.sessionId ?? request.sessionId ?? "unknown"} ${result.status ?? "failed"}`,
+        );
+      }
       await this.finishWakeup(wakeupId, result.sessionId ?? request.sessionId);
       return;
     }
@@ -841,10 +934,12 @@ export class WorkerDaemon {
           (criterion) => `Acceptance: ${criterion.description}`,
         ),
         "Inspect the diff and run the smallest relevant tests. Do not modify files.",
+        'End with exactly one line: AASPAI_CHECK_RESULT={"verdict":"passed|failed|concerns","summary":"brief evidence-based conclusion"}',
       ]
         .filter(Boolean)
         .join("\n\n");
       try {
+        await this.executionStore.startCheckerAttempt(checker.id);
         const result = await this.executeDurableAttempt({
           attempt: checker,
           workItem,
@@ -852,21 +947,42 @@ export class WorkerDaemon {
           adapter: checkerHarness,
           prompt,
         });
+        const verdict =
+          !result.timedOut && result.exitCode === 0
+            ? parseCheckerVerdict(result.summary)
+            : {
+                status: "failed" as const,
+                summary:
+                  result.errorMessage ??
+                  result.summary ??
+                  (result.timedOut
+                    ? "Independent checker timed out"
+                    : "Independent checker failed"),
+              };
         const evidence = await this.executionStore.listArtifacts(checker.id);
         await this.executionStore.submitVerification({
           verificationId: verification.id,
           checkerAttemptId: checker.id,
-          status: !result.timedOut && result.exitCode === 0 ? "passed" : "failed",
+          status: verdict?.status ?? "failed",
           summary:
-            result.summary ??
-            result.errorMessage ??
-            (result.exitCode === 0 ? "Independent checker passed" : "Independent checker failed"),
+            verdict?.summary ??
+            "Checker completed without the required structured AASPAI_CHECK_RESULT verdict",
           evidenceIds: evidence.map((artifact) => artifact.id),
         });
-        if (!result.timedOut && result.exitCode === 0) {
-          await this.proposeKnowledgeWriteback(workItem, checker.id, result.summary);
+        if (verdict?.status === "passed") {
+          await this.proposeKnowledgeWriteback(workItem, checker.id, verdict.summary);
         }
       } catch (error) {
+        const current = await this.executionStore.getAttempt(checker.id);
+        if (
+          current &&
+          !["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(current.status)
+        ) {
+          if (current.status === "queued" || current.status === "preparing") {
+            await this.executionStore.startCheckerAttempt(checker.id);
+          }
+          await this.executionStore.transitionAttempt(checker.id, "failed");
+        }
         await this.executionStore.submitVerification({
           verificationId: verification.id,
           checkerAttemptId: checker.id,
@@ -980,58 +1096,65 @@ export class WorkerDaemon {
     const skillRegistry = persistedPlan
       ? null
       : await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
-    const repository = (
-      await getDefaultDb()
-        .db.select()
-        .from(repositories)
-        .where(
-          and(
-            eq(repositories.organizationId, this.organizationId),
-            eq(repositories.id, input.workItem.repositoryId),
-          ),
-        )
-        .limit(1)
-    )[0];
-    if (!repository) throw new Error(`Repository ${input.workItem.repositoryId} not found`);
+    const repositoryWork = input.workItem.workKind === "repository";
+    const repository = repositoryWork
+      ? (
+          await getDefaultDb()
+            .db.select()
+            .from(repositories)
+            .where(
+              and(
+                eq(repositories.organizationId, this.organizationId),
+                eq(repositories.id, input.workItem.repositoryId),
+              ),
+            )
+            .limit(1)
+        )[0]
+      : null;
+    if (repositoryWork && !repository)
+      throw new Error(`Repository ${input.workItem.repositoryId} not found`);
     const workspaceManager = new LocalExecutionWorkspaceManager(
       this.git,
       this.executionStore,
       async (repositoryId) => {
-        if (repositoryId !== repository.id) throw new Error("repository scope mismatch");
+        if (!repository || repositoryId !== repository.id)
+          throw new Error("repository scope mismatch");
         return repository.localPath;
       },
     );
-    const makerBranch =
-      input.attempt.role === "checker" && input.attempt.verificationId
-        ? await this.executionStore
-            .getVerification(input.attempt.verificationId)
-            .then(async (verification) => {
-              const maker = verification
-                ? await this.executionStore.getAttempt(verification.makerAttemptId)
-                : null;
-              return maker
-                ? (input.workItem.branchName ?? `worker/${maker.id}`)
-                : input.workItem.branchName;
-            })
-        : null;
     const sourceCommit =
-      input.attempt.role === "checker" && makerBranch
-        ? await this.git.resolveCommit(repository.localPath, makerBranch)
-        : input.workItem.sourceCommitSha && input.workItem.sourceCommitSha !== "0000000"
+      repository &&
+      input.attempt.role === "checker" &&
+      ["commit", "pull_request"].includes(input.workItem.deliveryMode)
+        ? requiredCheckerCommit(input.workItem)
+        : repository &&
+            input.workItem.sourceCommitSha &&
+            input.workItem.sourceCommitSha !== "0000000"
           ? input.workItem.sourceCommitSha
-          : await this.git.resolveCommit(repository.localPath, repository.defaultBranch);
-    const workspace = await workspaceManager.prepare({
-      organizationId: this.organizationId,
-      attemptId: input.attempt.id,
-      repositoryId: repository.id,
-      repositoryPath: repository.localPath,
-      baseCommitSha: sourceCommit,
-      workspaceRoot: process.env.AASPAI_WORKSPACE_ROOT ?? join("workspace", "worker"),
-      branchName:
-        input.attempt.role === "checker"
-          ? `checker/${input.attempt.id}`
-          : (input.workItem.branchName ?? `worker/${input.attempt.id}`),
-    });
+          : repository
+            ? await this.git.resolveCommit(repository.localPath, repository.defaultBranch)
+            : (input.workItem.sourceCommitSha ?? "0000000");
+    const workspaceRoot = process.env.AASPAI_WORKSPACE_ROOT ?? join("workspace", "worker");
+    const workspace = repository
+      ? await workspaceManager.prepare({
+          organizationId: this.organizationId,
+          attemptId: input.attempt.id,
+          repositoryId: repository.id,
+          repositoryPath: repository.localPath,
+          baseCommitSha: sourceCommit,
+          workspaceRoot,
+          branchName:
+            input.attempt.role === "checker"
+              ? `checker/${input.attempt.id}`
+              : (input.workItem.branchName ?? `worker/${input.attempt.id}`),
+        })
+      : await workspaceManager.prepareDisposable({
+          organizationId: this.organizationId,
+          attemptId: input.attempt.id,
+          repositoryId: input.workItem.repositoryId,
+          baseCommitSha: sourceCommit,
+          workspaceRoot,
+        });
     const workspacePath = workspace.path;
     const materializedPaths: string[] = [];
     try {
@@ -1074,7 +1197,10 @@ export class WorkerDaemon {
         });
       }
     } catch (error) {
-      await workspaceManager.release(workspace.id).catch(() => undefined);
+      await (repositoryWork
+        ? workspaceManager.release(workspace.id)
+        : workspaceManager.releaseDisposable(workspace.id)
+      ).catch(() => undefined);
       throw error;
     }
     const adapterConfig = {
@@ -1098,7 +1224,7 @@ export class WorkerDaemon {
           sourceSnapshot: {
             repositoryId: input.workItem.repositoryId,
             commitSha: sourceCommit,
-            branchName: input.workItem.branchName ?? "worker",
+            branchName: workspace.branchName,
             capturedAt: new Date().toISOString(),
           },
           target: {
@@ -1115,6 +1241,7 @@ export class WorkerDaemon {
           runtimeConfig: { workspacePolicy: "disposable" },
           profile,
         }));
+      assertGovernedRuntimeIsolation(plan.harness, plan.target, true);
       credential = await issueAttemptCredential(this.organizationId, input.attempt.id);
 
       return await new HarnessExecutionPlanRunner(this.executionStore).run({
@@ -1137,6 +1264,8 @@ export class WorkerDaemon {
             workItem: input.workItem,
             workspacePath,
             sourceCommit,
+            branchName: workspace.branchName,
+            repositoryWork,
           });
         },
       });
@@ -1149,7 +1278,10 @@ export class WorkerDaemon {
           }),
         );
       }
-      await workspaceManager.release(workspace.id).catch(() => undefined);
+      await (repositoryWork
+        ? workspaceManager.release(workspace.id)
+        : workspaceManager.releaseDisposable(workspace.id)
+      ).catch(() => undefined);
     }
   }
 
@@ -1159,11 +1291,16 @@ export class WorkerDaemon {
     workItem: ExecutionWorkItem;
     workspacePath: string;
     sourceCommit: string;
+    branchName: string;
+    repositoryWork: boolean;
   }): Promise<void> {
     const successful = input.result.exitCode === 0 && !input.result.timedOut;
-    const changedPaths = changedPathsFromStatus(
-      (await this.git.status(input.workspacePath)).entries,
-    );
+    const artifactDeclarations = declaredArtifacts(input.workItem.metadata);
+    const changedPaths = input.repositoryWork
+      ? changedPathsFromStatus((await this.git.status(input.workspacePath)).entries)
+      : input.attempt.role === "checker"
+        ? await listWorkspaceFiles(input.workspacePath)
+        : artifactDeclarations.map((artifact) => artifact.path);
     if (input.attempt.role === "checker" && changedPaths.length > 0)
       throw new Error(`checker modified files: ${changedPaths.join(", ")}`);
     const policyDecision = evaluateExecutionPolicy(input.workItem.governance, {
@@ -1182,11 +1319,33 @@ export class WorkerDaemon {
       });
       throw new Error(`post-run policy denied changes: ${policyDecision.reason}`);
     }
-    const commit = successful
-      ? await this.git.commit(input.workspacePath, `aaspai attempt ${input.attempt.id}`)
-      : null;
-    const head = commit ?? (await this.git.resolveCommit(input.workspacePath));
-    const patch = await this.git.diff(input.workspacePath, input.sourceCommit, head);
+    const commit =
+      successful &&
+      input.attempt.role === "maker" &&
+      input.repositoryWork &&
+      ["commit", "pull_request"].includes(input.workItem.deliveryMode)
+        ? await this.git.commit(input.workspacePath, `aaspai attempt ${input.attempt.id}`)
+        : null;
+    if (
+      successful &&
+      input.attempt.role === "maker" &&
+      input.repositoryWork &&
+      ["commit", "pull_request"].includes(input.workItem.deliveryMode) &&
+      !commit
+    ) {
+      throw new Error(`${input.workItem.deliveryMode} delivery produced no commit`);
+    }
+    if (
+      successful &&
+      input.attempt.role === "maker" &&
+      input.workItem.deliveryMode === "artifact" &&
+      artifactDeclarations.length === 0
+    ) {
+      throw new Error("artifact delivery requires metadata.declaredArtifacts");
+    }
+    const patch = input.repositoryWork
+      ? await this.git.diff(input.workspacePath, input.sourceCommit, commit ?? undefined)
+      : "";
     const attemptRoot = resolve(
       process.env.AASPAI_ARTIFACTS_ROOT ?? join(".aaspai", "artifacts"),
       input.attempt.id,
@@ -1217,7 +1376,7 @@ export class WorkerDaemon {
     }
 
     const workspaceRoot = await realpath(input.workspacePath);
-    for (const declaration of declaredArtifacts(input.workItem.metadata)) {
+    for (const declaration of artifactDeclarations) {
       if (isAbsolute(declaration.path)) throw new Error("Declared artifact path must be relative");
       const source = await realpath(resolve(workspaceRoot, declaration.path));
       const safePath = relative(workspaceRoot, source);
@@ -1235,6 +1394,14 @@ export class WorkerDaemon {
         declaration.kind,
         destination,
         declaration.mediaType,
+      );
+    }
+    if (commit) {
+      await this.executionStore.recordDeliveryCommit(
+        input.workItem.id,
+        input.attempt.id,
+        commit,
+        input.branchName,
       );
     }
   }

@@ -90,6 +90,8 @@ export const executionWorkItems = sqliteTable(
     deliveryStatus: text("delivery_status").notNull().default("pending"),
     deliveryRef: text("delivery_ref"),
     deliveryCommitSha: text("delivery_commit_sha"),
+    deliveryClaimOwner: text("delivery_claim_owner"),
+    deliveryLeaseExpiresAt: text("delivery_lease_expires_at"),
     // Nullable lineage link. It is intentionally not a SQL FK because the
     // work-item table is declared before workflow_runs in this schema module.
     workflowRunId: text("workflow_run_id"),

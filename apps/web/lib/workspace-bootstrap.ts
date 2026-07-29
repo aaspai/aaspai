@@ -27,10 +27,10 @@ export type FrontendOnboarding = {
 const agents = [
   ["ceo", "Chief Executive Officer", "ceo", "null"],
   ["operator", "Operations Lead", "operator", "agent/ceo", "dry_run_local"],
-  // Keep the first frontend flow runnable on a clean machine. The setup page
-  // still verifies the installed CLIs before a real provider is selected.
+  // Keep interactive roles dry-run by default. Verification must use an
+  // adapter whose autonomous tool policy can be enforced.
   ["developer", "Developer", "engineer", "agent/operator", "dry_run_local"],
-  ["tester", "Tester", "qa", "agent/operator", "codex_local"],
+  ["tester", "Tester", "qa", "agent/operator", "opencode_cli"],
 ] as const;
 
 const defaultAgenda =
@@ -99,7 +99,7 @@ export async function ensureFrontendWorkspace(
         : `# ${title}\n\nWork toward measurable company goals. Report evidence, blockers, and the next action.\n`;
     await writeFile(
       join(directory, "AGENT.md"),
-      `---\nid: agent/${id}\ntype: Agent\ntitle: "${title}"\ndescription: "${title} for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${adapter}\n${id === "ceo" && onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ${role}\nreportsTo: ${reportsTo}\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\n---\n\n${body}`,
+      `---\nid: agent/${id}\ntype: Agent\ntitle: "${title}"\ndescription: "${title} for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${adapter}\n${id === "ceo" && onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ${role}\nreportsTo: ${reportsTo}\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\nruntime:\n  default: ${adapter === "dry_run_local" ? "{ kind: local }" : "{ kind: sandbox, provider: daytona, remoteCwd: /workspace }"}\n---\n\n${body}`,
       "utf8",
     );
     await writeFile(
@@ -109,7 +109,9 @@ export async function ensureFrontendWorkspace(
     );
     await writeFile(
       join(directory, "tools.yaml"),
-      "allow: []\ndeny: []\nrequire_approval_for: []\n",
+      id === "tester"
+        ? "allow:\n  - Read\n  - Bash\ndeny:\n  - Write\n  - Edit\nrequire_approval_for: []\n"
+        : "allow:\n  - Read\n  - ListSkills\n  - ListAgents\n  - AskUserQuestion\ndeny: []\nrequire_approval_for: []\n",
       "utf8",
     );
     await writeFile(join(directory, "skills.lock.json"), "[]\n", "utf8");

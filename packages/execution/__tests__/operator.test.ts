@@ -128,7 +128,7 @@ describe("operator process vertical", () => {
       attempt: { id: string };
       workItem: { id: string };
     }) => {
-      await store.recordDeliveryCommit(workItem.id, attempt.id, "1234567");
+      await store.recordDeliveryCommit(workItem.id, attempt.id, "1".repeat(40));
       return "succeeded" as const;
     };
     await service.tick(context, started.run.id, { runProvider });

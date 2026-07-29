@@ -41,7 +41,7 @@ describe("execution governance", () => {
     await scheduler.run(
       { ...fixture.runInput, agentId: "maker", harness: "dry_run_local" },
       async ({ attempt }) => {
-        await store.recordDeliveryCommit(item.id, attempt.id, "1234567");
+        await store.recordDeliveryCommit(item.id, attempt.id, "1".repeat(40));
         return "succeeded";
       },
     );
@@ -49,14 +49,17 @@ describe("execution governance", () => {
     await expect(store.getWorkItem(item.id)).resolves.toMatchObject({
       status: "awaiting_verification",
     });
-    await expect(store.recordDeliveryCommit(item.id, "not-the-maker", "7654321")).rejects.toThrow(
-      "maker attempt",
-    );
+    await expect(
+      store.recordDeliveryCommit(item.id, "not-the-maker", "7".repeat(40)),
+    ).rejects.toThrow("maker attempt");
+    await expect(store.getWorkflowRun(fixture.runInput.workflowRunId)).resolves.toMatchObject({
+      status: "running",
+    });
     const maker = (await store.listAttemptsForWorkItem(item.id)).find(
       (attempt) => attempt.role === "maker",
     );
     await expect(
-      store.recordDeliveryCommit(item.id, maker?.id ?? "missing", "7654321"),
+      store.recordDeliveryCommit(item.id, maker?.id ?? "missing", "7".repeat(40)),
     ).rejects.toThrow("immutable");
     const verification = await store.getVerificationForWorkItem(item.id);
     expect(verification?.status).toBe("pending");
@@ -106,13 +109,27 @@ describe("execution governance", () => {
       status: "completed",
       deliveryStatus: "ready",
     });
-    await expect(store.claimDelivery(item.id)).resolves.toMatchObject({
+    await expect(store.getWorkflowRun(fixture.runInput.workflowRunId)).resolves.toMatchObject({
+      status: "succeeded",
+    });
+    const expiredClaim = await store.claimDelivery(item.id, -1);
+    expect(expiredClaim).toMatchObject({
       deliveryStatus: "delivering",
     });
+    const deliveryClaim = await store.claimDelivery(item.id);
+    expect(deliveryClaim?.deliveryClaimOwner).not.toBe(expiredClaim?.deliveryClaimOwner);
     await expect(store.claimDelivery(item.id)).resolves.toBeNull();
     await expect(
       store.completeDelivery({
         workItemId: item.id,
+        ownerId: expiredClaim?.deliveryClaimOwner ?? "missing",
+        status: "delivered",
+      }),
+    ).rejects.toThrow("actively claimed");
+    await expect(
+      store.completeDelivery({
+        workItemId: item.id,
+        ownerId: deliveryClaim?.deliveryClaimOwner ?? "missing",
         status: "delivered",
         ref: "https://example.test/pull/1",
       }),
@@ -152,6 +169,9 @@ describe("execution governance", () => {
     await expect(store.getWorkItem(item.id)).resolves.toMatchObject({
       status: "blocked",
       blockedReason: "verification failed: Required test failed",
+    });
+    await expect(store.getWorkflowRun(fixture.runInput.workflowRunId)).resolves.toMatchObject({
+      status: "failed",
     });
   });
 
@@ -241,6 +261,57 @@ describe("execution governance", () => {
     await expect(store.getWorkItem(item.id)).resolves.toMatchObject({
       status: "blocked",
       blockedReason: "budget exhausted; no new attempt was started",
+    });
+  });
+
+  it("rejects duplicate budget scopes", async () => {
+    const fixture = await createFixture(store);
+    await expect(
+      store.createWorkItem({
+        ...fixture.lineage,
+        title: "Ambiguous budget",
+        deliveryMode: "none",
+        idempotencyKey: `duplicate-budget:${randomUUID()}`,
+        governance: {
+          budget: {
+            limits: [
+              { scope: "organization", runs: 1 },
+              { scope: "organization", tokens: 10 },
+            ],
+          },
+        },
+      }),
+    ).rejects.toThrow("Budget limits must use unique scopes");
+  });
+
+  it("blocks completion when actual usage exceeds the reserved hard budget", async () => {
+    const fixture = await createFixture(store);
+    const item = await store.createWorkItem({
+      ...fixture.lineage,
+      title: "Actual usage overage",
+      deliveryMode: "none",
+      idempotencyKey: `actual-overage:${randomUUID()}`,
+      governance: { budget: { limits: [{ scope: "attempt", tokens: 10 }] } },
+    });
+    const dispatched = await store.dispatchWorkItem({
+      ...fixture.runInput,
+      workItemId: item.id,
+      agentId: "maker",
+      harness: "dry_run_local",
+      organizationConcurrency: 1,
+      projectConcurrency: 1,
+      repositoryConcurrency: 1,
+      agentConcurrency: 1,
+    });
+    expect(dispatched?.created).toBe(true);
+    const completed = await store.completeScheduledAttempt({
+      attemptId: dispatched?.attempt.id ?? "missing",
+      status: "succeeded",
+      usage: { tokens: 11 },
+    });
+    expect(completed.workItem).toMatchObject({
+      status: "blocked",
+      blockedReason: expect.stringContaining("actual budget exceeded"),
     });
   });
 

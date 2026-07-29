@@ -7,7 +7,6 @@ policy.
 ```text
 .aaspai/loops/<slug>/
 |-- LOOP.md
-|-- schedule.yaml
 |-- gate.yaml
 `-- budget.yaml
 ```

@@ -186,11 +186,6 @@ ${description}
           "adapterConfig: {}\nruntimeConfig: {}\n",
           "utf8",
         );
-        await fs.writeFile(
-          path.join(dir, "tools.yaml"),
-          "allow: []\ndeny: []\nrequire_approval_for: []\n",
-          "utf8",
-        );
         await fs.writeFile(path.join(dir, "skills.lock.json"), "[]\n", "utf8");
         await fs.writeFile(
           path.join(dir, "relations.yaml"),

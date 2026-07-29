@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { InMemoryAuthVerifier } from "@aaspai/auth";
 import { authPrincipalSchema } from "@aaspai/contracts";
 import { closeDefaultDb, getDefaultDb, runMigrations } from "@aaspai/db";
 import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
+import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApiApp } from "./server.js";
 
@@ -226,6 +228,59 @@ describe("execution governance API", () => {
       else process.env.AASPAI_CONNECTOR_SLACK_URL = previousEndpoint;
     }
   });
+
+  it("pushes the verified commit SHA and reconciles an existing pull request", async () => {
+    const store = new ExecutionStore(getDefaultDb().db);
+    const fixture = await createFixture(store);
+    const commitSha = "a".repeat(40);
+    const item = await store.createWorkItem({
+      ...fixture.lineage,
+      deliveryMode: "pull_request",
+      title: "Deliver immutable change",
+      idempotencyKey: `api-pr-delivery:${randomUUID()}`,
+    });
+    await new DependencyScheduler(store).run(
+      {
+        organizationId,
+        goalId: fixture.lineage.goalId,
+        workflowRunId: fixture.run.id,
+        agentId: "maker",
+        harness: "dry_run_local",
+      },
+      async ({ attempt }) => {
+        await store.recordDeliveryCommit(item.id, attempt.id, commitSha, "worker/pr-delivery");
+        return "succeeded";
+      },
+    );
+    const push = vi.fn(async () => undefined);
+    const create = vi.fn();
+    const find = vi.fn(async () => ({
+      number: 7,
+      url: "https://github.com/example/project/pull/7",
+      state: "open" as const,
+      head: "worker/pr-delivery",
+      base: "main",
+    }));
+    const app = createApiApp({
+      authVerifier: verifier,
+      git: { push } as unknown as GitRepository,
+      pullRequestProvider: { create, find } as unknown as PullRequestProvider,
+    });
+    const response = await app.request(`/v1/execution/work-items/${item.id}/deliver`, {
+      method: "POST",
+      headers: { cookie: "governance-session" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(push).toHaveBeenCalledWith(
+      "workspace/m3/api-governance/project",
+      "origin",
+      "worker/pr-delivery",
+      commitSha,
+    );
+    expect(find).toHaveBeenCalledOnce();
+    expect(create).not.toHaveBeenCalled();
+  });
 });
 
 async function createFixture(store: ExecutionStore) {
@@ -241,6 +296,7 @@ async function createFixture(store: ExecutionStore) {
     purpose: "project",
     provider: "local",
     localPath: "workspace/m3/api-governance/project",
+    remoteUrl: "example/project",
   });
   const revision = await store.createDefinitionRevision({
     organizationId,
@@ -253,7 +309,7 @@ async function createFixture(store: ExecutionStore) {
     organizationId,
     goalId: goal.id,
     definitionRevisionId: revision.id,
-    idempotencyKey: "api-governance-run",
+    idempotencyKey: `api-governance-run:${randomUUID()}`,
   });
   return {
     run,

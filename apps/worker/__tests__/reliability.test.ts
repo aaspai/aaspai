@@ -242,9 +242,8 @@ describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
     const wakeupId = `wup_${randomUUID()}`;
     await insertQueued(handle, wakeupsTable, wakeupId, "transient fail");
 
-    sessionExecute = vi.fn().mockRejectedValue(new Error("adapter timeout"));
-
     const { WorkerDaemon } = await import("../src/daemon.js");
+    sessionExecute = vi.fn().mockRejectedValue(new Error("adapter timeout"));
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
     await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
 
@@ -263,19 +262,44 @@ describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
     await teardownDb(tmpDir);
   });
 
+  it("does not mark a resolved failed session as a completed wakeup", async () => {
+    const { tmpDir, wakeupsTable, handle } = await setupDb();
+    const wakeupId = `wup_${randomUUID()}`;
+    await insertQueued(handle, wakeupsTable, wakeupId, "provider reports failure");
+    const { WorkerDaemon } = await import("../src/daemon.js");
+    sessionExecute = vi
+      .fn()
+      .mockResolvedValue({ status: "failed", output: "", sessionId: "sess_failed" });
+    const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
+    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+
+    expect(sessionExecute).toHaveBeenCalledTimes(3);
+    const { wakeups } = await import("@aaspai/db");
+    const rows = await (
+      (await import("@aaspai/db")).getDefaultDb().db.select().from(wakeups) as {
+        all: () => Promise<Array<{ id: string; status: string; error: string | null }>>;
+      }
+    ).all();
+    expect(rows.find((row) => row.id === wakeupId)).toMatchObject({
+      status: "failed",
+      error: expect.stringMatching(/exhausted retries/),
+    });
+
+    await teardownDb(tmpDir);
+  });
+
   it("succeeds on the 2nd attempt without marking as failed", async () => {
     const { tmpDir, wakeupsTable, handle } = await setupDb();
     const wakeupId = `wup_${randomUUID()}`;
     await insertQueued(handle, wakeupsTable, wakeupId, "transient fail then ok");
 
+    const { WorkerDaemon } = await import("../src/daemon.js");
     let calls = 0;
     sessionExecute = vi.fn().mockImplementation(async () => {
       calls++;
       if (calls < 2) throw new Error("transient");
       return { status: "completed", output: "ok", sessionId: "sess_test" };
     });
-
-    const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
     await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
 

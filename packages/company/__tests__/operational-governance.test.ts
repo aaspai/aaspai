@@ -66,6 +66,13 @@ describe("operational governance", () => {
       (row) => row.agentId === "agent/worker",
     );
     expect(retired?.status).toBe("retired");
+
+    await service.reconcileAgentDefinitions("org/relations", [
+      { id: "agent/lead", manages: ["agent/worker"] },
+      { id: "agent/worker", reportsTo: "agent/lead" },
+    ]);
+    await service.reconcileAgentDefinitions("org/relations", []);
+    expect(await getDefaultDb().db.select().from(authorityEdges)).toHaveLength(0);
   });
 
   it("records feedback and calculates bounded readiness metrics", async () => {

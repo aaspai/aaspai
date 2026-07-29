@@ -426,6 +426,7 @@ export class ExecutionStore {
   async createWorkItem(input: CreateWorkItemInput) {
     const workKind = input.workKind ?? "repository";
     const deliveryMode = input.deliveryMode ?? "commit";
+    const governance = executionGovernanceSchema.parse(input.governance);
     if (!isDeliveryModeAllowed(workKind, deliveryMode)) {
       throw new Error(`${workKind} work cannot use ${deliveryMode} delivery`);
     }
@@ -459,6 +460,8 @@ export class ExecutionStore {
       deliveryStatus: "pending",
       deliveryRef: null,
       deliveryCommitSha: null,
+      deliveryClaimOwner: null,
+      deliveryLeaseExpiresAt: null,
       workflowRunId: input.workflowRunId ?? null,
       title: input.title,
       description: input.description ?? "",
@@ -473,7 +476,7 @@ export class ExecutionStore {
       maxAttempts: input.maxAttempts ?? 1,
       retryAfter: null,
       blockedReason: null,
-      governanceJson: JSON.stringify(input.governance ?? {}),
+      governanceJson: JSON.stringify(governance),
       idempotencyKey: input.idempotencyKey,
       metadataJson: JSON.stringify(input.metadata ?? {}),
       createdAt: now(),
@@ -593,6 +596,26 @@ export class ExecutionStore {
     return rows.map((row) => parseWorkItem(row));
   }
 
+  async assignWorkItemToWorkflow(
+    workItemId: string,
+    workflowRunId: string,
+  ): Promise<ExecutionWorkItem | null> {
+    await this.db
+      .update(executionWorkItems)
+      .set({ workflowRunId, updatedAt: now() })
+      .where(
+        and(
+          eq(executionWorkItems.id, workItemId),
+          or(
+            isNull(executionWorkItems.workflowRunId),
+            eq(executionWorkItems.workflowRunId, workflowRunId),
+          ),
+        ),
+      );
+    const item = await this.getWorkItem(workItemId);
+    return item?.workflowRunId === workflowRunId ? item : null;
+  }
+
   async updateWorkItemStatus(
     workItemId: string,
     status: ExecutionWorkItem["status"],
@@ -617,6 +640,7 @@ export class ExecutionStore {
       );
     const updated = await this.getWorkItem(workItemId, context);
     if (!updated) throw new Error(`Work item ${workItemId} not found`);
+    if (updated.workflowRunId) await this.reconcileWorkflowRun(updated.workflowRunId);
     return updated;
   }
 
@@ -777,6 +801,33 @@ export class ExecutionStore {
     const updated = await this.getWorkflowRun(runId);
     if (!updated) throw new Error(`Workflow run ${runId} not found`);
     return updated;
+  }
+
+  async reconcileWorkflowRun(runId: string): Promise<WorkflowRun | null> {
+    const run = await this.getWorkflowRun(runId);
+    if (!run || ["succeeded", "failed", "cancelled", "timed_out"].includes(run.status)) {
+      return run;
+    }
+    const items = await this.listWorkItemsForWorkflow(run.organizationId, run.id);
+    if (
+      items.length === 0 ||
+      items.some((item) =>
+        [
+          "proposed",
+          "ready",
+          "claimed",
+          "in_progress",
+          "awaiting_verification",
+          "awaiting_approval",
+        ].includes(item.status),
+      )
+    ) {
+      return run;
+    }
+    return await this.updateWorkflowRunStatus(
+      run.id,
+      items.every((item) => item.status === "completed") ? "succeeded" : "failed",
+    );
   }
 
   async createAttempt(input: CreateAttemptInput) {
@@ -946,12 +997,22 @@ export class ExecutionStore {
     const current = await this.getAttempt(input.attemptId);
     if (!current) throw new Error(`Agent attempt ${input.attemptId} not found`);
     if (isTerminalAttemptStatus(current.status)) {
-      await this.settleBudgetReservations(input.attemptId, input.usage);
-      await this.releaseSchedulerLocks(current.id);
       const existingWorkItem = await this.getWorkItem(current.workItemId);
       if (!existingWorkItem) throw new Error(`Work item ${current.workItemId} not found`);
+      const budgetBreaches = await this.settleBudgetReservations(
+        input.attemptId,
+        existingWorkItem,
+        input.usage,
+      );
+      await this.releaseSchedulerLocks(current.id);
       if (["claimed", "in_progress"].includes(existingWorkItem.status)) {
         if (current.status === "succeeded") {
+          if (budgetBreaches.length > 0) {
+            const blocked = await this.updateWorkItemStatus(existingWorkItem.id, "blocked", {
+              blockedReason: budgetBreaches.join("; "),
+            });
+            return { attempt: current, workItem: blocked };
+          }
           await this.advanceSuccessfulWorkItem(existingWorkItem, current.id);
           const advanced = await this.getWorkItem(existingWorkItem.id);
           if (!advanced) throw new Error("Successful WorkItem disappeared");
@@ -979,9 +1040,15 @@ export class ExecutionStore {
 
     const retryable = input.status === "failed" || input.status === "timed_out";
     const canRetry = retryable && current.attemptNumber < item.maxAttempts;
-    await this.settleBudgetReservations(input.attemptId, input.usage);
+    const budgetBreaches = await this.settleBudgetReservations(input.attemptId, item, input.usage);
     if (input.status === "succeeded") {
-      await this.advanceSuccessfulWorkItem(item, current.id);
+      if (budgetBreaches.length > 0) {
+        await this.updateWorkItemStatus(item.id, "blocked", {
+          blockedReason: budgetBreaches.join("; "),
+        });
+      } else {
+        await this.advanceSuccessfulWorkItem(item, current.id);
+      }
     } else if (canRetry) {
       const retryAfter = new Date(
         Date.now() + Math.max(0, input.retryDelayMs ?? 1_000),
@@ -1280,11 +1347,11 @@ export class ExecutionStore {
       if (workItem.deliveryMode === "artifact") {
         const persistedArtifact = workItem.claimedByAttemptId
           ? tx
-              .select({ id: artifacts.id })
+              .select({ id: artifacts.id, kind: artifacts.kind })
               .from(artifacts)
               .where(eq(artifacts.attemptId, workItem.claimedByAttemptId))
-              .limit(1)
-              .get()
+              .all()
+              .find((artifact) => !["result", "patch"].includes(artifact.kind))
           : null;
         if (!persistedArtifact) {
           throw new Error("Artifact delivery requires a persisted artifact");
@@ -1357,6 +1424,8 @@ export class ExecutionStore {
     const approval = await this.getApproval(input.approvalId);
     const updatedWorkItem = await this.getWorkItem(outcome.workItemId);
     if (!approval || !updatedWorkItem) throw new Error("Approval decision disappeared");
+    if (updatedWorkItem.workflowRunId)
+      await this.reconcileWorkflowRun(updatedWorkItem.workflowRunId);
     return { approval, workItem: updatedWorkItem };
   }
 
@@ -1406,7 +1475,7 @@ export class ExecutionStore {
           .limit(1)
       )[0];
       const persistedArtifacts = claim?.attemptId ? await this.listArtifacts(claim.attemptId) : [];
-      if (persistedArtifacts.length === 0) {
+      if (!persistedArtifacts.some((artifact) => !["result", "patch"].includes(artifact.kind))) {
         throw new Error("Artifact delivery requires a persisted artifact");
       }
     }
@@ -1420,14 +1489,20 @@ export class ExecutionStore {
         updatedAt: now(),
       })
       .where(eq(executionWorkItems.id, workItemId));
+    if (item.workflowRunId) await this.reconcileWorkflowRun(item.workflowRunId);
   }
 
   async recordDeliveryCommit(
     workItemId: string,
     makerAttemptId: string,
     commitSha: string,
+    branchName?: string,
   ): Promise<ExecutionWorkItem> {
-    if (!/^[0-9a-f]{7,64}$/i.test(commitSha)) throw new Error("Commit SHA is invalid");
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(commitSha))
+      throw new Error("Commit SHA is invalid");
+    if (branchName !== undefined && (!branchName.trim() || branchName.length > 256)) {
+      throw new Error("Delivery branch name is invalid");
+    }
     const attempt = await this.getAttempt(makerAttemptId);
     if (!attempt || attempt.workItemId !== workItemId || attempt.role !== "maker") {
       throw new Error("Commit evidence must come from the work item's maker attempt");
@@ -1449,10 +1524,17 @@ export class ExecutionStore {
     if (current.deliveryCommitSha && current.deliveryCommitSha !== commitSha) {
       throw new Error("Maker commit evidence is immutable");
     }
+    if (current.branchName && branchName && current.branchName !== branchName) {
+      throw new Error("Maker delivery branch is immutable");
+    }
     if (!current.deliveryCommitSha) {
       await this.db
         .update(executionWorkItems)
-        .set({ deliveryCommitSha: commitSha, updatedAt: now() })
+        .set({
+          deliveryCommitSha: commitSha,
+          branchName: current.branchName ?? branchName ?? null,
+          updatedAt: now(),
+        })
         .where(
           and(eq(executionWorkItems.id, workItemId), isNull(executionWorkItems.deliveryCommitSha)),
         );
@@ -1466,6 +1548,7 @@ export class ExecutionStore {
 
   async completeDelivery(input: {
     workItemId: string;
+    ownerId: string;
     status: "delivered" | "failed";
     ref?: string | null;
     error?: string | null;
@@ -1475,6 +1558,8 @@ export class ExecutionStore {
       .set({
         deliveryStatus: input.status,
         deliveryRef: input.ref ?? null,
+        deliveryClaimOwner: null,
+        deliveryLeaseExpiresAt: null,
         blockedReason: input.status === "failed" ? (input.error ?? "delivery failed") : null,
         updatedAt: now(),
       })
@@ -1482,6 +1567,7 @@ export class ExecutionStore {
         and(
           eq(executionWorkItems.id, input.workItemId),
           eq(executionWorkItems.deliveryStatus, "delivering"),
+          eq(executionWorkItems.deliveryClaimOwner, input.ownerId),
         ),
       )
       .returning({ id: executionWorkItems.id });
@@ -1491,14 +1577,30 @@ export class ExecutionStore {
     return item;
   }
 
-  async claimDelivery(workItemId: string): Promise<ExecutionWorkItem | null> {
+  async claimDelivery(workItemId: string, leaseMs = 60_000): Promise<ExecutionWorkItem | null> {
+    const claimedAt = now();
+    const ownerId = `delivery_${randomUUID()}`;
     const changed = await this.db
       .update(executionWorkItems)
-      .set({ deliveryStatus: "delivering", updatedAt: now() })
+      .set({
+        deliveryStatus: "delivering",
+        deliveryClaimOwner: ownerId,
+        deliveryLeaseExpiresAt: new Date(Date.now() + leaseMs).toISOString(),
+        updatedAt: claimedAt,
+      })
       .where(
         and(
           eq(executionWorkItems.id, workItemId),
-          inArray(executionWorkItems.deliveryStatus, ["ready", "failed"]),
+          or(
+            inArray(executionWorkItems.deliveryStatus, ["ready", "failed"]),
+            and(
+              eq(executionWorkItems.deliveryStatus, "delivering"),
+              or(
+                isNull(executionWorkItems.deliveryLeaseExpiresAt),
+                lte(executionWorkItems.deliveryLeaseExpiresAt, claimedAt),
+              ),
+            ),
+          ),
         ),
       )
       .returning({ id: executionWorkItems.id });
@@ -1828,8 +1930,9 @@ export class ExecutionStore {
 
   private async settleBudgetReservations(
     attemptId: string,
+    workItem: ExecutionWorkItem,
     usage?: { tokens?: number; costUsd?: number },
-  ): Promise<void> {
+  ): Promise<string[]> {
     await this.db
       .update(executionBudgetReservations)
       .set({
@@ -1844,6 +1947,60 @@ export class ExecutionStore {
           eq(executionBudgetReservations.status, "reserved"),
         ),
       );
+    const attemptReservations = await this.db
+      .select()
+      .from(executionBudgetReservations)
+      .where(eq(executionBudgetReservations.attemptId, attemptId));
+    const breaches: string[] = [];
+    for (const reservation of attemptReservations) {
+      const limit = workItem.governance.budget.limits.find(
+        (candidate) => candidate.scope === reservation.scope,
+      );
+      if (!limit) continue;
+      const dayStart = new Date();
+      dayStart.setUTCHours(0, 0, 0, 0);
+      const rows = await this.db
+        .select()
+        .from(executionBudgetReservations)
+        .where(
+          and(
+            eq(executionBudgetReservations.organizationId, reservation.organizationId),
+            eq(executionBudgetReservations.scope, reservation.scope),
+            eq(executionBudgetReservations.scopeId, reservation.scopeId),
+            inArray(executionBudgetReservations.status, ["reserved", "settled"]),
+            reservation.scope === "loop"
+              ? gte(executionBudgetReservations.createdAt, dayStart.toISOString())
+              : undefined,
+          ),
+        );
+      const tokens = rows.reduce(
+        (sum, row) => sum + (row.status === "reserved" ? row.reservedTokens : row.actualTokens),
+        0,
+      );
+      const costUsd = rows.reduce(
+        (sum, row) => sum + (row.status === "reserved" ? row.reservedCostUsd : row.actualCostUsd),
+        0,
+      );
+      const runs = rows.reduce((sum, row) => sum + row.reservedRuns, 0);
+      if (
+        (limit.tokens > 0 && tokens > limit.tokens) ||
+        (limit.costUsd > 0 && costUsd > limit.costUsd) ||
+        (limit.runs > 0 && runs > limit.runs)
+      ) {
+        breaches.push(`actual budget exceeded for ${reservation.scope}:${reservation.scopeId}`);
+      }
+    }
+    for (const reason of [...new Set(breaches)]) {
+      await this.recordGovernanceEvent({
+        organizationId: workItem.organizationId,
+        workItemId: workItem.id,
+        attemptId,
+        action: "budget.settle",
+        decision: "denied",
+        reason,
+      });
+    }
+    return [...new Set(breaches)];
   }
 
   private async acquireSchedulerSlots(input: {

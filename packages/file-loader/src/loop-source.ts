@@ -19,7 +19,7 @@ const log = getLogger("file-loader.loop-source");
 /**
  * File-based `LoopConfigSource`. Reads `.aaspai/loops/<slug>/LOOP.md` (OKF
  * frontmatter) plus the optional sidecar files (`gate.yaml`,
- * `budget.yaml`, `schedule.yaml`).
+ * `budget.yaml`). Scheduling is defined once in `LOOP.md` frontmatter.
  */
 export class FileLoopConfigSource implements LoopConfigSource {
   private readonly cache = new Map<string, Readonly<LoopPattern>>();
@@ -173,7 +173,6 @@ export class FileLoopConfigSource implements LoopConfigSource {
     }
     let gateYaml: string | null = null;
     let budgetYaml: string | null = null;
-    let scheduleYaml: string | null = null;
     try {
       gateYaml = await readFile(join(dir, "gate.yaml"), "utf8");
     } catch {
@@ -184,12 +183,6 @@ export class FileLoopConfigSource implements LoopConfigSource {
     } catch {
       /* optional */
     }
-    try {
-      scheduleYaml = await readFile(join(dir, "schedule.yaml"), "utf8");
-    } catch {
-      /* optional */
-    }
-
     const parsed = parseOkfFile(loopMd, { filePath: join(dir, "LOOP.md") });
     const fm = parsed.frontmatter as Record<string, unknown>;
     const id = (fm.id as string) ?? `loop/${basename(dir)}`;
@@ -218,8 +211,6 @@ export class FileLoopConfigSource implements LoopConfigSource {
       configJson: JSON.stringify(config),
       gateJson: JSON.stringify(gate),
       budgetJson: JSON.stringify(budget),
-      // scheduleYaml is informational only — the frontmatter is the source of truth
-      ...(scheduleYaml ? {} : {}),
     } as unknown as LoopPattern);
 
     return loop as Readonly<LoopPattern>;

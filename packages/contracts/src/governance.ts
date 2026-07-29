@@ -69,7 +69,13 @@ export type BudgetLimit = z.infer<typeof budgetLimitSchema>;
 
 export const governanceBudgetSchema = z
   .object({
-    limits: z.array(budgetLimitSchema).max(16).default([]),
+    limits: z
+      .array(budgetLimitSchema)
+      .max(16)
+      .refine((limits) => new Set(limits.map((limit) => limit.scope)).size === limits.length, {
+        message: "Budget limits must use unique scopes",
+      })
+      .default([]),
     soft: z.number().min(0).max(1).default(0.8),
   })
   .strict();

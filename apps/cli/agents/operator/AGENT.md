@@ -6,8 +6,8 @@ description: >
   The orchestration worker. Owns the loop library, dispatches to
   workers, reads STATE.md before each wake.
 timestamp: 2026-07-21T00:00:00Z
-adapter: claude_local
-model: claude-opus-4-8
+adapter: opencode_cli
+model: opencode-go/mimo-v2.5
 role: operator
 reportsTo: null
 manages:
@@ -28,8 +28,7 @@ knowledge:
     - "**"
   exclude: []
 runtime:
-  default: { kind: local }
-  fallback: { kind: local }
+  default: { kind: sandbox, provider: daytona, remoteCwd: /workspace }
 budget:
   perRun: { tokens: 50000, costUsd: 2.00 }
   perDay: { tokens: 500000, costUsd: 20.00, runs: 50 }

@@ -6,7 +6,11 @@ import type { DbHandle } from "@aaspai/db";
 import { createDb, runMigrations, sessionEvents } from "@aaspai/db";
 import { asc, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertRuntimeIdentity, HarnessExecutionPlanRunner } from "../src/harness-runner";
+import {
+  assertGovernedRuntimeIsolation,
+  assertRuntimeIdentity,
+  HarnessExecutionPlanRunner,
+} from "../src/harness-runner";
 import { ExecutionStore } from "../src/store";
 
 describe("HarnessExecutionPlanRunner", () => {
@@ -184,6 +188,23 @@ describe("HarnessExecutionPlanRunner", () => {
 });
 
 describe("assertRuntimeIdentity", () => {
+  it("rejects governed CLI agents on the host runtime", () => {
+    expect(() =>
+      assertGovernedRuntimeIsolation(
+        "opencode_cli",
+        { kind: "local", envPassthrough: false },
+        true,
+      ),
+    ).toThrow(/isolated execution runtime/);
+    expect(() =>
+      assertGovernedRuntimeIsolation(
+        "opencode_cli",
+        { kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" },
+        true,
+      ),
+    ).not.toThrow();
+  });
+
   it("accepts the selected local workspace", () => {
     expect(() =>
       assertRuntimeIdentity({ kind: "local", envPassthrough: false }, "F:/workspace", {
@@ -216,6 +237,30 @@ describe("assertRuntimeIdentity", () => {
         },
       ),
     ).toThrow(/sandbox target/);
+  });
+
+  it("accepts an isolated SSH workspace under the requested remote root", () => {
+    expect(() =>
+      assertRuntimeIdentity(
+        {
+          kind: "ssh",
+          host: "worker.example.test",
+          port: 22,
+          username: "runner",
+          remoteCwd: "/tmp/aaspai",
+          strictHostKeyChecking: true,
+          shellCommand: "bash",
+        },
+        "F:/workspace",
+        {
+          kind: "ssh",
+          cwd: "/tmp/aaspai/aaspai-ssh-123",
+          host: "worker.example.test",
+          remoteCwd: "/tmp/aaspai/aaspai-ssh-123",
+          connectionIdentity: "runner@worker.example.test:22",
+        },
+      ),
+    ).not.toThrow();
   });
 });
 

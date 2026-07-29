@@ -87,6 +87,11 @@ export class OperationalGovernanceService {
       .select()
       .from(serviceAgents)
       .where(eq(serviceAgents.organizationId, organizationId));
+    const definitionManagedIds = new Set(
+      existingAgents
+        .filter((row) => parseJson(row.metadataJson).definitionManaged === true)
+        .map((row) => row.agentId),
+    );
     const timestamp = new Date().toISOString();
     for (const row of existingAgents) {
       const metadata = parseJson(row.metadataJson);
@@ -106,7 +111,7 @@ export class OperationalGovernanceService {
     for (const edge of currentEdges) {
       if (
         (edge.relation === "reports_to" || edge.relation === "manages") &&
-        (ids.has(edge.fromAgentId) || ids.has(edge.toAgentId))
+        (definitionManagedIds.has(edge.fromAgentId) || definitionManagedIds.has(edge.toAgentId))
       ) {
         await this.db.delete(authorityEdges).where(eq(authorityEdges.id, edge.id)).run();
       }

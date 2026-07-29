@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { DbHandle } from "@aaspai/db";
 import { createDb, runMigrations } from "@aaspai/db";
@@ -66,6 +66,26 @@ describe("LocalExecutionWorkspaceManager", () => {
       path.join(testDirectory, "project-repository"),
       workspace.path,
     );
+  });
+
+  it("uses a disposable directory without invoking Git", async () => {
+    const git = {
+      createWorktree: vi.fn(),
+      removeWorktree: vi.fn(),
+    } as unknown as GitRepository;
+    const manager = new LocalExecutionWorkspaceManager(git, store, () => "unused");
+    const workspace = await manager.prepareDisposable({
+      organizationId: "org_test",
+      attemptId: "attempt_general",
+      repositoryId: "repo_lineage",
+      workspaceRoot: path.join(testDirectory, "workspace-root"),
+    });
+
+    await expect(access(workspace.path)).resolves.toBeUndefined();
+    expect(git.createWorktree).not.toHaveBeenCalled();
+    await manager.releaseDisposable(workspace.id);
+    await expect(access(workspace.path)).rejects.toThrow();
+    expect(git.removeWorktree).not.toHaveBeenCalled();
   });
 
   it("does not allow a worktree to escape the workspace root", async () => {
