@@ -18,12 +18,15 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@aaspai/company": "workspace:*",
     "@aaspai/contracts": "workspace:*",
     "@aaspai/db": "workspace:*",
     "@aaspai/execution": "workspace:*",
     "@aaspai/file-loader": "workspace:*",
     "@aaspai/git": "workspace:*",
+    "@aaspai/knowledge": "workspace:*",
     "@aaspai/loops": "workspace:*",
+    "@aaspai/memory": "workspace:*",
     "@aaspai/observability": "workspace:*",
     "@aaspai/sessions": "workspace:*",
     "@aaspai/skills": "workspace:*",

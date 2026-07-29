@@ -93,6 +93,19 @@ export const workItemStatusSchema = z.enum([
 ]);
 export type WorkItemStatus = z.infer<typeof workItemStatusSchema>;
 
+export const workKindSchema = z.enum(["repository", "general", "external_action"]);
+export type WorkKind = z.infer<typeof workKindSchema>;
+export const deliveryModeSchema = z.enum(["none", "artifact", "commit", "pull_request"]);
+export type DeliveryMode = z.infer<typeof deliveryModeSchema>;
+export const deliveryStatusSchema = z.enum([
+  "pending",
+  "ready",
+  "delivering",
+  "delivered",
+  "failed",
+]);
+export type DeliveryStatus = z.infer<typeof deliveryStatusSchema>;
+
 export const executionWorkItemSchema = z
   .object({
     id: identifierSchema,
@@ -102,6 +115,10 @@ export const executionWorkItemSchema = z
     repositoryId: identifierSchema,
     /** All repositories touched by this work item. repositoryId is the primary repository. */
     repositoryIds: z.array(identifierSchema).min(1).max(32).optional(),
+    workKind: workKindSchema.default("repository"),
+    deliveryMode: deliveryModeSchema.default("commit"),
+    deliveryStatus: deliveryStatusSchema.default("pending"),
+    deliveryRef: z.string().trim().max(2_048).nullable().default(null),
     workflowRunId: identifierSchema.nullable().default(null),
     title: z.string().trim().min(1).max(512),
     description: z.string().max(16_384).default(""),

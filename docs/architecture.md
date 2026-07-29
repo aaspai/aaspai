@@ -40,12 +40,12 @@ The repository has four applications:
 
 | Information | Canonical source |
 |---|---|
-| Agent, loop, and knowledge definitions | Git-backed files under `.aaspai/` |
+| Agent, loop, and knowledge definitions | Git-backed files under `.aaspai/`; documented sidecars override matching frontmatter fields |
 | Project configuration | `.aaspai/aaspai.config.ts` |
 | Goals, work items, attempts, approvals, sessions, events, and audit records | Database |
 | Raw execution output and artifacts | Durable execution evidence referenced by database records |
 | Accepted organizational knowledge | Reviewed files under `.aaspai/knowledge/` |
-| Product deliverables | The target Git repository and its commits |
+| Product deliverables | Governed artifacts, commits, pull requests, or approved external actions |
 
 The practical rule is: definitions are reviewed in Git; operational
 transitions are recorded in the database. Runtime output must not silently
@@ -85,12 +85,18 @@ Goal / workflow
   -> Runtime
   -> HarnessAdapter / external CLI
   -> normalized events and artifacts
-  -> independent verification
-  -> completion, retry, approval, or escalation
+  -> post-run diff policy
+  -> independent checker attempt
+  -> completion, retry, approval, delivery, or escalation
 ```
 
 The API enqueues work; it does not execute agent sessions inside request
 handlers. The worker owns autonomous execution.
+
+File-defined loops use this same path. Their Git-owned schedule, autonomy
+level, gate, and budget replace starter defaults. Durable loop controls,
+run history, work items, attempts, approvals, and budget use feed the next
+discovery/decision cycle.
 
 Direct session execution remains available for explicit chat and bounded
 manual runs. It is a compatibility/user-interaction path, not a shortcut for

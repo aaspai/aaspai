@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Governed autonomous loop execution** — file-defined loops now run with durable pause,
+  catch-up scheduling, organization-scoped discovery, persisted state, token/cost budgets,
+  and working starter-loop discovery instead of no-op placeholders.
+- **Independent verification and delivery** — successful maker attempts can launch isolated
+  checker attempts, collect evidence, require approval, and deliver artifacts, commits, pull
+  requests, or approved external connector actions.
+- **Operational governance feedback** — company APIs now expose the human inbox, weekly digest,
+  loop value/false-positive metrics, readiness scoring, definition reconciliation, and reusable
+  knowledge write-back.
+- **End-to-end policy enforcement** — runtime tool allowlists, approval requirements, and
+  post-run Git diff path gates are enforced before work can be promoted.
+- **Study-style skill support** — recursive skill loading now preserves scripts, references, and
+  assets while rejecting duplicate keys and materialization paths that escape their target.
 - **Production-shaped Daytona worker execution** — `WorkerDaemon` now runs
   selected skills through OpenCode inside versioned Daytona snapshots, persists
   attempt branches and declared artifacts, resumes compatible leases and CLI

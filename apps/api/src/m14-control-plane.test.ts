@@ -72,18 +72,32 @@ describe("M14 control-plane boundaries", () => {
     const wakeup = (
       await handle.db.select().from(wakeups).where(eq(wakeups.organizationId, "org_a")).limit(1)
     )[0]!;
-    await handle.db.insert(sessions).values({
+    const queuedSession = (
+      await handle.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, queuedBody.data.sessionId))
+        .limit(1)
+    )[0]!;
+    expect(queuedSession).toMatchObject({
       id: queuedBody.data.sessionId,
       organizationId: "org_a",
       wakeupId: wakeup.id,
       agentId: "agent_a",
       adapter: "dry_run_local",
-      runtimeJson: "{}",
-      prompt: "hello",
-      configJson: "{}",
-      status: "succeeded",
-      startedAt: new Date().toISOString(),
+      status: "queued",
     });
+    expect(
+      (
+        await app.request(`/v1/sessions/${queuedBody.data.sessionId}`, {
+          headers: { authorization: "Bearer read-a" },
+        })
+      ).status,
+    ).toBe(200);
+    await handle.db
+      .update(sessions)
+      .set({ status: "succeeded", startedAt: new Date().toISOString() })
+      .where(eq(sessions.id, queuedBody.data.sessionId));
     await handle.db.insert(sessionEvents).values({
       sessionId: queuedBody.data.sessionId,
       ts: new Date().toISOString(),

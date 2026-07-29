@@ -13,6 +13,7 @@
     "./budget": "./src/budget.ts",
     "./kill-switch": "./src/kill-switch.ts",
     "./state": "./src/state.ts",
+    "./control": "./src/control.ts",
     "./worktree": "./src/worktree.ts",
     "./scheduler": "./src/scheduler.ts",
     "./pattern": "./src/pattern.ts",

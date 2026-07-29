@@ -1,14 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { getDefaultDb } from "@aaspai/db";
-import { ExecutionStore, OperatorService } from "@aaspai/execution";
-import {
-  DEFAULT_AGENTS_DIR,
-  DEFAULT_KNOWLEDGE_DIR,
-  FileAgentConfigSource,
-  FileKnowledgeSource,
-} from "@aaspai/file-loader";
-import { Sessions } from "@aaspai/sessions";
-import { loadSkillDirectory } from "@aaspai/skills";
+import { getDefaultDb, sessions, wakeups } from "@aaspai/db";
+import { ExecutionStore } from "@aaspai/execution";
+import { DEFAULT_AGENTS_DIR, FileAgentConfigSource } from "@aaspai/file-loader";
 import { NextResponse } from "next/server";
 import { ensureWorkspaceEnv, workspaceRoot } from "@/lib/aaspai";
 import { currentUser } from "@/lib/local-auth";
@@ -35,42 +29,55 @@ export async function POST(_request: Request, routeContext: { params: Promise<{ 
     return NextResponse.json({ error: "Work item has no workflow run" }, { status: 409 });
   const root = workspaceRoot();
   const agentSource = new FileAgentConfigSource(join(root, DEFAULT_AGENTS_DIR));
-  const knowledgeSource = new FileKnowledgeSource(join(root, DEFAULT_KNOWLEDGE_DIR));
-  const sessions = new Sessions({
-    agentSource,
-    knowledgeSource,
-    skillRegistry: await loadSkillDirectory(join(root, "skills")),
-  });
   await agentSource.start();
   const agent = await agentSource.get("agent/developer").catch(() => null);
   if (!agent)
     return NextResponse.json({ error: "Developer agent is not configured" }, { status: 409 });
-  let result: Awaited<ReturnType<Sessions["execute"]>> | null = null;
-  const execution = await new OperatorService(store).executeWorkItem(
-    executionContext,
-    item.workflowRunId,
-    item.id,
-    {
-      agentId: agent.id,
-      harness: agent.adapter,
-      runProvider: async () => {
-        result = await sessions.execute({
-          organizationId: user.organizationId,
-          agentId: agent.id,
-          adapter: agent.adapter,
-          runtime: { kind: "local" },
-          cwd: root,
-          prompt: `Work item: ${item.title}\n\nGoal: ${goal.title}\n\nReport what you did, what you could not do, and the next action.`,
-          config: {},
-          skills: [],
-          budget: {},
-          idempotencyKey: `frontend-run:${item.id}`,
-        });
-        return result.status === "succeeded" ? "succeeded" : "failed";
-      },
-    },
-  );
+  const sessionId = `sess_${randomUUID()}`;
+  const wakeupId = `wake_${randomUUID()}`;
+  const prompt = `Work item: ${item.title}\n\nGoal: ${goal.title}\n\nReport what you did, what you could not do, and the next action.`;
+  const runtime =
+    typeof agent.runtimeConfig.default === "object" && agent.runtimeConfig.default
+      ? agent.runtimeConfig.default
+      : { kind: "local" };
+  const now = new Date().toISOString();
+  await db.db.insert(wakeups).values({
+    id: wakeupId,
+    organizationId: user.organizationId,
+    loopId: "manual",
+    source: "web",
+    triggerDetail: "goal-run",
+    reason: `Run ready work item ${item.id}`,
+    agentId: agent.id,
+    payloadJson: JSON.stringify({
+      prompt,
+      adapter: agent.adapter,
+      runtime,
+      sessionId,
+      workItemId: item.id,
+      workflowRunId: item.workflowRunId,
+      traceId: sessionId,
+    }),
+    status: "queued",
+    idempotencyKey: `frontend-run:${item.id}`,
+    requestedAt: now,
+    requestedByActorId: user.id,
+    requestedByActorType: "user",
+  } as never);
+  await db.db.insert(sessions).values({
+    id: sessionId,
+    organizationId: user.organizationId,
+    wakeupId,
+    agentId: agent.id,
+    adapter: agent.adapter,
+    runtimeJson: JSON.stringify(runtime),
+    prompt,
+    configJson: "{}",
+    status: "queued",
+  });
   await agentSource.stop();
-  await knowledgeSource.stop();
-  return NextResponse.json({ data: { result, execution, workItemId: item.id } });
+  return NextResponse.json(
+    { data: { sessionId, wakeupId, status: "queued", workItemId: item.id } },
+    { status: 202 },
+  );
 }

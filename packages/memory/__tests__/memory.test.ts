@@ -140,4 +140,29 @@ describe("local operational memory", () => {
     expect(context.text).toContain("<memory");
     expect(context.tokensUsed).toBeLessThanOrEqual(220);
   });
+
+  it("prunes only explicitly expired memory", async () => {
+    const memory = provider();
+    await memory.ingest({
+      organizationId,
+      kind: "observation",
+      title: "Expired observation",
+      content: "This record is intentionally expired.",
+      scope,
+      sensitivity: "internal",
+      provenance: {
+        sourceType: "session",
+        sourceId: "session_expired",
+        capturedAt: new Date().toISOString(),
+        actorId: null,
+        extractor: "test",
+      },
+      evidence: [
+        { kind: "session", sourceId: "session_expired", label: "Expired session", uri: null },
+      ],
+      retention: { policy: "short", expiresAt: "2020-01-01T00:00:00.000Z" },
+    });
+
+    await expect(memory.pruneExpired(organizationId)).resolves.toBe(1);
+  });
 });

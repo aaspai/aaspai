@@ -8,12 +8,14 @@ import {
 import { ExecutionStore } from "@aaspai/execution";
 import { DEFAULT_LOOPS_DIR, FileLoopConfigSource } from "@aaspai/file-loader";
 import {
-  KillSwitch,
+  LoopControlStore,
   LoopRunner,
   PatternRegistry,
   type ResolvedLoopPattern,
+  resolveFilePattern,
   Scheduler,
   STARTER_PATTERNS,
+  StateStore,
 } from "@aaspai/loops";
 import { Command } from "commander";
 import { eq } from "drizzle-orm";
@@ -33,14 +35,90 @@ export function loopCommand(): Command {
   }
 
   async function runner(): Promise<LoopRunner> {
-    const store = new ExecutionStore(getDefaultDb().db);
+    const db = getDefaultDb().db;
+    const store = new ExecutionStore(db);
     const lineage = await ensureLoopLineage(store);
     return new LoopRunner({
       organizationId: "default",
       loopSource: source(),
       execution: { store, lineage },
+      controlStore: new LoopControlStore(db),
+      stateStore: new StateStore(db),
     });
   }
+
+  cmd
+    .command("create <slug>")
+    .description("Create an L1 loop definition and execute its first report-only run")
+    .option("--title <title>", "Display title")
+    .option("--agent <id>", "Agent id", "agent/operator")
+    .option("--interval <seconds>", "Interval in seconds", "86400")
+    .action(async (slug: string, options: { title?: string; agent: string; interval: string }) => {
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+        console.log(pc.red("Loop slug must contain lowercase letters, numbers, and hyphens"));
+        process.exit(2);
+      }
+      const seconds = Number(options.interval);
+      if (!Number.isSafeInteger(seconds) || seconds < 60) {
+        console.log(pc.red("Interval must be an integer of at least 60 seconds"));
+        process.exit(2);
+      }
+      const title =
+        options.title ??
+        slug
+          .split("-")
+          .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+          .join(" ");
+      const root = process.env.AASPAI_LOOPS_DIR ?? DEFAULT_LOOPS_DIR;
+      const directory = join(root, slug);
+      await mkdir(directory, { recursive: false });
+      await Promise.all([
+        writeFile(
+          join(directory, "LOOP.md"),
+          `---
+id: loop/${slug}
+type: LoopPattern
+title: ${JSON.stringify(title)}
+description: ${JSON.stringify(`${title} report-only loop`)}
+timestamp: ${new Date().toISOString()}
+schedule: { kind: interval, seconds: ${seconds} }
+agent: ${options.agent}
+autonomyLevel: L1
+status: enabled
+concurrencyPolicy: coalesce_if_active
+catchUpPolicy: skip_missed
+---
+
+# ${title}
+
+Discover relevant work and produce an actionable report. Do not change external state.
+`,
+          "utf8",
+        ),
+        writeFile(
+          join(directory, "gate.yaml"),
+          'denylist: [".env", ".env.*", "auth/**", "payments/**", "secrets/**"]\nmaxFilesChanged: 0\nactions:\n  execute: { allowed: true }\n',
+          "utf8",
+        ),
+        writeFile(
+          join(directory, "budget.yaml"),
+          "perRun: { tokens: 50000, costUsd: 2, runs: 1 }\nperDay: { tokens: 200000, costUsd: 8, runs: 5 }\nsoft: 0.8\nhard: 1\n",
+          "utf8",
+        ),
+      ]);
+      const s = source();
+      await s.start();
+      try {
+        const resolved = resolveFilePattern(await s.get(`loop/${slug}`));
+        const outcome = await (await runner()).run(resolved, {
+          triggerKey: `scaffold:${slug}`,
+        });
+        console.log(pc.green(`Created ${resolved.pattern.id}; first L1 run ${outcome.runId}`));
+      } finally {
+        await s.stop();
+        await closeDefaultDb();
+      }
+    });
 
   cmd
     .command("list")
@@ -50,7 +128,7 @@ export function loopCommand(): Command {
       await s.start();
       try {
         const ids = await s.list();
-        console.log(pc.cyan(`Loops (${ids.length} from files, 7 starter patterns registered)`));
+        console.log(pc.cyan(`Loops (${ids.length} file definitions)`));
         for (const id of ids) {
           const cfg = await s.get(id);
           console.log(
@@ -98,23 +176,7 @@ export function loopCommand(): Command {
       try {
         if (await s.has(id)) {
           const loop = await s.get(id);
-          // For now the file-based loop uses the daily-triage discover/decide
-          // (the only one wired). Other file-based loops can register their own.
-          const builtin = reg.get(id);
-          if (builtin) {
-            resolved = builtin;
-          } else {
-            console.log(
-              pc.yellow(
-                `! Loop ${id} is in the filesystem but has no built-in discover/decide. Falling back to no-op.`,
-              ),
-            );
-            resolved = {
-              pattern: loop,
-              discover: async () => [],
-              decide: async () => ({ kind: "noop" as const }),
-            };
-          }
+          resolved = resolveFilePattern(loop, reg.get(id));
         }
       } finally {
         await s.stop();
@@ -145,10 +207,15 @@ export function loopCommand(): Command {
 
   cmd
     .command("pause <id>")
-    .description("Pause a loop (kill switch)")
-    .action((id: string) => {
-      const ks = new KillSwitch();
-      ks.pauseLoop(id, "manual pause");
+    .description("Pause a loop durably")
+    .action(async (id: string) => {
+      const pattern = await findPattern(id, source(), registry());
+      if (!pattern) {
+        console.log(pc.red(`Unknown loop: ${id}`));
+        process.exit(3);
+      }
+      await new LoopControlStore().setPaused("default", pattern.pattern, true, "manual pause");
+      await closeDefaultDb();
       console.log(pc.green(`✓ Paused ${id}`));
       process.exit(0);
     });
@@ -156,9 +223,14 @@ export function loopCommand(): Command {
   cmd
     .command("resume <id>")
     .description("Resume a paused loop")
-    .action((id: string) => {
-      const ks = new KillSwitch();
-      ks.resumeLoop(id);
+    .action(async (id: string) => {
+      const pattern = await findPattern(id, source(), registry());
+      if (!pattern) {
+        console.log(pc.red(`Unknown loop: ${id}`));
+        process.exit(3);
+      }
+      await new LoopControlStore().setPaused("default", pattern.pattern, false);
+      await closeDefaultDb();
       console.log(pc.green(`✓ Resumed ${id}`));
       process.exit(0);
     });
@@ -168,6 +240,21 @@ export function loopCommand(): Command {
   void Scheduler;
 
   return cmd;
+}
+
+async function findPattern(
+  id: string,
+  source: FileLoopConfigSource,
+  registry: PatternRegistry,
+): Promise<ResolvedLoopPattern | null> {
+  await source.start();
+  try {
+    return (await source.has(id))
+      ? resolveFilePattern(await source.get(id), registry.get(id))
+      : registry.get(id);
+  } finally {
+    await source.stop();
+  }
 }
 
 async function ensureLoopLineage(store: ExecutionStore) {
@@ -228,3 +315,6 @@ async function ensureLoopLineage(store: ExecutionStore) {
   }
   return { goalId, projectId, repositoryId, definitionRevisionId };
 }
+
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";

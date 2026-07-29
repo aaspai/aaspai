@@ -8,7 +8,7 @@
  */
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Skill } from "@aaspai/contracts/phase2";
 import { sha256HexSync } from "@aaspai/file-loader/okf-parser";
 import { getLogger } from "@aaspai/observability";
@@ -148,7 +148,7 @@ export class SkillRegistry {
 
     for (const skill of skills) {
       try {
-        const skillDir = useSymlink ? join(cacheBase, skill.key) : join(targetBase, skill.key);
+        const skillDir = containedPath(useSymlink ? cacheBase : targetBase, skill.key, "skill key");
         await rm(skillDir, { recursive: true, force: true });
         await mkdir(skillDir, { recursive: true });
         await writeSkillFile(join(skillDir, "SKILL.md"), skill);
@@ -162,7 +162,7 @@ export class SkillRegistry {
               continue;
             }
           }
-          const filePath = join(skillDir, file.path);
+          const filePath = containedPath(skillDir, file.path, "skill file");
           await mkdir(join(filePath, ".."), { recursive: true });
           await writeFile(filePath, file.content, "utf8");
           if (
@@ -176,7 +176,7 @@ export class SkillRegistry {
           }
         }
         if (useSymlink) {
-          const linkPath = join(targetBase, skill.key);
+          const linkPath = containedPath(targetBase, skill.key, "skill key");
           await rm(linkPath, { recursive: true, force: true });
           await symlink(skillDir, linkPath, "junction").catch(() => {
             // Fall back to a copy on Windows where junction across
@@ -195,7 +195,7 @@ export class SkillRegistry {
         // symlink — the .agents/ home is usually on a different
         // device / mount point and symlinks are unreliable there).
         if (agentsHomeBase) {
-          const agentsDir = join(agentsHomeBase, skill.key);
+          const agentsDir = containedPath(agentsHomeBase, skill.key, "skill key");
           try {
             await rm(agentsDir, { recursive: true, force: true });
             await mkdir(agentsDir, { recursive: true });
@@ -205,7 +205,7 @@ export class SkillRegistry {
                 const actual = sha256HexSync(file.content);
                 if (actual !== file.sha256) continue; // error already reported
               }
-              const fp = join(agentsDir, file.path);
+              const fp = containedPath(agentsDir, file.path, "skill file");
               await mkdir(join(fp, ".."), { recursive: true });
               await writeFile(fp, file.content, "utf8");
             }
@@ -253,12 +253,14 @@ export class SkillRegistry {
     const removed: string[] = [];
     const targets: string[] = [];
     if (opts.sharedHome !== false) {
-      targets.push(join(homedir(), ".claude", "skills", key));
-      targets.push(join(homedir(), ".agents", "skills", key));
+      targets.push(containedPath(join(homedir(), ".claude", "skills"), key, "skill key"));
+      targets.push(containedPath(join(homedir(), ".agents", "skills"), key, "skill key"));
     }
     if (opts.adapterType && opts.runtimeBaseDir) {
-      targets.push(join(adapterSkillsDir(opts.adapterType, opts.runtimeBaseDir), key));
-      targets.push(join(opts.runtimeBaseDir, ".aaspai", "skills", key));
+      targets.push(
+        containedPath(adapterSkillsDir(opts.adapterType, opts.runtimeBaseDir), key, "skill key"),
+      );
+      targets.push(containedPath(join(opts.runtimeBaseDir, ".aaspai", "skills"), key, "skill key"));
     }
     for (const t of targets) {
       try {
@@ -433,6 +435,17 @@ export class SkillRegistry {
   ): void {
     this.policies.set(key, policy);
   }
+}
+
+function containedPath(base: string, candidate: string, label: string): string {
+  if (!candidate.trim() || isAbsolute(candidate) || /^[a-zA-Z]:/.test(candidate))
+    throw new Error(`${label} must be relative: ${candidate}`);
+  const root = resolve(base);
+  const target = resolve(root, candidate);
+  const rel = relative(root, target);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+    throw new Error(`${label} escapes its target directory: ${candidate}`);
+  return target;
 }
 
 function adapterSkillsDir(adapterType: string, baseDir: string): string {

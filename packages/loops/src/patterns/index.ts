@@ -1,31 +1,27 @@
-/**
- * The 7 starter patterns from loop-engineering, adapted for aaspai.
- *
- * Each is a `ResolvedLoopPattern` with a real (foundation-scope)
- * discover and decide. The actual session execution is wired via
- * `LoopRunner` in Phase 3.
- */
-
-import type { LoopPattern, WorkItem } from "@aaspai/contracts/phase2";
-import type { DecideFn, DiscoverFn, ResolvedLoopPattern } from "../pattern.js";
+import type { LoopPattern } from "@aaspai/contracts/phase2";
+import type { DecideFn, ResolvedLoopPattern } from "../pattern.js";
 import dailyTriageDecide from "./daily-triage/decide.js";
 import dailyTriageDiscover from "./daily-triage/discover.js";
-
-function noopDiscover(): DiscoverFn {
-  return async () => [] as readonly WorkItem[];
-}
+import {
+  discoverChangelogWork,
+  discoverCiFailures,
+  discoverDependencyWork,
+  discoverIssueWakeups,
+  discoverPostMergeWork,
+  discoverPrWork,
+} from "./discover.js";
 
 function reportDecide(): DecideFn {
   return async (item) => ({
     kind: "report",
     payload: {
       title: item.title,
-      body: `Pattern: ${item.ref.kind}/${item.ref.id}\n\n_No decision logic implemented yet — this is a foundation stub._`,
+      body: `Pattern: ${item.ref.kind}/${item.ref.id}\n\n${item.description ?? "Review this item."}`,
     },
   });
 }
 
-const STUB_PATTERN: Omit<LoopPattern, "id" | "title" | "description" | "timestamp"> = {
+const BASE_PATTERN: Omit<LoopPattern, "id" | "title" | "description" | "timestamp"> = {
   type: "LoopPattern",
   schedule: { kind: "manual" },
   agent: "agent/operator",
@@ -40,11 +36,10 @@ const STUB_PATTERN: Omit<LoopPattern, "id" | "title" | "description" | "timestam
 
 export const DAILY_TRIAGE: ResolvedLoopPattern = {
   pattern: {
-    ...STUB_PATTERN,
+    ...BASE_PATTERN,
     id: "loop/daily-triage",
-    autonomyLevel: "L2",
     title: "Daily Triage",
-    description: "Morning scan of CI failures, open issues, and recent commits → STATE.md.",
+    description: "Morning scan of CI failures, open issues, and recent commits.",
     timestamp: new Date().toISOString(),
     schedule: { kind: "cron", expression: "0 8 * * 1-5", timezone: "America/Los_Angeles" },
   },
@@ -54,81 +49,79 @@ export const DAILY_TRIAGE: ResolvedLoopPattern = {
 
 export const PR_BABYSITTER: ResolvedLoopPattern = {
   pattern: {
-    ...STUB_PATTERN,
+    ...BASE_PATTERN,
     id: "loop/pr-babysitter",
-    autonomyLevel: "L2",
     title: "PR Babysitter",
-    description: "Herd PRs through review/CI/rebase/merge.",
+    description: "Report repository work waiting on PR review, CI, rebase, or merge.",
     timestamp: new Date().toISOString(),
     schedule: { kind: "interval", seconds: 900 },
   },
-  discover: noopDiscover(),
+  discover: discoverPrWork,
   decide: reportDecide(),
 };
 
 export const CI_SWEEPER: ResolvedLoopPattern = {
   pattern: {
-    ...STUB_PATTERN,
+    ...BASE_PATTERN,
     id: "loop/ci-sweeper",
-    autonomyLevel: "L2",
     title: "CI Sweeper",
-    description: "React to red CI: classify (flake/regression/infra) → fix.",
+    description: "Report recent CI, test, build, and pipeline failures.",
     timestamp: new Date().toISOString(),
     schedule: { kind: "interval", seconds: 900 },
   },
-  discover: noopDiscover(),
+  discover: discoverCiFailures,
   decide: reportDecide(),
 };
 
 export const DEPENDENCY_SWEEPER: ResolvedLoopPattern = {
   pattern: {
-    ...STUB_PATTERN,
+    ...BASE_PATTERN,
     id: "loop/dependency-sweeper",
     title: "Dependency Sweeper",
-    description: "Patch + low-risk CVE bumps.",
+    description: "Report active dependency, package, CVE, and security work.",
     timestamp: new Date().toISOString(),
     schedule: { kind: "interval", seconds: 21600 },
   },
-  discover: noopDiscover(),
+  discover: discoverDependencyWork,
   decide: reportDecide(),
 };
 
 export const CHANGELOG_DRAFTER: ResolvedLoopPattern = {
   pattern: {
-    ...STUB_PATTERN,
+    ...BASE_PATTERN,
     id: "loop/changelog-drafter",
     title: "Changelog Drafter",
-    description: "Scan merged PRs → draft release notes.",
+    description: "Report completed work from the last day for release notes.",
     timestamp: new Date().toISOString(),
     schedule: { kind: "interval", seconds: 86400 },
   },
-  discover: noopDiscover(),
+  discover: discoverChangelogWork,
   decide: reportDecide(),
 };
 
 export const POST_MERGE_CLEANUP: ResolvedLoopPattern = {
   pattern: {
-    ...STUB_PATTERN,
+    ...BASE_PATTERN,
     id: "loop/post-merge-cleanup",
     title: "Post-Merge Cleanup",
-    description: "After merges, scan for TODOs/dead code/stale flags.",
+    description: "Report completed merge, cleanup, TODO, dead-code, and feature-flag work.",
     timestamp: new Date().toISOString(),
     schedule: { kind: "interval", seconds: 21600 },
   },
-  discover: noopDiscover(),
+  discover: discoverPostMergeWork,
   decide: reportDecide(),
 };
 
 export const ISSUE_TRIAGE: ResolvedLoopPattern = {
   pattern: {
-    ...STUB_PATTERN,
+    ...BASE_PATTERN,
     id: "loop/issue-triage",
     title: "Issue Triage",
-    description: "Dedup + label + prioritize incoming issues.",
+    description: "Report queued and failed issue, bug, ticket, and incident wakeups.",
     timestamp: new Date().toISOString(),
     schedule: { kind: "interval", seconds: 7200 },
   },
-  discover: noopDiscover(),
+  discover: discoverIssueWakeups,
   decide: reportDecide(),
 };
 

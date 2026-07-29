@@ -45,4 +45,36 @@ Verify the outcome.
     expect(agent.adapterConfig).toEqual({ model: "gpt-5-codex" });
     expect(agent.runtimeConfig).toEqual({ kind: "local" });
   });
+
+  it("does not let empty sidecars erase frontmatter runtime", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aaspai-agent-source-"));
+    directories.push(root);
+    const agentDir = join(root, "tester");
+    await mkdir(agentDir);
+    await writeFile(
+      join(agentDir, "AGENT.md"),
+      `---
+id: agent/tester
+type: Agent
+title: Tester
+description: Verifies delivery.
+timestamp: 2026-07-24T00:00:00Z
+adapter: codex_local
+role: qa
+runtime:
+  default: { kind: local }
+---
+Verify the outcome.
+`,
+    );
+    await writeFile(join(agentDir, "config.yaml"), "adapterConfig: {}\nruntimeConfig: {}\n");
+
+    const source = new FileAgentConfigSource(root);
+    await source.start();
+    const agent = await source.get("agent/tester");
+    await source.stop();
+
+    expect(agent.runtimeConfig).toEqual({ default: { kind: "local" } });
+    expect(agent.adapterConfig).toEqual({});
+  });
 });

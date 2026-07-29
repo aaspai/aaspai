@@ -1,20 +1,30 @@
-/**
- * Loop state — the `STATE.md`-shaped view.
- *
- * In foundation, this is built from the DB (wakeups + sessions +
- * recent run history). In Phase 4+ it can also be a queryable view
- * over the event log.
- */
-
 import type { WorkItemRef } from "@aaspai/contracts/phase2";
-import { getDefaultDb, type SessionRow, sessions, type WakeupRow, wakeups } from "@aaspai/db";
-import { desc, eq } from "drizzle-orm";
+import {
+  agentAttempts,
+  and,
+  desc,
+  eq,
+  executionApprovals,
+  executionBudgetReservations,
+  executionWorkItems,
+  getDefaultDb,
+  gte,
+  inArray,
+  loopControls,
+  type SqliteDb,
+  wakeups,
+  workflowRuns,
+} from "@aaspai/db";
 
 export interface LoopStateView {
   loopId: string;
   highPriority: WorkItemRef[];
   watch: WorkItemRef[];
   noise: WorkItemRef[];
+  workItems: Array<{ id: string; status: string; title: string; updatedAt: string }>;
+  attempts: Array<{ id: string; workItemId: string; status: string; role: string }>;
+  humanOverrides: Array<{ id: string; workItemId: string; status: string; reason: string }>;
+  budgetToday?: { tokens: number; costUsd: number; runs: number };
   lastRun?: {
     at: string;
     outcome: "succeeded" | "failed" | "cancelled" | "escalated" | "noop";
@@ -25,72 +35,188 @@ export interface LoopStateView {
 }
 
 export class StateStore {
-  /**
-   * Read the loop's current state view. Pulls the last 30 days of
-   * wakeups + sessions for this loop.
-   */
+  constructor(private readonly db: SqliteDb = getDefaultDb().db) {}
+
   async view(
     loopId: string,
-    opts: { recentDays?: number; limit?: number } = {},
+    opts: { organizationId?: string; recentDays?: number; limit?: number } = {},
   ): Promise<LoopStateView> {
+    const organizationId = opts.organizationId ?? "default";
     const limit = opts.limit ?? 50;
-    const recentDays = opts.recentDays ?? 30;
-    const cutoff = new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000).toISOString();
-    const db = getDefaultDb().db;
+    const cutoff = new Date(
+      Date.now() - (opts.recentDays ?? 30) * 24 * 60 * 60 * 1000,
+    ).toISOString();
 
-    const recentWakeups = (await db
-      .select()
-      .from(wakeups)
-      .where(eq(wakeups.loopId, loopId))
-      .orderBy(desc(wakeups.requestedAt))
-      .limit(limit)) as WakeupRow[];
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const [recentWakeups, runs, control, budgetRows] = await Promise.all([
+      this.db
+        .select()
+        .from(wakeups)
+        .where(and(eq(wakeups.organizationId, organizationId), eq(wakeups.loopId, loopId)))
+        .orderBy(desc(wakeups.requestedAt))
+        .limit(limit),
+      this.db
+        .select()
+        .from(workflowRuns)
+        .where(
+          and(
+            eq(workflowRuns.organizationId, organizationId),
+            eq(workflowRuns.sourceType, "loop"),
+            eq(workflowRuns.sourceId, loopId),
+          ),
+        )
+        .orderBy(desc(workflowRuns.createdAt))
+        .limit(limit),
+      this.db
+        .select({ paused: loopControls.paused })
+        .from(loopControls)
+        .where(
+          and(eq(loopControls.organizationId, organizationId), eq(loopControls.loopId, loopId)),
+        )
+        .limit(1),
+      this.db
+        .select()
+        .from(executionBudgetReservations)
+        .where(
+          and(
+            eq(executionBudgetReservations.organizationId, organizationId),
+            eq(executionBudgetReservations.scope, "loop"),
+            eq(executionBudgetReservations.scopeId, loopId),
+            gte(executionBudgetReservations.createdAt, dayStart.toISOString()),
+          ),
+        ),
+    ]);
 
-    const recentSessions = (await db
-      .select()
-      .from(sessions)
-      .orderBy(desc(sessions.startedAt))
-      .limit(limit)) as SessionRow[];
+    const runIds = runs.map((run) => run.id);
+    const workRows = runIds.length
+      ? await this.db
+          .select()
+          .from(executionWorkItems)
+          .where(
+            and(
+              eq(executionWorkItems.organizationId, organizationId),
+              inArray(executionWorkItems.workflowRunId, runIds),
+            ),
+          )
+          .orderBy(desc(executionWorkItems.updatedAt))
+          .limit(limit)
+      : [];
+    const workIds = workRows.map((item) => item.id);
+    const [attemptRows, approvalRows] = workIds.length
+      ? await Promise.all([
+          this.db
+            .select()
+            .from(agentAttempts)
+            .where(
+              and(
+                eq(agentAttempts.organizationId, organizationId),
+                inArray(agentAttempts.workItemId, workIds),
+              ),
+            )
+            .orderBy(desc(agentAttempts.createdAt))
+            .limit(limit),
+          this.db
+            .select()
+            .from(executionApprovals)
+            .where(
+              and(
+                eq(executionApprovals.organizationId, organizationId),
+                inArray(executionApprovals.workItemId, workIds),
+              ),
+            )
+            .orderBy(desc(executionApprovals.requestedAt))
+            .limit(limit),
+        ])
+      : [[], []];
 
     const highPriority: WorkItemRef[] = [];
     const watch: WorkItemRef[] = [];
     const noise: WorkItemRef[] = [];
-
-    for (const w of recentWakeups) {
-      if (w.status === "failed")
-        highPriority.push({ kind: "wakeup", id: w.id, title: w.reason ?? w.triggerDetail ?? "" });
-      else if (w.status === "completed")
-        watch.push({ kind: "wakeup", id: w.id, title: w.reason ?? "" });
-      else noise.push({ kind: "wakeup", id: w.id });
+    for (const wakeup of recentWakeups) {
+      const ref = {
+        kind: "wakeup",
+        id: wakeup.id,
+        ...(wakeup.reason || wakeup.triggerDetail
+          ? { title: wakeup.reason ?? wakeup.triggerDetail ?? undefined }
+          : {}),
+      };
+      if (wakeup.status === "failed") highPriority.push(ref);
+      else if (wakeup.status === "completed") watch.push(ref);
+      else noise.push(ref);
+    }
+    for (const item of workRows) {
+      const ref = { kind: "work_item", id: item.id, title: item.title };
+      if (["failed", "blocked", "awaiting_approval"].includes(item.status)) highPriority.push(ref);
+      else if (["completed", "verified", "approved"].includes(item.status)) watch.push(ref);
+      else noise.push(ref);
     }
 
-    const recentRuns = recentSessions
-      .filter((s) => s.startedAt && s.startedAt > cutoff)
-      .map((s) => ({
-        at: s.finishedAt ?? s.startedAt ?? "",
-        outcome: s.status,
-        summary: s.resultJson ? "result" : (s.errorMessage ?? "no result"),
+    const recentRuns = runs
+      .filter((run) => run.createdAt >= cutoff)
+      .map((run) => ({
+        at: run.finishedAt ?? run.startedAt ?? run.createdAt,
+        outcome: run.status,
+        summary: `${workRows.filter((item) => item.workflowRunId === run.id).length} work items`,
       }));
-
-    const lastRun = recentRuns[0];
+    const latest = recentRuns[0];
 
     return {
       loopId,
       highPriority,
       watch,
       noise,
-      lastRun: lastRun
+      workItems: workRows.map((item) => ({
+        id: item.id,
+        status: item.status,
+        title: item.title,
+        updatedAt: item.updatedAt,
+      })),
+      attempts: attemptRows.map((attempt) => ({
+        id: attempt.id,
+        workItemId: attempt.workItemId,
+        status: attempt.status,
+        role: attempt.role,
+      })),
+      humanOverrides: approvalRows.map((approval) => ({
+        id: approval.id,
+        workItemId: approval.workItemId,
+        status: approval.status,
+        reason: approval.reason,
+      })),
+      budgetToday: {
+        tokens: budgetRows.reduce(
+          (sum, row) => sum + (row.status === "reserved" ? row.reservedTokens : row.actualTokens),
+          0,
+        ),
+        costUsd: budgetRows.reduce(
+          (sum, row) => sum + (row.status === "reserved" ? row.reservedCostUsd : row.actualCostUsd),
+          0,
+        ),
+        runs: budgetRows
+          .filter((row) => row.status === "reserved" || row.status === "settled")
+          .reduce((sum, row) => sum + row.reservedRuns, 0),
+      },
+      ...(latest
         ? {
-            at: lastRun.at,
-            outcome: lastRun.outcome as LoopStateView["lastRun"] extends infer L
-              ? L extends { outcome: infer O }
-                ? O
-                : never
-              : never,
-            summary: lastRun.summary,
+            lastRun: {
+              at: latest.at,
+              outcome: normalizeOutcome(latest.outcome),
+              summary: latest.summary,
+            },
           }
-        : undefined,
+        : {}),
       recentRuns,
-      paused: false,
+      paused: control[0]?.paused === true,
     };
   }
+}
+
+function normalizeOutcome(
+  status: string,
+): "succeeded" | "failed" | "cancelled" | "escalated" | "noop" {
+  if (["succeeded", "failed", "cancelled", "escalated", "noop"].includes(status)) {
+    return status as "succeeded" | "failed" | "cancelled" | "escalated" | "noop";
+  }
+  return status === "completed" ? "succeeded" : "noop";
 }

@@ -62,6 +62,12 @@ yarn workspace @aaspai/cli start provider doctor
 `provider capabilities` reports implemented harness and runtime features.
 `provider doctor` checks which external agent CLIs are installed locally.
 
+Create a report-only L1 loop and execute its first run with:
+
+```sh
+yarn workspace @aaspai/cli start loop create release-notes
+```
+
 ## Run locally
 
 Use separate terminals:

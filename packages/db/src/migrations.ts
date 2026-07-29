@@ -27,6 +27,14 @@ const SQLITE_STATEMENTS = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS loop_controls (
+    organization_id TEXT NOT NULL,
+    loop_id TEXT NOT NULL,
+    paused INTEGER NOT NULL DEFAULT 0,
+    pause_reason TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE (organization_id, loop_id)
+  )`,
   `CREATE TABLE IF NOT EXISTS wakeups (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -47,6 +55,10 @@ const SQLITE_STATEMENTS = [
     session_id TEXT,
     error TEXT
   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS wakeups_idem_uniq
+    ON wakeups (idempotency_key)`,
+  `CREATE INDEX IF NOT EXISTS wakeups_org_loop_requested_idx
+    ON wakeups (organization_id, loop_id, requested_at)`,
   `CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -148,6 +160,10 @@ const SQLITE_STATEMENTS = [
     project_id TEXT NOT NULL,
     repository_id TEXT NOT NULL,
     repository_ids_json TEXT NOT NULL DEFAULT '[]',
+    work_kind TEXT NOT NULL DEFAULT 'repository',
+    delivery_mode TEXT NOT NULL DEFAULT 'commit',
+    delivery_status TEXT NOT NULL DEFAULT 'pending',
+    delivery_ref TEXT,
     workflow_run_id TEXT,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
@@ -168,6 +184,10 @@ const SQLITE_STATEMENTS = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS execution_work_items_org_idem_uniq
+    ON execution_work_items (organization_id, idempotency_key)`,
+  `CREATE INDEX IF NOT EXISTS execution_work_items_workflow_status_idx
+    ON execution_work_items (organization_id, workflow_run_id, status)`,
   `CREATE TABLE IF NOT EXISTS execution_work_item_dependencies (
     organization_id TEXT NOT NULL,
     work_item_id TEXT NOT NULL,
@@ -192,6 +212,10 @@ const SQLITE_STATEMENTS = [
     finished_at TEXT,
     created_at TEXT NOT NULL
   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS workflow_runs_org_idem_uniq
+    ON workflow_runs (organization_id, idempotency_key)`,
+  `CREATE INDEX IF NOT EXISTS workflow_runs_source_time_idx
+    ON workflow_runs (organization_id, source_type, source_id, created_at)`,
   `CREATE TABLE IF NOT EXISTS loop_outputs (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -228,6 +252,11 @@ const SQLITE_STATEMENTS = [
     error TEXT,
     created_at TEXT NOT NULL
   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS agent_attempts_work_number_uniq
+    ON agent_attempts (work_item_id, role, attempt_number)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS agent_attempts_verification_uniq
+    ON agent_attempts (verification_id)
+    WHERE verification_id IS NOT NULL`,
   `CREATE TABLE IF NOT EXISTS execution_workspaces (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -369,6 +398,23 @@ const SQLITE_STATEMENTS = [
     ON execution_governance_events (organization_id, occurred_at)`,
   `CREATE INDEX IF NOT EXISTS execution_governance_events_work_item_idx
     ON execution_governance_events (work_item_id)`,
+  `CREATE TABLE IF NOT EXISTS execution_external_actions (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL REFERENCES execution_work_items(id) ON DELETE CASCADE,
+    connector TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    idempotency_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    result_json TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE (organization_id, connector, idempotency_key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS execution_external_actions_work_item_idx
+    ON execution_external_actions (work_item_id)`,
   `CREATE TABLE IF NOT EXISTS execution_process_definitions (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -745,6 +791,22 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
     sql: "ALTER TABLE execution_work_items ADD COLUMN repository_ids_json TEXT NOT NULL DEFAULT '[]'",
   },
   {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'work_kind'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN work_kind TEXT NOT NULL DEFAULT 'repository'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'delivery_mode'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'commit'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'delivery_status'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'pending'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'delivery_ref'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN delivery_ref TEXT",
+  },
+  {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'harness_session_id'",
     sql: "ALTER TABLE agent_attempts ADD COLUMN harness_session_id TEXT",
   },
@@ -798,7 +860,14 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
 // Existing databases receive `0` for the newly added column. The runtime
 // assigns sequence numbers from 1, so zero is an unambiguous marker for old
 // rows that need to be ordered by their original autoincrement id.
-const DATA_NORMALIZATION = ["UPDATE session_events SET seq = id WHERE seq = 0"];
+const DATA_NORMALIZATION = [
+  "UPDATE session_events SET seq = id WHERE seq = 0",
+  `UPDATE execution_work_items
+    SET delivery_status = 'delivered'
+    WHERE status = 'completed'
+      AND delivery_mode != 'pull_request'
+      AND delivery_status = 'pending'`,
+];
 
 export function runMigrations(handle: DbHandle): void {
   for (const stmt of SQLITE_STATEMENTS) {

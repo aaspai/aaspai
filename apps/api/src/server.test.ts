@@ -75,6 +75,58 @@ describe("execution API authorization", () => {
     await expect(response.json()).resolves.toMatchObject({ data: { organizationId: "org_a" } });
   });
 
+  it("fails closed for invalid delivery settings and unapproved external actions", async () => {
+    const app = createApiApp({ authVerifier: verifier });
+    const request = (body: Record<string, unknown>) =>
+      app.request("/v1/execution/work-items", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer write-org-a",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          goalId: "goal_api",
+          projectId: "project_api",
+          title: "Governed external action",
+          ...body,
+        }),
+      });
+
+    expect(
+      (
+        await request({
+          repositoryId: "repo_api",
+          deliveryMode: "pull-request",
+          idempotencyKey: "invalid-delivery-mode",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await request({
+          workKind: "external_action",
+          deliveryMode: "none",
+          idempotencyKey: "external-without-plan",
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await request({
+          workKind: "external_action",
+          deliveryMode: "none",
+          idempotencyKey: "external-approved-plan",
+          externalAction: {
+            connector: "slack",
+            operation: "post.message",
+            payload: { text: "ok" },
+          },
+          governance: { approval: { required: true, actorType: "human" } },
+        })
+      ).status,
+    ).toBe(201);
+  });
+
   it("rejects an organization override and cross-organization reads", async () => {
     const app = createApiApp({ authVerifier: verifier });
     const override = await app.request("/v1/execution/work-items", {

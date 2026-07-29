@@ -8,10 +8,14 @@
  *   POST /v1/sessions                — start a session (returns 202 with sessionId)
  *   GET  /v1/sessions/:id            — read a session record
  *   GET  /v1/sessions/:id/events     — SSE stream of session events
+ *   POST /v1/loops/:id/trigger        — enqueue an event/webhook loop trigger
+ *   POST /v1/execution/work-items/:id/deliver — promote approved PR delivery
+ *   POST /v1/execution/work-items/:id/external-actions — run an approved connector action
+ *   GET  /v1/company/inbox            — actionable human review queue
+ *   GET  /v1/company/digest/weekly    — weekly loop operations summary
  *
  * What's NOT here (deferred):
  *   - Better Auth composition (the verifier is injected by the composition root)
- *   - Webhooks
  *   - MCP / OpenAPI
  *
  * Architecture: the api does NOT execute sessions. It enqueues a
@@ -69,7 +73,11 @@ export function createApiApp(
   registerLoopRoutes(app, { authVerifier: options.authVerifier });
   registerSessionRoutes(app, { authVerifier: options.authVerifier });
   registerProviderRoutes(app, { authVerifier: options.authVerifier });
-  registerExecutionRoutes(app, { authVerifier: options.authVerifier });
+  registerExecutionRoutes(app, {
+    authVerifier: options.authVerifier,
+    git: options.git,
+    pullRequests: options.pullRequestProvider,
+  });
   registerCompanyRoutes(app, {
     authVerifier: options.authVerifier,
     git: options.git,

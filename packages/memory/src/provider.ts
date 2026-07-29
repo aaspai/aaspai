@@ -42,6 +42,7 @@ export interface MemoryProvider {
   checkpoint(input: MemoryCheckpointRecordInput): Promise<MemoryRecord>;
   health(organizationId: string): Promise<MemoryHealth>;
   rebuild(organizationId: string): Promise<{ indexedRecords: number }>;
+  pruneExpired(organizationId: string, at?: Date): Promise<number>;
 }
 
 export class LocalMemoryProvider implements MemoryProvider {
@@ -181,6 +182,21 @@ export class LocalMemoryProvider implements MemoryProvider {
     for (const row of rows) this.indexRecord(rowToRecord(row));
     this.indexedOrganizations.add(organizationId);
     return { indexedRecords: rows.length };
+  }
+
+  async pruneExpired(organizationId: string, at = new Date()): Promise<number> {
+    const rows = await this.db
+      .select({ id: memoryRecords.id, expiresAt: memoryRecords.expiresAt })
+      .from(memoryRecords)
+      .where(eq(memoryRecords.organizationId, organizationId));
+    const expired = rows.filter(
+      (row) => row.expiresAt !== null && Date.parse(row.expiresAt) <= at.getTime(),
+    );
+    for (const row of expired) {
+      await this.db.delete(memoryRecords).where(eq(memoryRecords.id, row.id));
+    }
+    if (expired.length > 0) await this.rebuild(organizationId);
+    return expired.length;
   }
 
   private indexRecord(record: MemoryRecord): void {

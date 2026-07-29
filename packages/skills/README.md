@@ -12,7 +12,7 @@ target adapter's runtime dir.
 import {
   SkillRegistry,            // in-memory skill index
   SkillCatalog,             // on-disk catalog builder (catalog/{bundled,optional}/<category>/<slug>/)
-  loadSkillDirectory,       // legacy: load a flat dir of SKILL.md files
+  loadSkillDirectory,       // recursively load study-style SKILL.md trees and side files
   loadSkillFile,            // read a single SKILL.md → ParsedFile<Skill>
   parseSkillFile,           // parse SKILL.md from a string
   writeSkillFile,           // write Skill → SKILL.md
@@ -120,7 +120,8 @@ await reg.materialize(resolved, {
 - `materialize()` reports sha256 mismatches as errors
 - `verifySha256=false` writes the file even with a bad sha
 - `selectFor()` ranks by name/description/tag substring
-- `loadSkillDirectory` (legacy flat-dir loader) round-trip
+- `loadSkillDirectory` recursively preserves scripts, references, and assets
+- duplicate skill keys and materialization paths outside the target are rejected
 
 ## How to run
 

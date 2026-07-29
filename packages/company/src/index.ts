@@ -38,6 +38,12 @@ export {
   type CompanyWorkItemPort,
   type DelegateWorkInput,
 } from "./control-plane";
+export {
+  type FileAgentRelation,
+  type LoopMetrics,
+  type LoopReadiness,
+  OperationalGovernanceService,
+} from "./operational-governance";
 
 export interface CreateDepartmentInput {
   organizationId: string;

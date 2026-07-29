@@ -274,7 +274,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@aaspai/memory@workspace:packages/memory":
+"@aaspai/memory@workspace:*, @aaspai/memory@workspace:packages/memory":
   version: 0.0.0-use.local
   resolution: "@aaspai/memory@workspace:packages/memory"
   dependencies:
@@ -437,12 +437,15 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@aaspai/worker@workspace:apps/worker"
   dependencies:
+    "@aaspai/company": "workspace:*"
     "@aaspai/contracts": "workspace:*"
     "@aaspai/db": "workspace:*"
     "@aaspai/execution": "workspace:*"
     "@aaspai/file-loader": "workspace:*"
     "@aaspai/git": "workspace:*"
+    "@aaspai/knowledge": "workspace:*"
     "@aaspai/loops": "workspace:*"
+    "@aaspai/memory": "workspace:*"
     "@aaspai/observability": "workspace:*"
     "@aaspai/sessions": "workspace:*"
     "@aaspai/skills": "workspace:*"

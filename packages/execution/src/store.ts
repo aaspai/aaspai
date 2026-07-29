@@ -31,6 +31,7 @@ import {
   executionWorkspaceSchema,
   goalSchema,
   loopOutputSchema,
+  repositorySchema,
   resourceLockSchema,
   workflowRunSchema,
 } from "@aaspai/contracts/execution";
@@ -64,6 +65,7 @@ import {
   executionApprovals,
   executionBudgetReservations,
   executionEvents,
+  executionExternalActions,
   executionGovernanceEvents,
   executionPlans,
   executionRawOutputs,
@@ -72,6 +74,7 @@ import {
   executionWorkItems,
   executionWorkspaces,
   goals,
+  gte,
   sessionEvents as harnessSessionEvents,
   sessions as harnessSessions,
   inArray,
@@ -130,6 +133,8 @@ export interface CreateWorkItemInput {
   projectId: string;
   repositoryId: string;
   repositoryIds?: string[];
+  workKind?: ExecutionWorkItem["workKind"];
+  deliveryMode?: ExecutionWorkItem["deliveryMode"];
   workflowRunId?: string | null;
   title: string;
   description?: string;
@@ -338,6 +343,37 @@ export class ExecutionStore {
     return row;
   }
 
+  async getRepository(id: string, context?: ExecutionContext): Promise<Repository | null> {
+    const rows = await this.db
+      .select()
+      .from(repositories)
+      .where(
+        context
+          ? and(eq(repositories.id, id), eq(repositories.organizationId, context.organizationId))
+          : eq(repositories.id, id),
+      )
+      .limit(1);
+    return rows[0] ? repositorySchema.parse(rows[0]) : null;
+  }
+
+  async listRepositoriesForProject(
+    projectId: string,
+    context?: ExecutionContext,
+  ): Promise<Repository[]> {
+    const rows = await this.db
+      .select()
+      .from(repositories)
+      .where(
+        context
+          ? and(
+              eq(repositories.projectId, projectId),
+              eq(repositories.organizationId, context.organizationId),
+            )
+          : eq(repositories.projectId, projectId),
+      );
+    return rows.map((row) => repositorySchema.parse(row));
+  }
+
   async createDefinitionRevision(input: CreateDefinitionRevisionInput) {
     const row = {
       id: input.id ?? makeId("revision"),
@@ -398,6 +434,10 @@ export class ExecutionStore {
       projectId: input.projectId,
       repositoryId: input.repositoryId,
       repositoryIdsJson: JSON.stringify(repositoryIds),
+      workKind: input.workKind ?? "repository",
+      deliveryMode: input.deliveryMode ?? "commit",
+      deliveryStatus: "pending",
+      deliveryRef: null,
       workflowRunId: input.workflowRunId ?? null,
       title: input.title,
       description: input.description ?? "",
@@ -511,6 +551,24 @@ export class ExecutionStore {
           : eq(executionWorkItems.organizationId, organizationId),
       )
       .orderBy(desc(executionWorkItems.priority), asc(executionWorkItems.createdAt));
+    return rows.map((row) => parseWorkItem(row));
+  }
+
+  async listWorkItemsForWorkflow(
+    organizationId: string,
+    workflowRunId: string,
+    status?: ExecutionWorkItem["status"],
+  ): Promise<ExecutionWorkItem[]> {
+    const rows = await this.db
+      .select()
+      .from(executionWorkItems)
+      .where(
+        and(
+          eq(executionWorkItems.organizationId, organizationId),
+          eq(executionWorkItems.workflowRunId, workflowRunId),
+          ...(status ? [eq(executionWorkItems.status, status)] : []),
+        ),
+      );
     return rows.map((row) => parseWorkItem(row));
   }
 
@@ -867,21 +925,20 @@ export class ExecutionStore {
     const current = await this.getAttempt(input.attemptId);
     if (!current) throw new Error(`Agent attempt ${input.attemptId} not found`);
     if (isTerminalAttemptStatus(current.status)) {
+      await this.settleBudgetReservations(input.attemptId, input.usage);
       await this.releaseSchedulerLocks(current.id);
       const existingWorkItem = await this.getWorkItem(current.workItemId);
       if (!existingWorkItem) throw new Error(`Work item ${current.workItemId} not found`);
       if (["claimed", "in_progress"].includes(existingWorkItem.status)) {
-        const workItemStatus =
-          current.status === "succeeded"
-            ? "completed"
-            : current.status === "cancelled"
-              ? "cancelled"
-              : "failed";
+        if (current.status === "succeeded") {
+          await this.advanceSuccessfulWorkItem(existingWorkItem, current.id);
+          const advanced = await this.getWorkItem(existingWorkItem.id);
+          if (!advanced) throw new Error("Successful WorkItem disappeared");
+          return { attempt: current, workItem: advanced };
+        }
+        const workItemStatus = current.status === "cancelled" ? "cancelled" : "failed";
         const settled = await this.updateWorkItemStatus(current.workItemId, workItemStatus, {
-          blockedReason:
-            workItemStatus === "completed"
-              ? null
-              : (input.error ?? `${current.status} without retry eligibility`),
+          blockedReason: input.error ?? `${current.status} without retry eligibility`,
         });
         return { attempt: current, workItem: settled };
       }
@@ -903,28 +960,7 @@ export class ExecutionStore {
     const canRetry = retryable && current.attemptNumber < item.maxAttempts;
     await this.settleBudgetReservations(input.attemptId, input.usage);
     if (input.status === "succeeded") {
-      if (item.governance.verification.required) {
-        const verification = await this.createVerification({
-          organizationId: item.organizationId,
-          workItemId: item.id,
-          makerAttemptId: current.id,
-        });
-        await this.updateWorkItemStatus(item.id, "awaiting_verification", {
-          blockedReason: `checker verification required (${verification.id})`,
-        });
-      } else if (item.governance.approval.required) {
-        const approval = await this.createApprovalRequest({
-          organizationId: item.organizationId,
-          workItemId: item.id,
-          actorType: item.governance.approval.actorType,
-          expiresAfterMs: item.governance.approval.expiresAfterMs,
-        });
-        await this.updateWorkItemStatus(item.id, "awaiting_approval", {
-          blockedReason: `approval required (${approval.id})`,
-        });
-      } else {
-        await this.updateWorkItemStatus(item.id, "completed");
-      }
+      await this.advanceSuccessfulWorkItem(item, current.id);
     } else if (canRetry) {
       const retryAfter = new Date(
         Date.now() + Math.max(0, input.retryDelayMs ?? 1_000),
@@ -995,6 +1031,8 @@ export class ExecutionStore {
     if (verification.status !== "pending") throw new Error("Verification is no longer pending");
     const maker = await this.getAttempt(verification.makerAttemptId);
     if (!maker) throw new Error(`Maker attempt ${verification.makerAttemptId} not found`);
+    if (maker.agentId === input.agentId)
+      throw new Error("Checker agent must be independent from the maker");
     const workItem = await this.getWorkItem(verification.workItemId);
     if (!workItem) throw new Error(`Work item ${verification.workItemId} not found`);
     if (
@@ -1048,23 +1086,30 @@ export class ExecutionStore {
   }): Promise<{ verification: ExecutionVerification; workItem: ExecutionWorkItem }> {
     const verification = await this.getVerification(input.verificationId);
     if (!verification) throw new Error(`Verification ${input.verificationId} not found`);
+    if (verification.status !== "pending") throw new Error("Verification is no longer pending");
     const checker = await this.getAttempt(input.checkerAttemptId);
     if (checker?.role !== "checker" || checker.verificationId !== verification.id) {
       throw new Error("Checker attempt does not belong to verification");
     }
     const currentWorkItem = await this.getWorkItem(verification.workItemId);
     if (!currentWorkItem) throw new Error(`Work item ${verification.workItemId} not found`);
+    if (!isTerminalAttemptStatus(checker.status)) {
+      throw new Error("Checker attempt must finish before verification is submitted");
+    }
+    if (input.status === "passed" && checker.status !== "succeeded") {
+      throw new Error("A failed checker attempt cannot pass verification");
+    }
+    const evidenceIds = [...new Set(input.evidenceIds ?? [])];
+    const artifacts = await this.listArtifacts(checker.id);
+    const artifactIds = new Set(artifacts.map((artifact) => artifact.id));
+    if (evidenceIds.some((id) => !artifactIds.has(id))) {
+      throw new Error("Verification evidence must belong to the checker attempt");
+    }
     if (
       input.status === "passed" &&
-      currentWorkItem.governance.verification.minEvidence > (input.evidenceIds ?? []).length
+      currentWorkItem.governance.verification.minEvidence > evidenceIds.length
     ) {
       throw new Error("Verification requires more evidence");
-    }
-    if (!isTerminalAttemptStatus(checker.status)) {
-      if (checker.status === "queued" || checker.status === "preparing") {
-        await this.startCheckerAttempt(checker.id);
-      }
-      await this.transitionAttempt(checker.id, input.status === "passed" ? "succeeded" : "failed");
     }
     await this.db
       .update(executionVerifications)
@@ -1072,7 +1117,7 @@ export class ExecutionStore {
         checkerAttemptId: checker.id,
         status: input.status,
         summary: input.summary,
-        evidenceIdsJson: JSON.stringify(input.evidenceIds ?? []),
+        evidenceIdsJson: JSON.stringify(evidenceIds),
         completedAt: now(),
       })
       .where(eq(executionVerifications.id, verification.id));
@@ -1087,7 +1132,7 @@ export class ExecutionStore {
       metadata: {
         verificationId: verification.id,
         status: input.status,
-        evidenceIds: input.evidenceIds ?? [],
+        evidenceIds,
       },
     });
 
@@ -1104,7 +1149,7 @@ export class ExecutionStore {
           blockedReason: `approval required (${approval.id})`,
         });
       } else {
-        await this.updateWorkItemStatus(currentWorkItem.id, "completed");
+        await this.finalizeWorkItem(currentWorkItem.id);
       }
     } else {
       await this.updateWorkItemStatus(currentWorkItem.id, "blocked", {
@@ -1205,7 +1250,7 @@ export class ExecutionStore {
       .where(eq(executionApprovals.id, current.id));
     const workItem = await this.getWorkItem(current.workItemId);
     if (!workItem) throw new Error(`Work item ${current.workItemId} not found`);
-    if (input.status === "approved") await this.updateWorkItemStatus(workItem.id, "completed");
+    if (input.status === "approved") await this.finalizeWorkItem(workItem.id);
     else
       await this.updateWorkItemStatus(workItem.id, "blocked", {
         blockedReason: input.reason ?? input.status,
@@ -1227,6 +1272,90 @@ export class ExecutionStore {
     const updatedWorkItem = await this.getWorkItem(workItem.id);
     if (!approval || !updatedWorkItem) throw new Error("Approval decision disappeared");
     return { approval, workItem: updatedWorkItem };
+  }
+
+  private async advanceSuccessfulWorkItem(
+    item: ExecutionWorkItem,
+    makerAttemptId: string,
+  ): Promise<void> {
+    if (item.governance.verification.required) {
+      const verification = await this.createVerification({
+        organizationId: item.organizationId,
+        workItemId: item.id,
+        makerAttemptId,
+      });
+      await this.updateWorkItemStatus(item.id, "awaiting_verification", {
+        blockedReason: `checker verification required (${verification.id})`,
+      });
+    } else if (item.governance.approval.required) {
+      const approval = await this.createApprovalRequest({
+        organizationId: item.organizationId,
+        workItemId: item.id,
+        actorType: item.governance.approval.actorType,
+        expiresAfterMs: item.governance.approval.expiresAfterMs,
+      });
+      await this.updateWorkItemStatus(item.id, "awaiting_approval", {
+        blockedReason: `approval required (${approval.id})`,
+      });
+    } else {
+      await this.finalizeWorkItem(item.id);
+    }
+  }
+
+  private async finalizeWorkItem(workItemId: string): Promise<void> {
+    const item = await this.getWorkItem(workItemId);
+    if (!item) throw new Error(`Work item ${workItemId} not found`);
+    const deliveryStatus = item.deliveryMode === "pull_request" ? "ready" : "delivered";
+    await this.db
+      .update(executionWorkItems)
+      .set({
+        status: "completed",
+        blockedReason: null,
+        deliveryStatus,
+        updatedAt: now(),
+      })
+      .where(eq(executionWorkItems.id, workItemId));
+  }
+
+  async completeDelivery(input: {
+    workItemId: string;
+    status: "delivered" | "failed";
+    ref?: string | null;
+    error?: string | null;
+  }): Promise<ExecutionWorkItem> {
+    const changed = await this.db
+      .update(executionWorkItems)
+      .set({
+        deliveryStatus: input.status,
+        deliveryRef: input.ref ?? null,
+        blockedReason: input.status === "failed" ? (input.error ?? "delivery failed") : null,
+        updatedAt: now(),
+      })
+      .where(
+        and(
+          eq(executionWorkItems.id, input.workItemId),
+          eq(executionWorkItems.deliveryStatus, "delivering"),
+        ),
+      )
+      .returning({ id: executionWorkItems.id });
+    if (changed.length !== 1) throw new Error("Delivery is not actively claimed");
+    const item = await this.getWorkItem(input.workItemId);
+    if (!item) throw new Error(`Work item ${input.workItemId} not found`);
+    return item;
+  }
+
+  async claimDelivery(workItemId: string): Promise<ExecutionWorkItem | null> {
+    const changed = await this.db
+      .update(executionWorkItems)
+      .set({ deliveryStatus: "delivering", updatedAt: now() })
+      .where(
+        and(
+          eq(executionWorkItems.id, workItemId),
+          inArray(executionWorkItems.deliveryStatus, ["ready", "failed"]),
+        ),
+      )
+      .returning({ id: executionWorkItems.id });
+    return changed.length === 1 ? await this.getWorkItem(workItemId) : null;
   }
 
   async recordGovernanceEvent(
@@ -1273,6 +1402,77 @@ export class ExecutionStore {
     });
   }
 
+  async claimExternalAction(input: {
+    organizationId: string;
+    workItemId: string;
+    connector: string;
+    operation: string;
+    payload: Record<string, unknown>;
+    idempotencyKey: string;
+  }): Promise<{ action: typeof executionExternalActions.$inferSelect; created: boolean }> {
+    const row = {
+      id: makeId("external_action"),
+      organizationId: input.organizationId,
+      workItemId: input.workItemId,
+      connector: input.connector,
+      operation: input.operation,
+      payloadJson: JSON.stringify(input.payload),
+      idempotencyKey: input.idempotencyKey,
+      status: "pending",
+      resultJson: null,
+      error: null,
+      createdAt: now(),
+      completedAt: null,
+    } satisfies typeof executionExternalActions.$inferInsert;
+    try {
+      await this.db.insert(executionExternalActions).values(row);
+      return { action: row, created: true };
+    } catch (error) {
+      if (!/unique constraint failed/i.test(String(error))) throw error;
+      const existing = (
+        await this.db
+          .select()
+          .from(executionExternalActions)
+          .where(
+            and(
+              eq(executionExternalActions.organizationId, input.organizationId),
+              eq(executionExternalActions.connector, input.connector),
+              eq(executionExternalActions.idempotencyKey, input.idempotencyKey),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!existing) throw error;
+      return { action: existing, created: false };
+    }
+  }
+
+  async completeExternalAction(
+    id: string,
+    outcome:
+      | { status: "succeeded"; result: Record<string, unknown> }
+      | { status: "failed"; error: string },
+  ): Promise<typeof executionExternalActions.$inferSelect> {
+    await this.db
+      .update(executionExternalActions)
+      .set({
+        status: outcome.status,
+        resultJson: outcome.status === "succeeded" ? JSON.stringify(outcome.result) : null,
+        error: outcome.status === "failed" ? outcome.error : null,
+        completedAt: now(),
+      })
+      .where(eq(executionExternalActions.id, id));
+    const row = (
+      await this.db
+        .select()
+        .from(executionExternalActions)
+        .where(eq(executionExternalActions.id, id))
+        .limit(1)
+    )[0];
+    if (!row) throw new Error(`External action ${id} not found`);
+    return row;
+  }
+
   private async reserveBudget(
     workItem: ExecutionWorkItem,
     attemptId: string,
@@ -1284,6 +1484,8 @@ export class ExecutionStore {
       this.db.transaction((tx) => {
         for (const limit of workItem.governance.budget.limits) {
           const scopeId = budgetScopeId(limit.scope, workItem, agentId, attemptId);
+          const dayStart = new Date();
+          dayStart.setUTCHours(0, 0, 0, 0);
           const rows = tx
             .select()
             .from(executionBudgetReservations)
@@ -1293,6 +1495,9 @@ export class ExecutionStore {
                 eq(executionBudgetReservations.scope, limit.scope),
                 eq(executionBudgetReservations.scopeId, scopeId),
                 inArray(executionBudgetReservations.status, ["reserved", "settled"]),
+                limit.scope === "loop"
+                  ? gte(executionBudgetReservations.createdAt, dayStart.toISOString())
+                  : undefined,
               ),
             )
             .all();
@@ -1306,14 +1511,23 @@ export class ExecutionStore {
             0,
           );
           const runs = rows.reduce((sum, row) => sum + row.reservedRuns, 0);
+          const estimate =
+            limit.scope === "attempt"
+              ? { tokens: limit.tokens, costUsd: limit.costUsd }
+              : budgetEstimate(workItem.metadata);
           if (
-            (limit.tokens > 0 && tokens >= limit.tokens) ||
-            (limit.costUsd > 0 && costUsd >= limit.costUsd) ||
+            (limit.tokens > 0 && tokens + estimate.tokens > limit.tokens) ||
+            (limit.costUsd > 0 && costUsd + estimate.costUsd > limit.costUsd) ||
             (limit.runs > 0 && runs + 1 > limit.runs)
           ) {
             throw new BudgetExhaustedError(`budget exhausted for ${limit.scope}:${scopeId}`);
           }
-          if (limit.runs > 0 && runs / limit.runs >= workItem.governance.budget.soft) {
+          const projectedRatio = Math.max(
+            limit.tokens > 0 ? (tokens + estimate.tokens) / limit.tokens : 0,
+            limit.costUsd > 0 ? (costUsd + estimate.costUsd) / limit.costUsd : 0,
+            limit.runs > 0 ? (runs + 1) / limit.runs : 0,
+          );
+          if (projectedRatio >= workItem.governance.budget.soft) {
             warnings.push(`budget soft threshold reached for ${limit.scope}:${scopeId}`);
           }
           tx.insert(executionBudgetReservations)
@@ -1324,8 +1538,8 @@ export class ExecutionStore {
               attemptId,
               scope: limit.scope,
               scopeId,
-              reservedTokens: 0,
-              reservedCostUsd: 0,
+              reservedTokens: estimate.tokens,
+              reservedCostUsd: estimate.costUsd,
               reservedRuns: 1,
               actualTokens: 0,
               actualCostUsd: 0,
@@ -1757,7 +1971,30 @@ export class ExecutionStore {
       durationMs: null,
       parentSessionId: null,
     } satisfies typeof harnessSessions.$inferInsert;
-    await this.db.insert(harnessSessions).values(row as never);
+    const existing = await this.getHarnessSession(id);
+    if (existing) {
+      if (existing.organizationId !== input.organizationId) {
+        throw new Error(`Harness session ${id} belongs to another organization`);
+      }
+      await this.db
+        .update(harnessSessions)
+        .set({
+          agentId: input.agentId,
+          adapter: input.adapter,
+          runtimeJson: row.runtimeJson,
+          prompt: input.prompt,
+          configJson: row.configJson,
+          status: "running",
+          startedAt: row.startedAt,
+          finishedAt: null,
+          errorFamily: null,
+          errorCode: null,
+          errorMessage: null,
+        })
+        .where(eq(harnessSessions.id, id));
+    } else {
+      await this.db.insert(harnessSessions).values(row as never);
+    }
     return row;
   }
 
@@ -2348,11 +2585,37 @@ function budgetScopeId(
   if (scope === "organization") return workItem.organizationId;
   if (scope === "goal") return workItem.goalId;
   if (scope === "project") return workItem.projectId;
+  if (scope === "loop") {
+    const loopId = workItem.metadata.loopId;
+    if (typeof loopId !== "string" || !loopId) throw new Error("Loop budget requires loopId");
+    return loopId;
+  }
   if (scope === "agent") return agentId;
   return attemptId;
 }
 
-function evaluateExecutionPolicy(
+function budgetEstimate(metadata: Record<string, unknown>): {
+  tokens: number;
+  costUsd: number;
+} {
+  const value = metadata.budgetEstimate;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { tokens: 0, costUsd: 0 };
+  }
+  const estimate = value as Record<string, unknown>;
+  return {
+    tokens:
+      typeof estimate.tokens === "number" && Number.isFinite(estimate.tokens)
+        ? Math.max(0, Math.floor(estimate.tokens))
+        : 0,
+    costUsd:
+      typeof estimate.costUsd === "number" && Number.isFinite(estimate.costUsd)
+        ? Math.max(0, estimate.costUsd)
+        : 0,
+  };
+}
+
+export function evaluateExecutionPolicy(
   governance: ExecutionGovernance,
   metadata: Record<string, unknown>,
 ): { ok: true } | { ok: false; reason: string } {

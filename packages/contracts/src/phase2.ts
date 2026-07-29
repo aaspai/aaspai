@@ -271,6 +271,8 @@ export type PendingQuestion = z.infer<typeof pendingQuestionSchema>;
 
 export const sessionRequestSchema = z
   .object({
+    /** Durable control-plane id allocated before asynchronous execution starts. */
+    durableSessionId: identifierSchema.optional(),
     organizationId: identifierSchema,
     agentId: identifierSchema,
     adapter: z.string().trim().min(1).max(64),

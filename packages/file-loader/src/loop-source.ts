@@ -1,13 +1,16 @@
 import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
+  budgetSchema,
   type ChangeEvent,
+  gatePolicySchema,
   type LoopConfigSource,
   type LoopPattern,
   loopPatternSchema,
   type SourceDescriptor,
 } from "@aaspai/contracts/phase2";
 import { getLogger } from "@aaspai/observability";
+import * as yaml from "js-yaml";
 import { FileWatcher } from "./chokidar-watcher.js";
 import { parseOkfFile, sha256HexSync } from "./okf-parser.js";
 
@@ -34,9 +37,16 @@ export class FileLoopConfigSource implements LoopConfigSource {
     if (this.watching) return;
     this.watching = true;
     this.watcher.on("changed", (event) => {
-      this.handleChange(event.path, event.kind).catch((err) =>
-        log.error("watcher change failed", { path: event.path, err: String(err) }),
-      );
+      this.handleChange(event.path, event.kind).catch((err) => {
+        const dir = this.dirOf(event.path);
+        const id = dir ? `loop/${basename(dir)}` : null;
+        if (id && this.cache.delete(id)) this.emitChange({ kind: "removed", id, at: nowIso() });
+        log.error("watcher change failed; loop disabled", {
+          path: event.path,
+          id,
+          err: String(err),
+        });
+      });
     });
     this.watcher.start();
     await new Promise<void>((resolve) => {
@@ -187,6 +197,11 @@ export class FileLoopConfigSource implements LoopConfigSource {
       throw new Error(`Loop id "${id}" does not match directory name "${basename(dir)}"`);
     }
 
+    const config = parseJsonObject(fm.configJson ?? "{}", "configJson");
+    if (parsed.body.trim()) config.instructions = parsed.body.trim();
+    const gate = gatePolicySchema.parse(gateYaml ? yaml.load(gateYaml) : {});
+    const budget = budgetSchema.parse(budgetYaml ? yaml.load(budgetYaml) : {});
+
     const loop: LoopPattern = loopPatternSchema.parse({
       id,
       type: "LoopPattern",
@@ -200,9 +215,9 @@ export class FileLoopConfigSource implements LoopConfigSource {
       pauseReason: fm.pauseReason,
       concurrencyPolicy: fm.concurrencyPolicy ?? "coalesce_if_active",
       catchUpPolicy: fm.catchUpPolicy ?? "skip_missed",
-      configJson: fm.configJson ?? "{}",
-      gateJson: gateYaml ?? "{}",
-      budgetJson: budgetYaml ?? "{}",
+      configJson: JSON.stringify(config),
+      gateJson: JSON.stringify(gate),
+      budgetJson: JSON.stringify(budget),
       // scheduleYaml is informational only — the frontmatter is the source of truth
       ...(scheduleYaml ? {} : {}),
     } as unknown as LoopPattern);
@@ -223,4 +238,12 @@ export class FileLoopConfigSource implements LoopConfigSource {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function parseJsonObject(value: unknown, field: string): Record<string, unknown> {
+  if (typeof value !== "string") throw new Error(`${field} must be a JSON string`);
+  const parsed: unknown = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error(`${field} must contain a JSON object`);
+  return parsed as Record<string, unknown>;
 }

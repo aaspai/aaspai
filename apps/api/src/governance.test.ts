@@ -75,6 +75,18 @@ describe("execution governance API", () => {
     );
     expect(checkerResponse.status).toBe(201);
     const checker = (await checkerResponse.json()) as { data: { id: string } };
+    await store.startCheckerAttempt(checker.data.id);
+    await store.transitionAttempt(checker.data.id, "succeeded");
+    await store.createArtifact({
+      id: "test-result",
+      organizationId,
+      attemptId: checker.data.id,
+      kind: "test_result",
+      path: "test-result.json",
+      mediaType: "application/json",
+      sizeBytes: 2,
+      sha256: "0".repeat(64),
+    });
     const submit = await app.request(`/v1/execution/verifications/${verification?.id}/submit`, {
       method: "POST",
       headers: { authorization: "Bearer governance-write", "content-type": "application/json" },

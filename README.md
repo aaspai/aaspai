@@ -114,7 +114,7 @@ your-aaspai-project/
 | `apps/worker` | The long-lived execution daemon |
 | `packages/harness` | Adapter registry + 9 harness adapters (claude, codex, cursor, opencode, hermes, openclaw, dry-run) |
 | `packages/runtime` | Execution target registry (local, docker, ssh, sandbox) |
-| `packages/loops` | Loop engine: 6 building blocks (state, gate, ledger, budget, kill-switch, worktree) + 1 starter pattern (daily-triage) + LoopRunner |
+| `packages/loops` | Governed loop engine with durable state, pause/catch-up scheduling, budgets, gates, and 7 working starter patterns |
 | `packages/sessions` | Unified execution surface (compose harness + runtime + skills + knowledge) |
 | `packages/skills` | Skill registry + materializer |
 | `packages/tools` | Tool registry + 12 built-ins |

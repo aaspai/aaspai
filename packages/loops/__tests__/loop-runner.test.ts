@@ -145,6 +145,113 @@ describe("durable LoopRunner", () => {
       status: "cancelled",
     });
   });
+
+  it("passes durable state through discovery and decision", async () => {
+    const loop = pattern("L1", [
+      {
+        ref: { kind: "wakeup", id: "wake_state" },
+        title: "State item",
+        discoveredAt: new Date().toISOString(),
+      },
+    ]);
+    const seen: unknown[] = [];
+    loop.discover = async (state) => {
+      seen.push(state);
+      return [
+        {
+          ref: { kind: "wakeup", id: "wake_state" },
+          title: "State item",
+          discoveredAt: new Date().toISOString(),
+        },
+      ];
+    };
+    loop.decide = async (_item, state) => {
+      seen.push(state);
+      return { kind: "noop", reason: "State observed" };
+    };
+    const runner = new LoopRunner({
+      organizationId: "org_loop_runner",
+      execution: { store, lineage },
+      stateStore: {
+        view: async () => ({
+          loopId: loop.pattern.id,
+          highPriority: [],
+          watch: [],
+          noise: [],
+          workItems: [{ id: "work_prior", status: "failed", title: "Prior", updatedAt: "now" }],
+          attempts: [],
+          humanOverrides: [],
+          recentRuns: [],
+          paused: false,
+        }),
+      },
+    });
+
+    await runner.run(loop, { triggerKey: "state-1" });
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({
+      workflowRunId: expect.any(String),
+      workItems: [{ id: "work_prior", status: "failed" }],
+    });
+    expect(seen[1]).toEqual(seen[0]);
+  });
+
+  it("marks the durable run failed when discovery throws", async () => {
+    const loop = pattern("L1", []);
+    loop.discover = async () => {
+      throw new Error("discovery unavailable");
+    };
+    const runner = new LoopRunner({
+      organizationId: "org_loop_runner",
+      execution: { store, lineage },
+    });
+
+    await expect(runner.run(loop, { triggerKey: "failure-1" })).rejects.toThrow(
+      "discovery unavailable",
+    );
+    await expect(
+      store.getWorkflowRunByIdempotency("org_loop_runner", `loop:${loop.pattern.id}:failure-1`),
+    ).resolves.toMatchObject({ status: "failed" });
+  });
+
+  it("switches L2 actions to report-only at the daily soft budget", async () => {
+    const loop = pattern("L2", [
+      {
+        ref: { kind: "session", id: "budgeted" },
+        title: "Budgeted action",
+        discoveredAt: new Date().toISOString(),
+      },
+    ]);
+    loop.pattern.budgetJson = JSON.stringify({
+      perRun: { tokens: 10 },
+      perDay: { tokens: 100 },
+      soft: 0.8,
+      hard: 1,
+    });
+    const runner = new LoopRunner({
+      organizationId: "org_loop_runner",
+      execution: { store, lineage },
+      stateStore: {
+        view: async () => ({
+          loopId: loop.pattern.id,
+          highPriority: [],
+          watch: [],
+          noise: [],
+          workItems: [],
+          attempts: [],
+          humanOverrides: [],
+          recentRuns: [],
+          paused: false,
+          budgetToday: { tokens: 80, costUsd: 0, runs: 1 },
+        }),
+      },
+    });
+
+    const result = await runner.run(loop, { triggerKey: "soft-budget" });
+    expect(result.workItems).toHaveLength(0);
+    expect(result.outputs[0]).toMatchObject({ kind: "report" });
+  });
 });
 
 function pattern(autonomyLevel: "L1" | "L2", items: WorkItem[]): ResolvedLoopPattern {

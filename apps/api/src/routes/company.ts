@@ -3,6 +3,7 @@ import {
   CompanyControlPlaneService,
   CompanyOperationsService,
   type CompanyWorkItemInput,
+  OperationalGovernanceService,
 } from "@aaspai/company";
 import { getDefaultDb } from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
@@ -130,6 +131,33 @@ export function registerCompanyRoutes(
         staleAfterMs,
       );
       return c.json({ data: stale });
+    } catch (error) {
+      return companyError(c, error);
+    }
+  });
+
+  app.post("/v1/company/agent-definitions/reconcile", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || !Array.isArray(body.agents))
+      return c.json({ error: "invalid_request", message: "agents are required" }, 400);
+    try {
+      const agents = body.agents.map((value) => {
+        if (!isRecord(value) || typeof value.id !== "string")
+          throw new Error("each agent requires an id");
+        return {
+          id: value.id,
+          reportsTo: typeof value.reportsTo === "string" ? value.reportsTo : null,
+          manages: stringArray(value.manages),
+          peers: stringArray(value.peers),
+          metadata: isRecord(value.metadata) ? value.metadata : undefined,
+        };
+      });
+      const result = await new OperationalGovernanceService(
+        getDefaultDb().db,
+      ).reconcileAgentDefinitions(auth.principal.organizationId, agents);
+      return c.json({ data: result });
     } catch (error) {
       return companyError(c, error);
     }
@@ -264,6 +292,86 @@ export function registerCompanyRoutes(
       auth.principal.organizationId,
     );
     return c.json({ data: escalations });
+  });
+
+  app.get("/v1/company/inbox", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    return c.json({
+      data: await new OperationalGovernanceService(getDefaultDb().db).getHumanInbox(
+        auth.principal.organizationId,
+      ),
+    });
+  });
+
+  app.get("/v1/company/digest/weekly", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    return c.json({
+      data: await new OperationalGovernanceService(getDefaultDb().db).getWeeklyDigest(
+        auth.principal.organizationId,
+      ),
+    });
+  });
+
+  app.get("/v1/company/loops/:id/metrics", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const loopId = decodeURIComponent(c.req.param("id"));
+    return c.json({
+      data: await new OperationalGovernanceService(getDefaultDb().db).getLoopMetrics(
+        auth.principal.organizationId,
+        loopId.startsWith("loop/") ? loopId : `loop/${loopId}`,
+      ),
+    });
+  });
+
+  app.get("/v1/company/loops/:id/readiness", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const level = c.req.query("level");
+    if (level !== "L1" && level !== "L2" && level !== "L3")
+      return c.json({ error: "invalid_request", message: "level must be L1, L2, or L3" }, 400);
+    const loopId = decodeURIComponent(c.req.param("id"));
+    return c.json({
+      data: await new OperationalGovernanceService(getDefaultDb().db).assessLoop(
+        auth.principal.organizationId,
+        loopId.startsWith("loop/") ? loopId : `loop/${loopId}`,
+        level,
+      ),
+    });
+  });
+
+  app.post("/v1/company/loops/:id/feedback", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body.outputId !== "string" ||
+      (body.verdict !== "valuable" &&
+        body.verdict !== "false_positive" &&
+        body.verdict !== "neutral")
+    ) {
+      return c.json(
+        { error: "invalid_request", message: "outputId and a valid verdict are required" },
+        400,
+      );
+    }
+    const loopId = decodeURIComponent(c.req.param("id"));
+    try {
+      await new OperationalGovernanceService(getDefaultDb().db).recordLoopFeedback({
+        organizationId: auth.principal.organizationId,
+        loopId: loopId.startsWith("loop/") ? loopId : `loop/${loopId}`,
+        outputId: body.outputId,
+        verdict: body.verdict,
+        actorId: auth.principal.userId,
+        note: typeof body.note === "string" ? body.note : undefined,
+      });
+      return c.json({ data: { recorded: true } }, 201);
+    } catch (error) {
+      return companyError(c, error);
+    }
   });
 
   app.post("/v1/company/autonomy-proposals", async (c) => {
@@ -427,6 +535,10 @@ function companyError(c: Context, error: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) return [];
+  return value;
 }
 function counts(bundle: {
   departments: unknown[];

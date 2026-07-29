@@ -10,8 +10,10 @@ import type { ExecutionWorkItem, LoopOutput, WorkflowRun } from "@aaspai/contrac
 import type { ExecutionGovernanceInput } from "@aaspai/contracts/governance";
 import type { LoopConfigSource, LoopPattern, WorkItem } from "@aaspai/contracts/phase2";
 import { getLogger } from "@aaspai/observability";
+import type { LoopControlStore } from "./control.js";
 import type { KillSwitch } from "./kill-switch.js";
 import type { DecideResult, ResolvedLoopPattern } from "./pattern.js";
+import type { StateStore } from "./state.js";
 
 const log = getLogger("loops.runner");
 
@@ -31,6 +33,8 @@ export interface LoopRunnerOptions {
     lineage: LoopExecutionLineage;
   };
   killSwitch?: KillSwitch;
+  controlStore?: Pick<LoopControlStore, "isPaused" | "setPaused">;
+  stateStore?: Pick<StateStore, "view">;
 }
 
 /** Application-owned persistence port. Loop decisions do not depend on a DB or runner package. */
@@ -125,30 +129,112 @@ export class LoopRunner {
       idempotencyKey,
     });
 
+    const durablyPaused =
+      (await this.opts.controlStore?.isPaused(this.opts.organizationId, resolved.pattern.id)) ===
+      true;
     const stopped =
       resolved.pattern.status !== "enabled" ||
       (resolved.pattern.pauseReason !== null && resolved.pattern.pauseReason !== undefined) ||
+      durablyPaused ||
       this.opts.killSwitch?.isPaused(resolved.pattern.id) === true;
     if (stopped) {
       await store.updateWorkflowRunStatus(run.id, "cancelled");
       return emptyOutcome(resolved.pattern, run.id, startedAt, true);
     }
 
-    log.info("loop run start", { loop: resolved.pattern.id, runId: run.id });
-    const state = { paused: false, workflowRunId: run.id };
-    const items = await resolved.discover(state, { loopId: resolved.pattern.id, now });
-    let fired = 0;
-    let reported = 0;
-    let escalated = 0;
-    let noops = 0;
-    const workItems: ExecutionWorkItem[] = [];
-    const outputs: LoopOutput[] = [];
+    try {
+      log.info("loop run start", { loop: resolved.pattern.id, runId: run.id });
+      const state = {
+        ...((await this.opts.stateStore?.view(resolved.pattern.id, {
+          organizationId: this.opts.organizationId,
+        })) ?? {
+          loopId: resolved.pattern.id,
+          paused: false,
+          recentRuns: [],
+          budgetToday: { tokens: 0, costUsd: 0, runs: 0 },
+        }),
+        workflowRunId: run.id,
+      };
+      const budgetMode = dailyBudgetMode(resolved.pattern, state);
+      if (budgetMode === "kill_switch") {
+        await this.opts.controlStore?.setPaused(
+          this.opts.organizationId,
+          resolved.pattern,
+          true,
+          "daily budget hard threshold reached",
+        );
+      }
+      const items = await resolved.discover(state, {
+        loopId: resolved.pattern.id,
+        organizationId: this.opts.organizationId,
+        now,
+      });
+      let fired = 0;
+      let reported = 0;
+      let escalated = 0;
+      let noops = 0;
+      const workItems: ExecutionWorkItem[] = [];
+      const outputs: LoopOutput[] = [];
 
-    for (const item of items) {
-      const decision = await resolved.decide(item, state, { loopId: resolved.pattern.id, now });
-      if (decision.kind === "act") {
-        fired++;
-        if (resolved.pattern.autonomyLevel === "L0" || resolved.pattern.autonomyLevel === "L1") {
+      for (const item of items) {
+        const decision = await resolved.decide(item, state, { loopId: resolved.pattern.id, now });
+        if (decision.kind === "act") {
+          fired++;
+          if (
+            resolved.pattern.autonomyLevel === "L0" ||
+            resolved.pattern.autonomyLevel === "L1" ||
+            budgetMode !== "ok"
+          ) {
+            reported++;
+            outputs.push(
+              await store.createLoopOutput({
+                organizationId: this.opts.organizationId,
+                loopId: resolved.pattern.id,
+                workflowRunId: run.id,
+                kind: "report",
+                sourceRef: sourceRef(item),
+                title: `Report-only action: ${item.title}`,
+                body:
+                  budgetMode === "ok"
+                    ? decision.reason
+                    : `${decision.reason}\n\nBudget mode: ${budgetMode}; action suppressed.`,
+              }),
+            );
+            continue;
+          }
+          const createdWorkItem = await store.createWorkItem({
+            organizationId: this.opts.organizationId,
+            goalId: lineage.goalId,
+            projectId: lineage.projectId,
+            repositoryId: lineage.repositoryId,
+            workflowRunId: run.id,
+            definitionRevisionId: lineage.definitionRevisionId,
+            title: item.title,
+            description: item.description ?? decision.reason,
+            branchName: stringValue(item.data?.branchName),
+            sourceCommitSha: validSha(item.data?.sourceCommitSha),
+            priority: numberValue(item.data?.priority, 0),
+            deadlineAt: stringValue(item.data?.deadlineAt),
+            maxAttempts: boundedAttempts(item.data?.maxAttempts),
+            idempotencyKey: `loop:${resolved.pattern.id}:${triggerKey}:${sourceRef(item)}`,
+            metadata: {
+              loopId: resolved.pattern.id,
+              workflowRunId: run.id,
+              sourceRef: item.ref,
+              decision: decision.reason,
+              payload: item.data ?? {},
+              timeoutMs: numberValue(item.data?.timeoutMs, 0) || undefined,
+              budgetEstimate: perRunBudget(resolved.pattern),
+            },
+            governance: governanceFor(resolved.pattern),
+          });
+          const workItem = await store.getWorkItem(createdWorkItem.id);
+          if (!workItem) throw new Error(`Loop WorkItem ${createdWorkItem.id} disappeared`);
+          workItems.push(workItem);
+          continue;
+        }
+
+        if (decision.kind === "report") {
           reported++;
           outputs.push(
             await store.createLoopOutput({
@@ -157,91 +243,49 @@ export class LoopRunner {
               workflowRunId: run.id,
               kind: "report",
               sourceRef: sourceRef(item),
-              title: `Report-only action: ${item.title}`,
-              body: decision.reason,
+              title: decision.payload.title,
+              body: decision.payload.body,
             }),
           );
-          continue;
+        } else if (decision.kind === "escalate") {
+          escalated++;
+          outputs.push(
+            await store.createLoopOutput({
+              organizationId: this.opts.organizationId,
+              loopId: resolved.pattern.id,
+              workflowRunId: run.id,
+              kind: "escalation",
+              sourceRef: sourceRef(item),
+              title: `Escalation: ${item.title}`,
+              body: decision.reason,
+              severity: decision.severity,
+            }),
+          );
+        } else {
+          noops++;
         }
-        const createdWorkItem = await store.createWorkItem({
-          organizationId: this.opts.organizationId,
-          goalId: lineage.goalId,
-          projectId: lineage.projectId,
-          repositoryId: lineage.repositoryId,
-          workflowRunId: run.id,
-          definitionRevisionId: lineage.definitionRevisionId,
-          title: item.title,
-          description: item.description ?? decision.reason,
-          branchName: stringValue(item.data?.branchName),
-          sourceCommitSha: validSha(item.data?.sourceCommitSha),
-          priority: numberValue(item.data?.priority, 0),
-          deadlineAt: stringValue(item.data?.deadlineAt),
-          maxAttempts: boundedAttempts(item.data?.maxAttempts),
-          idempotencyKey: `loop:${resolved.pattern.id}:${triggerKey}:${sourceRef(item)}`,
-          metadata: {
-            loopId: resolved.pattern.id,
-            workflowRunId: run.id,
-            sourceRef: item.ref,
-            decision: decision.reason,
-            payload: item.data ?? {},
-            timeoutMs: numberValue(item.data?.timeoutMs, 0) || undefined,
-          },
-          governance: governanceFor(resolved.pattern),
-        });
-        const workItem = await store.getWorkItem(createdWorkItem.id);
-        if (!workItem) throw new Error(`Loop WorkItem ${createdWorkItem.id} disappeared`);
-        workItems.push(workItem);
-        continue;
       }
 
-      if (decision.kind === "report") {
-        reported++;
-        outputs.push(
-          await store.createLoopOutput({
-            organizationId: this.opts.organizationId,
-            loopId: resolved.pattern.id,
-            workflowRunId: run.id,
-            kind: "report",
-            sourceRef: sourceRef(item),
-            title: decision.payload.title,
-            body: decision.payload.body,
-          }),
-        );
-      } else if (decision.kind === "escalate") {
-        escalated++;
-        outputs.push(
-          await store.createLoopOutput({
-            organizationId: this.opts.organizationId,
-            loopId: resolved.pattern.id,
-            workflowRunId: run.id,
-            kind: "escalation",
-            sourceRef: sourceRef(item),
-            title: `Escalation: ${item.title}`,
-            body: decision.reason,
-            severity: decision.severity,
-          }),
-        );
-      } else {
-        noops++;
-      }
+      if (workItems.length === 0) await store.updateWorkflowRunStatus(run.id, "succeeded");
+      const outcome: RunOutcome = {
+        loopId: resolved.pattern.id,
+        runId: run.id,
+        fired,
+        reported,
+        escalated,
+        noops,
+        durationMs: Date.now() - startedAt,
+        stopped: false,
+        items,
+        workItems,
+        outputs,
+      };
+      log.info("loop run complete", { ...outcome, items: items.length });
+      return outcome;
+    } catch (error) {
+      await store.updateWorkflowRunStatus(run.id, "failed");
+      throw error;
     }
-
-    if (workItems.length === 0) await store.updateWorkflowRunStatus(run.id, "succeeded");
-    const outcome: RunOutcome = {
-      loopId: resolved.pattern.id,
-      runId: run.id,
-      fired,
-      reported,
-      escalated,
-      noops,
-      durationMs: Date.now() - startedAt,
-      stopped: false,
-      items,
-      workItems,
-      outputs,
-    };
-    log.info("loop run complete", { ...outcome, items: items.length });
-    return outcome;
   }
 
   private async replayExisting(
@@ -316,23 +360,65 @@ function governanceFor(loop: LoopPattern): ExecutionGovernanceInput {
   const gate = parseObject(loop.gateJson);
   const budget = parseObject(loop.budgetJson);
   const perRun = objectValue(budget.perRun);
+  const perDay = objectValue(budget.perDay);
   const limits = [];
   const runs = numberValue(perRun.runs, 0);
   const tokens = numberValue(perRun.tokens, 0);
   const costUsd = numberValue(perRun.costUsd, 0);
   if (runs || tokens || costUsd) limits.push({ scope: "attempt" as const, runs, tokens, costUsd });
+  const dailyRuns = numberValue(perDay.runs, 0);
+  const dailyTokens = numberValue(perDay.tokens, 0);
+  const dailyCostUsd = numberValue(perDay.costUsd, 0);
+  if (dailyRuns || dailyTokens || dailyCostUsd) {
+    limits.push({
+      scope: "loop" as const,
+      runs: dailyRuns,
+      tokens: dailyTokens,
+      costUsd: dailyCostUsd,
+    });
+  }
   return {
     risk: loop.autonomyLevel === "L3" ? "high" : loop.autonomyLevel === "L2" ? "medium" : "low",
     verification: {
       required: loop.autonomyLevel !== "L0",
-      checkerAgentId: loop.agent,
-      checkerHarness: "dry_run_local",
+      checkerAgentId: "agent/tester",
+      checkerHarness: null,
       minEvidence: 0,
     },
     approval: { required: loop.autonomyLevel === "L2", actorType: "human" },
     budget: { limits, soft: numberValue(budget.soft, 0.8) },
     policy: gate as ExecutionGovernanceInput["policy"],
   };
+}
+
+function perRunBudget(loop: LoopPattern): { tokens: number; costUsd: number } {
+  const perRun = objectValue(parseObject(loop.budgetJson).perRun);
+  return {
+    tokens: numberValue(perRun.tokens, 0),
+    costUsd: numberValue(perRun.costUsd, 0),
+  };
+}
+
+function dailyBudgetMode(
+  loop: LoopPattern,
+  state: { budgetToday?: { tokens: number; costUsd: number; runs: number } },
+): "ok" | "report_only" | "kill_switch" {
+  const budget = parseObject(loop.budgetJson);
+  const perDay = objectValue(budget.perDay);
+  const usage = state.budgetToday ?? { tokens: 0, costUsd: 0, runs: 0 };
+  const ratios = [
+    ratio(usage.tokens, numberValue(perDay.tokens, 0)),
+    ratio(usage.costUsd, numberValue(perDay.costUsd, 0)),
+    ratio(usage.runs, numberValue(perDay.runs, 0)),
+  ];
+  const consumed = Math.max(...ratios);
+  if (consumed >= numberValue(budget.hard, 1)) return "kill_switch";
+  if (consumed >= numberValue(budget.soft, 0.8)) return "report_only";
+  return "ok";
+}
+
+function ratio(used: number, cap: number): number {
+  return cap > 0 ? used / cap : 0;
 }
 
 function parseObject(value: string): Record<string, unknown> {
