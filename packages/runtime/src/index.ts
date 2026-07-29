@@ -88,5 +88,4 @@ export type {
 export {
   prepareRuntimeForExecution,
   restoreRuntimeFromExecution,
-  WORKSPACE_ROUNDTRIP_STUB_MESSAGE,
 } from "./shared/workspace-roundtrip.js";

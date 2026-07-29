@@ -342,6 +342,14 @@ async function runHarnessCase(
   if (expectation === "success" && !result.sessionId)
     throw new Error(`${harness} did not return a provider session ID`);
   const attemptResult = await store.getAttempt(plan.attemptId);
+  if (
+    expectation === "success" &&
+    (evidence.rawOutputCount === 0 ||
+      evidence.sessionEventCount === 0 ||
+      attemptResult?.status !== "succeeded")
+  ) {
+    throw new Error(`${harness} did not persist complete successful execution evidence`);
+  }
   if (expectation === "failure" && result.exitCode === 0)
     throw new Error(`${harness} invalid invocation unexpectedly succeeded`);
   if (expectation === "cancel" && attemptResult?.status !== "cancelled")
@@ -403,6 +411,20 @@ if (phase === "all" || phase === "providers") {
       { model: process.env.AASPAI_OPENCODE_MODEL ?? "opencode-go/mimo-v2.5" },
       "cancel",
     ),
+  );
+}
+
+if (phase === "daytona") {
+  const daytonaTarget: ExecutionTarget = {
+    kind: "sandbox",
+    provider: "daytona",
+    remoteCwd: "/workspace",
+    timeoutMs: 240_000,
+  };
+  await record("opencode-daytona-success", daytonaTarget, () =>
+    runHarnessCase("opencode-daytona-success", "opencode_cli", daytonaTarget, {
+      model: process.env.AASPAI_OPENCODE_MODEL ?? "opencode-go/mimo-v2.5",
+    }),
   );
 }
 

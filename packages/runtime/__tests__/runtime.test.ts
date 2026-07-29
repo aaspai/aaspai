@@ -1,6 +1,9 @@
+import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
+import type { SandboxClient, SandboxLease } from "@aaspai/runtime";
 import {
   buildSandboxNpmInstallCommand,
   createDockerTarget,
+  createSdkSandboxTarget,
   dockerExecutionTargetSchema,
   EXECUTION_TARGET_KIND_VALUES,
   e2bTarget,
@@ -15,6 +18,7 @@ import {
   RUNTIME_REGISTRY_VERSION,
   resolveTarget,
   SANDBOX_PROVIDER_VALUES,
+  SdkSandboxDriver,
   sandboxExecutionTargetSchema,
   sandboxSpecSchema,
   shellCommandArgs,
@@ -89,6 +93,12 @@ describe("runtime registry", () => {
   it("lists every runtime target (local + docker + ssh + 7 sandbox providers)", () => {
     const all = listRuntimeTargets();
     expect(all.length).toBe(3 + SANDBOX_PROVIDER_VALUES.length);
+    const daytona = all.find((target) => target.provider === "daytona");
+    expect(daytona?.capabilities).toMatchObject({
+      restore: true,
+      resume: true,
+      artifacts: false,
+    });
   });
 
   it("lists every sandbox provider", () => {
@@ -225,6 +235,108 @@ describe("e2b local backend", () => {
   });
 });
 
+describe("SDK sandbox workspace lifecycle", () => {
+  it("uploads the assigned workspace, runs remotely, restores, and releases", async () => {
+    const { mkdtemp, readFile, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const workspace = await mkdtemp(join(tmpdir(), "aaspai-sdk-target-"));
+    const driver = new RecordingSandboxDriver();
+    try {
+      await writeFile(join(workspace, "input.txt"), "workspace-marker\n");
+      const target = createSdkSandboxTarget({
+        driver,
+        providerKey: "daytona",
+        label: "test",
+        capabilities: {
+          execute: true,
+          streaming: true,
+          cancellation: true,
+          timeout: true,
+          workspaceIsolation: true,
+          restore: true,
+          resume: false,
+          artifacts: false,
+        },
+      });
+
+      const output: string[] = [];
+      const runResult = await target.run(
+        { kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" },
+        {
+          command: "node",
+          args: ["-e", "console.log('remote')"],
+          cwd: workspace,
+          onLog: (_stream, chunk) => {
+            output.push(chunk);
+          },
+        },
+      );
+
+      expect(runResult.exitCode).toBe(0);
+      expect(runResult.runtimeIdentity?.connectionIdentity).toBe("daytona:lease_test");
+      expect(driver.uploadedBytes).toBeGreaterThan(0);
+      expect(driver.commands.map((entry) => entry.command)).toEqual(["sh", "node", "sh"]);
+      expect(driver.commands[1]?.cwd).toBe("/workspace");
+      expect(output).toEqual(["remote\n"]);
+      await expect(readFile(join(workspace, "output.txt"), "utf8")).resolves.toBe("restored\n");
+      expect(driver.released).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("pauses and resumes the same provider lease", async () => {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const workspace = await mkdtemp(join(tmpdir(), "aaspai-sdk-resume-"));
+    const driver = new RecordingSandboxDriver();
+    const target = createSdkSandboxTarget({
+      driver,
+      providerKey: "daytona",
+      label: "test",
+      capabilities: {
+        execute: true,
+        streaming: true,
+        cancellation: true,
+        timeout: true,
+        workspaceIsolation: true,
+        restore: true,
+        resume: true,
+        artifacts: false,
+      },
+    });
+    try {
+      await writeFile(join(workspace, "input.txt"), "resume\n");
+      await target.run(
+        {
+          kind: "sandbox",
+          provider: "daytona",
+          remoteCwd: "/workspace",
+          metadata: { reuseLease: true },
+        },
+        { command: "node", args: [], cwd: workspace },
+      );
+      expect(driver.paused).toBe(true);
+
+      await target.run(
+        {
+          kind: "sandbox",
+          provider: "daytona",
+          remoteCwd: "/workspace",
+          metadata: { providerLeaseId: "lease_test" },
+        },
+        { command: "node", args: [] },
+      );
+      expect(driver.resumed).toBe(true);
+      expect(driver.released).toBe(true);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Docker environment provider", () => {
   it("runs a plan in a disposable container and streams output", async () => {
     const { mkdir, mkdtemp, rm } = await import("node:fs/promises");
@@ -325,4 +437,58 @@ function result(
     durationMs: 0,
     ...overrides,
   };
+}
+
+class RecordingSandboxDriver extends SdkSandboxDriver<Record<string, never>> {
+  commands: RunProcessOptions[] = [];
+  uploadedBytes = 0;
+  released = false;
+  paused = false;
+  resumed = false;
+
+  constructor() {
+    super("daytona");
+  }
+
+  protected async createSandbox() {
+    return { raw: {}, remoteCwd: "/workspace", metadata: {} };
+  }
+
+  protected async reconnect(providerLeaseId: string) {
+    this.resumed = providerLeaseId === "lease_test";
+    return this.resumed ? {} : null;
+  }
+
+  protected async destroySandbox() {
+    this.released = true;
+  }
+
+  protected override async pauseSandbox() {
+    this.paused = true;
+  }
+
+  protected leaseId() {
+    return "lease_test";
+  }
+
+  protected buildClient(_raw: Record<string, never>, _lease: SandboxLease): SandboxClient {
+    return {
+      makeDir: async () => undefined,
+      writeFile: async (_path, content) => {
+        this.uploadedBytes +=
+          typeof content === "string" ? Buffer.byteLength(content) : content.length;
+      },
+      readFile: async () =>
+        Buffer.from(
+          "diff --git a/output.txt b/output.txt\nnew file mode 100644\n--- /dev/null\n+++ b/output.txt\n@@ -0,0 +1 @@\n+restored\n",
+        ),
+      listFiles: async () => [],
+      remove: async () => undefined,
+      run: async (options): Promise<RunProcessResult> => {
+        this.commands.push(options);
+        if (options.command === "node") await options.onLog?.("stdout", "remote\n");
+        return result({ stdout: options.command === "node" ? "remote\n" : "" });
+      },
+    };
+  }
 }

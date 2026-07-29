@@ -12,6 +12,7 @@ kept in a database.
 | [Getting started](./getting-started.md) | Install the monorepo, initialize a workspace, and inspect the local system. |
 | [Concept](./concept.md) | Understand the product model and its boundaries. |
 | [Architecture](./architecture.md) | See the implemented components, source-of-truth rules, and execution flow. |
+| [Harnesses and runtimes](./execution-runtimes.md) | Understand where agentic CLIs run, credential direction, and remote-runtime acceptance. |
 | [Deployment](./deployment.md) | Run the current system and understand its production-readiness limits. |
 
 ## Core definitions

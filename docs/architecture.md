@@ -96,6 +96,21 @@ Direct session execution remains available for explicit chat and bounded
 manual runs. It is a compatibility/user-interaction path, not a shortcut for
 autonomous work.
 
+### Execution responsibility
+
+The harness adapter defines how to invoke and interpret an agentic CLI. The
+runtime target defines where that CLI executes. For a sandbox target such as
+Daytona, the intended execution boundary places the CLI and mutable repository
+inside the sandbox while the worker retains durable control and evidence.
+
+The current Daytona integration proves the real worker claim, selected-skill
+use, prebuilt snapshot execution, workspace round-trip, streamed CLI execution,
+timeout, cancellation, same-lease provider-session resume, external
+session/log persistence, durable branches and declared artifacts,
+attempt-scoped gateway credentials, runtime identity, and cleanup. See
+[Harnesses and execution runtimes](./execution-runtimes.md) for the current
+boundary and acceptance criteria.
+
 ## Important identities
 
 These records are intentionally distinct:

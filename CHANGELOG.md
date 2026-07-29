@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Production-shaped Daytona worker execution** — `WorkerDaemon` now runs
+  selected skills through OpenCode inside versioned Daytona snapshots, persists
+  attempt branches and declared artifacts, resumes compatible leases and CLI
+  sessions, and uses short-lived gateway credentials instead of provider keys in
+  agent sandboxes. Real acceptance builds and verifies a webpage end to end.
 - **Organized `.aaspai/` workspace layout** — `aaspai init` now keeps
   configuration, agent definitions, knowledge, loops, and runtime state under
   `.aaspai/`. Existing root-level workspaces migrate automatically without

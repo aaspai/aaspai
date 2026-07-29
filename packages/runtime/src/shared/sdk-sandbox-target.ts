@@ -2,6 +2,7 @@ import type { ProviderCapabilities } from "@aaspai/contracts/capabilities";
 import type { RuntimeTargetInfo, SandboxExecutionTarget } from "@aaspai/contracts/runtime";
 import type { RuntimeTarget } from "./execution-target.js";
 import type { SdkSandboxDriver } from "./sdk-sandbox-driver.js";
+import { prepareRuntimeForExecution, restoreRuntimeFromExecution } from "./workspace-roundtrip.js";
 
 /**
  * Build a `RuntimeTarget` from an `SdkSandboxDriver`. Each `run`
@@ -29,10 +30,37 @@ export function createSdkSandboxTarget(input: {
       }
       const sandboxTarget = target as SandboxExecutionTarget;
       const remoteCwd = sandboxTarget.remoteCwd ?? "/workspace";
-      const lease = await driver.acquire(remoteCwd, { timeoutMs: sandboxTarget.timeoutMs });
+      const reuseLease = sandboxTarget.metadata?.reuseLease === true;
+      const existingLeaseId =
+        typeof sandboxTarget.metadata?.providerLeaseId === "string"
+          ? sandboxTarget.metadata.providerLeaseId
+          : undefined;
+      const resumedRemoteCwd =
+        typeof sandboxTarget.metadata?.providerLeaseRemoteCwd === "string"
+          ? sandboxTarget.metadata.providerLeaseRemoteCwd
+          : remoteCwd;
+      const lease = existingLeaseId
+        ? await driver.resume(existingLeaseId, resumedRemoteCwd)
+        : await driver.acquire(remoteCwd, {
+            timeoutMs: sandboxTarget.timeoutMs,
+            reuseLease,
+          });
+      if (!lease) {
+        throw new Error(`sdk-sandbox(${input.providerKey}) lease not found: ${existingLeaseId}`);
+      }
+      const client = driver.client(lease);
+      const localDir = runOptions.cwd;
+      let prepared = false;
       try {
-        const client = driver.client(lease);
-        const result = await client.run(runOptions);
+        if (localDir) {
+          await prepareRuntimeForExecution({
+            client,
+            localDir,
+            remoteDir: lease.remoteCwd,
+          });
+          prepared = true;
+        }
+        const result = await client.run({ ...runOptions, cwd: lease.remoteCwd });
         return {
           ...result,
           runtimeIdentity: {
@@ -43,7 +71,17 @@ export function createSdkSandboxTarget(input: {
           },
         };
       } finally {
-        await driver.release(lease);
+        try {
+          if (prepared && localDir) {
+            await restoreRuntimeFromExecution({
+              client,
+              localDir,
+              remoteDir: lease.remoteCwd,
+            });
+          }
+        } finally {
+          await driver.release(lease, { reuseLease });
+        }
       }
     },
     async prepareWorkspace(target) {

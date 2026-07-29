@@ -81,6 +81,7 @@ describe("HarnessExecutionPlanRunner", () => {
     const workspace = await makeAttemptAndWorkspace(attemptId, "opencode_cli");
     const fixtureCode = [
       "const emit = (value) => console.log(JSON.stringify(value));",
+      "require('node:fs').writeFileSync('credential-seen.txt', String(Boolean(process.env.AASPAI_ATTEMPT_TOKEN)));",
       'emit({ type: "session.created", sessionID: "oc_fixture" });',
       'emit({ type: "text", sessionID: "oc_fixture", part: { type: "text", text: `cwd=${process.cwd()}` } });',
       'emit({ type: "step_finish", sessionID: "oc_fixture", part: { tokens: { input: 3, output: 4 }, cost: 0 } });',
@@ -99,6 +100,14 @@ describe("HarnessExecutionPlanRunner", () => {
           commandArgs: ["-e", fixtureCode],
         },
       },
+      ephemeralEnv: { AASPAI_ATTEMPT_TOKEN: "short-lived-test-token" },
+      onExecuted: async () => {
+        expect(
+          await import("node:fs/promises").then((fs) =>
+            fs.readFile(path.join(workspace.path, "credential-seen.txt"), "utf8"),
+          ),
+        ).toBe("true");
+      },
     });
 
     expect(result.exitCode, JSON.stringify(result)).toBe(0);
@@ -111,6 +120,34 @@ describe("HarnessExecutionPlanRunner", () => {
       .from(sessionEvents)
       .where(eq(sessionEvents.sessionId, attempt?.harnessSessionId ?? "missing"));
     expect(events.some((event) => event.payloadJson.includes("assigned-workspace"))).toBe(true);
+  });
+
+  it("fails the attempt when restored output cannot be persisted", async () => {
+    const attemptId = "attempt_evidence_failure";
+    const workspace = await makeAttemptAndWorkspace(attemptId, "opencode_cli");
+    const result = await new HarnessExecutionPlanRunner(store).run({
+      plan: planFor(attemptId, "opencode_cli"),
+      workspace,
+      agent: {
+        id: "agent_opencode",
+        name: "OpenCode fixture",
+        adapterType: "opencode_cli",
+        adapterConfig: {
+          model: "fixture/model",
+          command: process.execPath,
+          commandArgs: [
+            "-e",
+            "console.log(JSON.stringify({type:'session.created',sessionID:'oc_fixture'}))",
+          ],
+        },
+      },
+      onExecuted: async () => {
+        throw new Error("artifact store unavailable");
+      },
+    });
+
+    expect(result.errorCode).toBe("evidence_persistence_failed");
+    await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "failed" });
   });
 
   async function makeAttemptAndWorkspace(
