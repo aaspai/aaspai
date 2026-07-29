@@ -18,12 +18,12 @@ export function RunReadyWork({ goalId }: { goalId: string }) {
       });
       const body = (await response.json()) as {
         error?: string;
-        data?: { result?: { status?: string; logRef?: string } };
+        data?: { sessionId?: string; status?: string };
       };
       if (!response.ok) throw new Error(body.error ?? "Execution failed");
-      const logRef = body.data?.result?.logRef ?? "";
-      setMessage(`Execution ${body.data?.result?.status ?? "finished"}. ${logRef}`);
-      setSessionId(logRef);
+      const durableSessionId = body.data?.sessionId ?? "";
+      setMessage(`Execution ${body.data?.status ?? "queued"}. ${durableSessionId}`);
+      setSessionId(durableSessionId);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Execution failed");
     } finally {

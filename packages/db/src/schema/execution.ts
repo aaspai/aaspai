@@ -85,6 +85,10 @@ export const executionWorkItems = sqliteTable(
       .notNull()
       .references(() => repositories.id),
     repositoryIdsJson: text("repository_ids_json").notNull().default("[]"),
+    workKind: text("work_kind").notNull().default("repository"),
+    deliveryMode: text("delivery_mode").notNull().default("commit"),
+    deliveryStatus: text("delivery_status").notNull().default("pending"),
+    deliveryRef: text("delivery_ref"),
     // Nullable lineage link. It is intentionally not a SQL FK because the
     // work-item table is declared before workflow_runs in this schema module.
     workflowRunId: text("workflow_run_id"),
@@ -113,6 +117,11 @@ export const executionWorkItems = sqliteTable(
       t.idempotencyKey,
     ),
     projectStatusIdx: index("execution_work_items_project_status_idx").on(t.projectId, t.status),
+    workflowStatusIdx: index("execution_work_items_workflow_status_idx").on(
+      t.organizationId,
+      t.workflowRunId,
+      t.status,
+    ),
   }),
 );
 
@@ -163,6 +172,12 @@ export const workflowRuns = sqliteTable(
   },
   (t) => ({
     orgIdemUniq: uniqueIndex("workflow_runs_org_idem_uniq").on(t.organizationId, t.idempotencyKey),
+    sourceTimeIdx: index("workflow_runs_source_time_idx").on(
+      t.organizationId,
+      t.sourceType,
+      t.sourceId,
+      t.createdAt,
+    ),
   }),
 );
 
@@ -224,8 +239,10 @@ export const agentAttempts = sqliteTable(
   (t) => ({
     workAttemptUniq: uniqueIndex("agent_attempts_work_number_uniq").on(
       t.workItemId,
+      t.role,
       t.attemptNumber,
     ),
+    verificationUniq: uniqueIndex("agent_attempts_verification_uniq").on(t.verificationId),
     runStatusIdx: index("agent_attempts_run_status_idx").on(t.workflowRunId, t.status),
   }),
 );
@@ -459,6 +476,34 @@ export const executionGovernanceEvents = sqliteTable(
   }),
 );
 
+export const executionExternalActions = sqliteTable(
+  "execution_external_actions",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").notNull(),
+    workItemId: text("work_item_id")
+      .notNull()
+      .references(() => executionWorkItems.id, { onDelete: "cascade" }),
+    connector: text("connector").notNull(),
+    operation: text("operation").notNull(),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status").notNull().default("pending"),
+    resultJson: text("result_json"),
+    error: text("error"),
+    createdAt: text("created_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (t) => ({
+    idempotencyUniq: uniqueIndex("execution_external_actions_idempotency_uniq").on(
+      t.organizationId,
+      t.connector,
+      t.idempotencyKey,
+    ),
+    workItemIdx: index("execution_external_actions_work_item_idx").on(t.workItemId),
+  }),
+);
+
 export const executionProcessDefinitions = sqliteTable(
   "execution_process_definitions",
   {
@@ -603,6 +648,7 @@ export type ExecutionVerificationRow = typeof executionVerifications.$inferSelec
 export type ExecutionApprovalRow = typeof executionApprovals.$inferSelect;
 export type ExecutionBudgetReservationRow = typeof executionBudgetReservations.$inferSelect;
 export type ExecutionGovernanceEventRow = typeof executionGovernanceEvents.$inferSelect;
+export type ExecutionExternalActionRow = typeof executionExternalActions.$inferSelect;
 export type ExecutionProcessDefinitionRow = typeof executionProcessDefinitions.$inferSelect;
 export type ExecutionOperatorRunRow = typeof executionOperatorRuns.$inferSelect;
 export type ExecutionControlDecisionRow = typeof executionControlDecisions.$inferSelect;

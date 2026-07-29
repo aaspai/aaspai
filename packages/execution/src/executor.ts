@@ -23,7 +23,16 @@ export interface AutonomousExecutionInput {
     attempt: AgentAttempt;
     workItem: ExecutionWorkItem;
     workflowRun: WorkflowRun;
-  }) => Promise<"succeeded" | "failed" | "cancelled" | "timed_out">;
+  }) => Promise<
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "timed_out"
+    | {
+        status: "succeeded" | "failed" | "cancelled" | "timed_out";
+        usage?: { tokens?: number; costUsd?: number };
+      }
+  >;
 }
 
 export interface AutonomousExecutionResult {
@@ -65,9 +74,16 @@ export class AutonomousWorkExecutor {
     if (!workflowRun) throw new Error(`Workflow run ${input.workflowRunId} not found`);
     let providerResult: AdapterExecutionResult | undefined;
     let status: "succeeded" | "failed" | "cancelled" | "timed_out";
+    let usage: { tokens?: number; costUsd?: number } | undefined;
     try {
       if (input.runProvider) {
-        status = await input.runProvider({ attempt, workItem, workflowRun });
+        const providerOutcome = await input.runProvider({ attempt, workItem, workflowRun });
+        if (typeof providerOutcome === "string") {
+          status = providerOutcome;
+        } else {
+          status = providerOutcome.status;
+          usage = providerOutcome.usage;
+        }
       } else {
         if (!input.plan || !input.workspace)
           throw new Error("immutable plan and workspace are required");
@@ -90,7 +106,11 @@ export class AutonomousWorkExecutor {
       });
       throw error;
     }
-    const completed = await this.store.completeScheduledAttempt({ attemptId: attempt.id, status });
+    const completed = await this.store.completeScheduledAttempt({
+      attemptId: attempt.id,
+      status,
+      usage,
+    });
     return { attempt: completed.attempt, workItem: completed.workItem, providerResult };
   }
 }

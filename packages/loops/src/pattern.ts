@@ -10,7 +10,7 @@ export type { DecideResult, LoopPattern, Trigger, WorkItem };
 
 export type DiscoverFn = (
   state: unknown,
-  ctx: { loopId: string; now: Date },
+  ctx: { loopId: string; organizationId: string; now: Date },
 ) => Promise<readonly WorkItem[]>;
 export type DecideFn = (
   item: WorkItem,
@@ -51,4 +51,29 @@ export class PatternRegistry {
   resolved(): readonly ResolvedLoopPattern[] {
     return [...this.patterns.values()];
   }
+}
+
+/** Apply file-owned policy and schedule metadata to an implementation. */
+export function resolveFilePattern(
+  pattern: LoopPattern,
+  implementation?: ResolvedLoopPattern | null,
+): ResolvedLoopPattern {
+  if (implementation) return { ...implementation, pattern };
+  const config = JSON.parse(pattern.configJson) as Record<string, unknown>;
+  const instructions =
+    typeof config.instructions === "string" && config.instructions.trim()
+      ? config.instructions.trim()
+      : pattern.description;
+  return {
+    pattern,
+    discover: async (_state, { now }) => [
+      {
+        ref: { kind: "loop", id: `${pattern.id}:${now.toISOString()}` },
+        title: pattern.title,
+        description: instructions,
+        discoveredAt: now.toISOString(),
+      },
+    ],
+    decide: async () => ({ kind: "act", reason: instructions }),
+  };
 }

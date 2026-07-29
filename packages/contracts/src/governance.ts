@@ -46,7 +46,14 @@ const DEFAULT_APPROVAL_POLICY = {
 };
 export type ApprovalPolicy = z.infer<typeof approvalPolicySchema>;
 
-export const budgetScopeSchema = z.enum(["organization", "goal", "project", "agent", "attempt"]);
+export const budgetScopeSchema = z.enum([
+  "organization",
+  "goal",
+  "project",
+  "loop",
+  "agent",
+  "attempt",
+]);
 export type BudgetScope = z.infer<typeof budgetScopeSchema>;
 
 export const budgetLimitSchema = z

@@ -5,7 +5,7 @@
 
 import type { WorkItem } from "@aaspai/contracts/phase2";
 import { getDefaultDb, sessions, wakeups } from "@aaspai/db";
-import { desc, gte } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 
 const LOOKBACK_HOURS = 24;
 
@@ -13,21 +13,24 @@ const LOOKBACK_HOURS = 24;
 // Postgres path; Phase 4 swaps this in).
 type Db = ReturnType<typeof getDefaultDb>["db"];
 
-export default async function discover(): Promise<readonly WorkItem[]> {
+export default async function discover(
+  _state: unknown,
+  ctx: { organizationId: string },
+): Promise<readonly WorkItem[]> {
   const db = getDefaultDb().db as Db;
   const cutoff = new Date(Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
 
   const recentSessions = await db
     .select()
     .from(sessions)
-    .where(gte(sessions.startedAt, cutoff))
+    .where(and(eq(sessions.organizationId, ctx.organizationId), gte(sessions.startedAt, cutoff)))
     .orderBy(desc(sessions.startedAt))
     .limit(50);
 
   const recentWakeups = await db
     .select()
     .from(wakeups)
-    .where(gte(wakeups.requestedAt, cutoff))
+    .where(and(eq(wakeups.organizationId, ctx.organizationId), gte(wakeups.requestedAt, cutoff)))
     .orderBy(desc(wakeups.requestedAt))
     .limit(50);
 

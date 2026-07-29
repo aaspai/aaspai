@@ -251,6 +251,60 @@ beforeEach(async () => {
 });
 
 describe("e2e: Sessions.execute() → opencode_cli adapter", () => {
+  it("reuses the durable session identity allocated by the control plane", async () => {
+    const { Sessions } = await import("../src/sessions.js");
+    const db = getDefaultDb();
+    const durableSessionId = "sess_control_plane";
+    const wakeupId = "wake_control_plane";
+    await db.db.insert(schema.wakeups).values({
+      id: wakeupId,
+      organizationId: "org_test_e2e",
+      loopId: "manual",
+      source: "api",
+      payloadJson: "{}",
+      status: "queued",
+      idempotencyKey: wakeupId,
+      requestedAt: new Date().toISOString(),
+    });
+    await db.db.insert(schema.sessions).values({
+      id: durableSessionId,
+      organizationId: "org_test_e2e",
+      wakeupId,
+      agentId: "agent/test",
+      adapter: "opencode_cli",
+      runtimeJson: "{}",
+      prompt: "queued",
+      configJson: "{}",
+      status: "queued",
+    });
+    const sessions = new Sessions({
+      agentSource: buildAgentSource([makeAgent({ id: "agent/test" })]),
+      knowledgeSource: buildKnowledgeSource(),
+      skillRegistry: await buildSkillRegistry(),
+    });
+
+    await sessions.execute({
+      durableSessionId,
+      organizationId: "org_test_e2e",
+      agentId: "agent/test",
+      adapter: "opencode_cli",
+      runtime: {},
+      prompt: "x <e2e:response:done> <e2e:session:ses_provider>",
+      config: {},
+      skills: [],
+      budget: {},
+      idempotencyKey: wakeupId,
+      wakeupId,
+    });
+
+    const rows = await db.db
+      .select()
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, durableSessionId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "succeeded", sessionId: "ses_provider" });
+  }, 15_000);
+
   it("records a session row, session_events, and updates to succeeded on happy path", async () => {
     const { Sessions } = await import("../src/sessions.js");
     const sessions = new Sessions({

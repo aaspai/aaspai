@@ -26,6 +26,29 @@ export const claudeLocal: ServerAdapterModule = {
   info: claudeLocalInfo,
   execute,
   testEnvironment,
+  describe: () => ({
+    type: "claude_local",
+    label: claudeLocalInfo.label,
+    models: [...claudeLocalInfo.models],
+    nativeTools: [
+      "Bash",
+      "Edit",
+      "Glob",
+      "Grep",
+      "NotebookEdit",
+      "Read",
+      "Task",
+      "WebFetch",
+      "WebSearch",
+      "Write",
+    ],
+    supportsCancel: false,
+    supportsCompact: false,
+    supportsFork: false,
+    supportsResume: true,
+    supportsThinking: true,
+    supportsForkSession: false,
+  }),
 };
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
@@ -231,6 +254,7 @@ function buildClaudeArgs(config: ClaudeLocalConfig, ctx: AdapterExecutionContext
   if (config.effort) args.push("--effort", config.effort);
   if (config.maxTurns) args.push("--max-turns", String(config.maxTurns));
   if (config.chrome) args.push("--chrome");
+  if (config.tools) args.push("--tools", config.tools.join(","));
   if (ctx.runtime.sessionId) args.push("--resume", ctx.runtime.sessionId);
   for (const extra of config.extraArgs) args.push(extra);
   return args;

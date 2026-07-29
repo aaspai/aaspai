@@ -583,4 +583,66 @@ body
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("loads nested study-style skills and their supporting files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aaspai-load-nested-"));
+    try {
+      const dir = join(root, "study", "loop-triage");
+      await mkdir(join(dir, "references"), { recursive: true });
+      await writeFile(
+        join(dir, "SKILL.md"),
+        `---
+name: Loop Triage
+description: Triage loop failures.
+---
+body
+`,
+        "utf8",
+      );
+      await writeFile(join(dir, "references", "guide.md"), "# Guide\n", "utf8");
+
+      const reg = await loadSkillDirectory(root);
+      expect(reg.has("loop-triage")).toBe(true);
+      expect(reg.get("loop-triage")?.files).toMatchObject([
+        { path: "references/guide.md", kind: "reference" },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects skill keys and files that escape materialization", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "aaspai-mat-escape-"));
+    try {
+      const reg = new SkillRegistry();
+      reg.register({
+        ...baseSkill,
+        key: "../escape",
+        version: "1.0.0",
+        name: "Escape",
+        description: "test",
+        instructions: "",
+        files: [],
+      });
+      reg.register({
+        ...baseSkill,
+        key: "safe",
+        version: "1.0.0",
+        name: "Safe",
+        description: "test",
+        instructions: "",
+        files: [{ path: "../escape.txt", content: "bad", kind: "other" }],
+      });
+
+      const result = await reg.materialize(reg.list(), {
+        adapterType: "opencode_cli",
+        runtimeBaseDir: cwd,
+      });
+      expect(result.written).toEqual([]);
+      expect(result.errors).toHaveLength(2);
+      expect(result.errors.join("\n")).toMatch(/escapes|must be relative/);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
 });

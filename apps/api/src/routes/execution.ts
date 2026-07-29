@@ -1,12 +1,17 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AuthVerifier } from "@aaspai/auth";
 import { type ExecutionGovernanceInput, executionGovernanceSchema } from "@aaspai/contracts";
 import { getDefaultDb } from "@aaspai/db";
 import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
+import type { GitRepository, PullRequestProvider } from "@aaspai/git";
+import { LocalGitHubPullRequestProvider, LocalGitRepository } from "@aaspai/git";
 import type { Hono } from "hono";
 import { authenticate } from "./auth.js";
 
 interface ExecutionRouteOptions {
   authVerifier?: AuthVerifier;
+  git?: GitRepository;
+  pullRequests?: PullRequestProvider;
 }
 
 export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOptions = {}): void {
@@ -14,7 +19,7 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
     const auth = await authenticate(c, options.authVerifier, "write");
     if ("response" in auth) return auth.response;
     const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
-    const required = ["goalId", "projectId", "repositoryId", "title", "idempotencyKey"];
+    const required = ["goalId", "projectId", "title", "idempotencyKey"];
     if (!body || required.some((key) => typeof body[key] !== "string" || body[key] === "")) {
       return c.json(
         { error: "invalid_request", message: "work item lineage and idempotencyKey are required" },
@@ -29,6 +34,52 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
     }
 
+    if (
+      body.workKind !== undefined &&
+      !["repository", "general", "external_action"].includes(String(body.workKind))
+    ) {
+      return c.json({ error: "invalid_request", message: "workKind is invalid" }, 400);
+    }
+    if (
+      body.deliveryMode !== undefined &&
+      !["none", "artifact", "commit", "pull_request"].includes(String(body.deliveryMode))
+    ) {
+      return c.json({ error: "invalid_request", message: "deliveryMode is invalid" }, 400);
+    }
+    const workKind =
+      body.workKind === "general" || body.workKind === "external_action"
+        ? body.workKind
+        : "repository";
+    if (workKind === "repository" && typeof body.repositoryId !== "string") {
+      return c.json(
+        { error: "invalid_request", message: "repositoryId is required for repository work" },
+        400,
+      );
+    }
+    const store = new ExecutionStore(getDefaultDb().db);
+    let repositoryId =
+      typeof body.repositoryId === "string" && body.repositoryId
+        ? body.repositoryId
+        : (
+            await store.listRepositoriesForProject(body.projectId as string, {
+              organizationId: auth.principal.organizationId,
+              actorId: auth.principal.userId,
+              correlationId: c.req.header("x-request-id") ?? "api-work-item-create",
+            })
+          )[0]?.id;
+    if (!repositoryId) {
+      repositoryId = (
+        await store.createRepository({
+          id: `repo:general:${body.projectId as string}`,
+          organizationId: auth.principal.organizationId,
+          projectId: body.projectId as string,
+          purpose: "project",
+          provider: "local",
+          localPath: process.cwd(),
+        })
+      ).id;
+    }
+
     let governance: ExecutionGovernanceInput | undefined;
     if (body.governance !== undefined) {
       const parsedGovernance = executionGovernanceSchema.safeParse(body.governance);
@@ -40,15 +91,32 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       }
       governance = parsedGovernance.data;
     }
-    const store = new ExecutionStore(getDefaultDb().db);
+    const externalAction =
+      workKind === "external_action" ? parseExternalActionPlan(body.externalAction) : null;
+    if (workKind === "external_action" && (!externalAction || !governance?.approval?.required)) {
+      return c.json(
+        {
+          error: "invalid_request",
+          message: "external_action work requires an externalAction plan and human approval",
+        },
+        400,
+      );
+    }
     const workItem = await store.createWorkItem({
       organizationId: auth.principal.organizationId,
       goalId: body.goalId as string,
       projectId: body.projectId as string,
-      repositoryId: body.repositoryId as string,
+      repositoryId,
       repositoryIds: Array.isArray(body.repositoryIds)
         ? body.repositoryIds.filter((value): value is string => typeof value === "string")
         : undefined,
+      workKind,
+      deliveryMode:
+        body.deliveryMode === "none" ||
+        body.deliveryMode === "artifact" ||
+        body.deliveryMode === "pull_request"
+          ? body.deliveryMode
+          : "commit",
       title: body.title as string,
       description: typeof body.description === "string" ? body.description : undefined,
       definitionRevisionId:
@@ -56,10 +124,199 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       sourceCommitSha: typeof body.sourceCommitSha === "string" ? body.sourceCommitSha : null,
       branchName: typeof body.branchName === "string" ? body.branchName : null,
       idempotencyKey: body.idempotencyKey as string,
-      metadata: isRecord(body.metadata) ? body.metadata : undefined,
+      metadata: {
+        ...(isRecord(body.metadata) ? body.metadata : {}),
+        ...(externalAction ? { externalAction } : {}),
+      },
       governance,
     });
     return c.json({ data: await store.getWorkItem(workItem.id) }, 201);
+  });
+
+  app.post("/v1/execution/work-items/:id/deliver", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "deploy");
+    if ("response" in auth) return auth.response;
+    const store = new ExecutionStore(getDefaultDb().db);
+    const item = await store.getWorkItem(c.req.param("id"), {
+      organizationId: auth.principal.organizationId,
+      actorId: auth.principal.userId,
+      correlationId: c.req.header("x-request-id") ?? "api-work-item-deliver",
+    });
+    if (!item) return c.json({ error: "not_found", message: "Work item not found" }, 404);
+    if (
+      item.status !== "completed" ||
+      item.deliveryMode !== "pull_request" ||
+      !["ready", "failed"].includes(item.deliveryStatus)
+    ) {
+      return c.json(
+        { error: "not_deliverable", message: "Work item is not ready for delivery" },
+        409,
+      );
+    }
+    const claimed = await store.claimDelivery(item.id);
+    if (!claimed) {
+      return c.json({ error: "delivery_in_progress", message: "Delivery is already running" }, 409);
+    }
+    const repository = await store.getRepository(item.repositoryId, {
+      organizationId: auth.principal.organizationId,
+      actorId: auth.principal.userId,
+      correlationId: c.req.header("x-request-id") ?? "api-work-item-deliver",
+    });
+    if (!repository?.remoteUrl || !item.branchName) {
+      await store.completeDelivery({
+        workItemId: item.id,
+        status: "failed",
+        error: "Pull-request delivery requires repository.remoteUrl and branchName",
+      });
+      return c.json(
+        { error: "delivery_failed", message: "Repository delivery data is missing" },
+        409,
+      );
+    }
+    try {
+      const git = options.git ?? new LocalGitRepository();
+      await git.push(repository.localPath, "origin", item.branchName);
+      const pullRequest = await (
+        options.pullRequests ?? new LocalGitHubPullRequestProvider()
+      ).create({
+        repository: repository.remoteUrl,
+        head: item.branchName,
+        base: repository.defaultBranch,
+        title: item.title,
+        body: item.description || `Automated delivery for ${item.id}`,
+      });
+      const delivered = await store.completeDelivery({
+        workItemId: item.id,
+        status: "delivered",
+        ref: pullRequest.url,
+      });
+      return c.json({ data: delivered, pullRequest }, 200);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await store.completeDelivery({ workItemId: item.id, status: "failed", error: message });
+      return c.json({ error: "delivery_failed", message }, 502);
+    }
+  });
+
+  app.post("/v1/execution/work-items/:id/external-actions", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "deploy");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (
+      !body ||
+      typeof body.connector !== "string" ||
+      !/^[a-z][a-z0-9_-]{0,63}$/.test(body.connector) ||
+      typeof body.operation !== "string" ||
+      !body.operation ||
+      typeof body.idempotencyKey !== "string" ||
+      !body.idempotencyKey
+    ) {
+      return c.json(
+        {
+          error: "invalid_request",
+          message: "connector, operation, and idempotencyKey are required",
+        },
+        400,
+      );
+    }
+    const store = new ExecutionStore(getDefaultDb().db);
+    const item = await store.getWorkItem(c.req.param("id"));
+    if (!item || item.organizationId !== auth.principal.organizationId) {
+      return c.json({ error: "not_found", message: "Work item not found" }, 404);
+    }
+    if (item.workKind !== "external_action" || item.status !== "completed") {
+      return c.json(
+        { error: "not_actionable", message: "External action work is not approved and complete" },
+        409,
+      );
+    }
+    const expected = parseExternalActionPlan(item.metadata.externalAction);
+    const requested = parseExternalActionPlan({
+      connector: body.connector,
+      operation: body.operation,
+      payload: isRecord(body.payload) ? body.payload : {},
+    });
+    if (!expected || !requested || !isDeepStrictEqual(expected, requested)) {
+      return c.json(
+        {
+          error: "action_mismatch",
+          message: "External action does not match the approved work item plan",
+        },
+        409,
+      );
+    }
+    const claimed = await store.claimExternalAction({
+      organizationId: item.organizationId,
+      workItemId: item.id,
+      connector: body.connector,
+      operation: body.operation,
+      payload: isRecord(body.payload) ? body.payload : {},
+      idempotencyKey: body.idempotencyKey,
+    });
+    if (!claimed.created && claimed.action.status === "succeeded") {
+      return c.json({ data: claimed.action, duplicate: true }, 200);
+    }
+    const connectorEnv = `AASPAI_CONNECTOR_${body.connector.toUpperCase().replace(/-/g, "_")}`;
+    const endpoint = process.env[`${connectorEnv}_URL`];
+    if (!endpoint) {
+      const action = await store.completeExternalAction(claimed.action.id, {
+        status: "failed",
+        error: `${connectorEnv}_URL is not configured`,
+      });
+      return c.json(
+        { error: "connector_unavailable", message: "Connector is not configured", data: action },
+        503,
+      );
+    }
+    try {
+      const url = new URL(endpoint);
+      if (
+        url.protocol !== "https:" &&
+        !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))
+      ) {
+        throw new Error("Connector endpoint must use HTTPS");
+      }
+      const response = await fetch(url, {
+        method: "POST",
+        signal: AbortSignal.timeout(30_000),
+        headers: {
+          "content-type": "application/json",
+          "idempotency-key": body.idempotencyKey,
+          ...(process.env[`${connectorEnv}_TOKEN`]
+            ? { authorization: `Bearer ${process.env[`${connectorEnv}_TOKEN`]}` }
+            : {}),
+        },
+        body: JSON.stringify({
+          operation: body.operation,
+          payload: isRecord(body.payload) ? body.payload : {},
+          workItemId: item.id,
+        }),
+      });
+      const text = await response.text();
+      if (!response.ok)
+        throw new Error(`Connector returned ${response.status}: ${text.slice(0, 512)}`);
+      const result = text ? safeJsonObject(text) : {};
+      const action = await store.completeExternalAction(claimed.action.id, {
+        status: "succeeded",
+        result,
+      });
+      await store.recordGovernanceEvent({
+        organizationId: item.organizationId,
+        workItemId: item.id,
+        action: `connector.${body.connector}.${body.operation}`,
+        decision: "allowed",
+        reason: "idempotent external action completed",
+        metadata: { externalActionId: action.id },
+      });
+      return c.json({ data: action }, 200);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const action = await store.completeExternalAction(claimed.action.id, {
+        status: "failed",
+        error: message,
+      });
+      return c.json({ error: "connector_failed", message, data: action }, 502);
+    }
   });
 
   app.get("/v1/execution/work-items/:id", async (c) => {
@@ -386,6 +643,33 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safeJsonObject(value: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : { value: parsed };
+  } catch {
+    return { text: value };
+  }
+}
+
+function parseExternalActionPlan(value: unknown): {
+  connector: string;
+  operation: string;
+  payload: Record<string, unknown>;
+} | null {
+  if (
+    !isRecord(value) ||
+    typeof value.connector !== "string" ||
+    !/^[a-z][a-z0-9_-]{0,63}$/.test(value.connector) ||
+    typeof value.operation !== "string" ||
+    !/^[a-z][a-z0-9._:-]{0,127}$/.test(value.operation) ||
+    !isRecord(value.payload)
+  ) {
+    return null;
+  }
+  return { connector: value.connector, operation: value.operation, payload: value.payload };
 }
 
 function boundedConcurrency(value: unknown, fallback: number): number {

@@ -4,6 +4,7 @@
  * instruction, not a knowledge concept).
  */
 import { readFile, writeFile } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { type Skill, skillSchema } from "@aaspai/contracts/phase2";
 import {
   type ParsedFile,
@@ -126,7 +127,11 @@ export async function writeSkillFile(path: string, skill: Skill): Promise<void> 
 }
 
 function basenameNoExt(p: string): string {
-  const base = p.split(/[\\/]/).pop() ?? p;
+  const base = basename(p);
+  if (base.toLowerCase() === "skill.md") {
+    const parent = basename(dirname(p));
+    return parent && parent !== "." ? parent : "skill";
+  }
   return base.replace(/\.md$/, "");
 }
 

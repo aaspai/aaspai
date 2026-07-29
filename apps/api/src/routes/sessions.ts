@@ -65,6 +65,17 @@ export function registerSessionRoutes(
       idempotencyKey: `api-session:${sessionId}`,
       requestedAt: now,
     } as never);
+    await handle.db.insert(sessionsTable).values({
+      id: sessionId,
+      organizationId: auth.principal.organizationId,
+      wakeupId,
+      agentId: body.agentId,
+      adapter: body.adapter ?? "dry_run_local",
+      runtimeJson: JSON.stringify(body.runtime ?? { kind: "local" }),
+      prompt: body.prompt,
+      configJson: "{}",
+      status: "queued",
+    });
 
     log.info("session queued", { sessionId, wakeupId, agentId: body.agentId });
     return c.json(

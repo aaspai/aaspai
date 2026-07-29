@@ -4,7 +4,7 @@ import path from "node:path";
 import { createDb, runMigrations } from "@aaspai/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DependencyScheduler } from "../src/scheduler";
-import { ExecutionStore } from "../src/store";
+import { ExecutionStore, evaluateExecutionPolicy } from "../src/store";
 
 describe("execution governance", () => {
   let store: ExecutionStore;
@@ -30,6 +30,7 @@ describe("execution governance", () => {
     const item = await store.createWorkItem({
       ...fixture.lineage,
       title: "Governed change",
+      deliveryMode: "pull_request",
       idempotencyKey: `governed:${randomUUID()}`,
       governance: {
         verification: { required: true, minEvidence: 1 },
@@ -47,10 +48,29 @@ describe("execution governance", () => {
     });
     const verification = await store.getVerificationForWorkItem(item.id);
     expect(verification?.status).toBe("pending");
+    await expect(
+      store.createCheckerAttempt({
+        verificationId: verification?.id ?? "missing",
+        agentId: "maker",
+        harness: "dry_run_local",
+      }),
+    ).rejects.toThrow(/independent/);
     const checker = await store.createCheckerAttempt({
       verificationId: verification?.id ?? "missing",
       agentId: "checker",
       harness: "dry_run_local",
+    });
+    await store.startCheckerAttempt(checker.id);
+    await store.transitionAttempt(checker.id, "succeeded");
+    await store.createArtifact({
+      id: "artifact_test_result",
+      organizationId: fixture.lineage.organizationId,
+      attemptId: checker.id,
+      kind: "test_result",
+      path: "test-result.json",
+      mediaType: "application/json",
+      sizeBytes: 2,
+      sha256: "0".repeat(64),
     });
     const verified = await store.submitVerification({
       verificationId: verification?.id ?? "missing",
@@ -70,7 +90,24 @@ describe("execution governance", () => {
       status: "approved",
       reason: "Evidence reviewed",
     });
-    expect(decided.workItem.status).toBe("completed");
+    expect(decided.workItem).toMatchObject({
+      status: "completed",
+      deliveryStatus: "ready",
+    });
+    await expect(store.claimDelivery(item.id)).resolves.toMatchObject({
+      deliveryStatus: "delivering",
+    });
+    await expect(store.claimDelivery(item.id)).resolves.toBeNull();
+    await expect(
+      store.completeDelivery({
+        workItemId: item.id,
+        status: "delivered",
+        ref: "https://example.test/pull/1",
+      }),
+    ).resolves.toMatchObject({
+      deliveryStatus: "delivered",
+      deliveryRef: "https://example.test/pull/1",
+    });
   });
 
   it("blocks a maker result when independent verification fails", async () => {
@@ -91,6 +128,8 @@ describe("execution governance", () => {
       agentId: "checker",
       harness: "dry_run_local",
     });
+    await store.startCheckerAttempt(checker.id);
+    await store.transitionAttempt(checker.id, "failed");
     await store.submitVerification({
       verificationId: verification?.id ?? "missing",
       checkerAttemptId: checker.id,
@@ -101,6 +140,48 @@ describe("execution governance", () => {
       status: "blocked",
       blockedReason: "verification failed: Required test failed",
     });
+  });
+
+  it("rejects forged verification without a completed checker or owned evidence", async () => {
+    const fixture = await createFixture(store);
+    const item = await store.createWorkItem({
+      ...fixture.lineage,
+      title: "Forgery guard",
+      idempotencyKey: `forgery:${randomUUID()}`,
+      governance: { verification: { required: true, minEvidence: 1 } },
+    });
+    await new DependencyScheduler(store, { retryDelayMs: 0 }).run(
+      { ...fixture.runInput, agentId: "maker", harness: "dry_run_local" },
+      async () => "succeeded",
+    );
+    const verification = await store.getVerificationForWorkItem(item.id);
+    const checker = await store.createCheckerAttempt({
+      verificationId: verification?.id ?? "missing",
+      agentId: "checker",
+      harness: "dry_run_local",
+    });
+
+    await expect(
+      store.submitVerification({
+        verificationId: verification?.id ?? "missing",
+        checkerAttemptId: checker.id,
+        status: "passed",
+        summary: "forged",
+        evidenceIds: ["not-an-artifact"],
+      }),
+    ).rejects.toThrow("must finish");
+
+    await store.startCheckerAttempt(checker.id);
+    await store.transitionAttempt(checker.id, "succeeded");
+    await expect(
+      store.submitVerification({
+        verificationId: verification?.id ?? "missing",
+        checkerAttemptId: checker.id,
+        status: "passed",
+        summary: "forged",
+        evidenceIds: ["not-an-artifact"],
+      }),
+    ).rejects.toThrow("must belong");
   });
 
   it("denies policy actions visibly and prevents dispatch", async () => {
@@ -144,6 +225,57 @@ describe("execution governance", () => {
     await expect(store.getWorkItem(item.id)).resolves.toMatchObject({
       status: "blocked",
       blockedReason: "budget exhausted; no new attempt was started",
+    });
+  });
+
+  it("deduplicates durable external side effects", async () => {
+    const fixture = await createFixture(store);
+    const item = await store.createWorkItem({
+      ...fixture.lineage,
+      workKind: "external_action",
+      deliveryMode: "none",
+      title: "Post notification",
+      idempotencyKey: `external:${randomUUID()}`,
+    });
+    const input = {
+      organizationId: fixture.organizationId,
+      workItemId: item.id,
+      connector: "slack",
+      operation: "post_message",
+      payload: { channel: "ops" },
+      idempotencyKey: "notification-1",
+    };
+    await expect(store.claimExternalAction(input)).resolves.toMatchObject({ created: true });
+    await expect(store.claimExternalAction(input)).resolves.toMatchObject({ created: false });
+  });
+});
+
+describe("execution path policy", () => {
+  it("denies actual changed paths and file-count overruns", () => {
+    const governance = {
+      risk: "low" as const,
+      verification: {
+        required: false,
+        checkerAgentId: null,
+        checkerHarness: null,
+        minEvidence: 0,
+        acceptanceCriteria: [],
+      },
+      approval: { required: false, actorType: "human" as const, expiresAfterMs: null },
+      budget: { limits: [], soft: 0.8 },
+      policy: {
+        denylist: [".env", "payments/**"],
+        allowlist: [],
+        maxFilesChanged: 2,
+        actions: {},
+      },
+    };
+
+    expect(evaluateExecutionPolicy(governance, { paths: ["payments/card.ts"] })).toMatchObject({
+      ok: false,
+    });
+    expect(evaluateExecutionPolicy(governance, { paths: ["a.ts", "b.ts", "c.ts"] })).toMatchObject({
+      ok: false,
     });
   });
 });

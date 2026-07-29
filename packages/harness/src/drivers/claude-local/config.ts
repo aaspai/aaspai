@@ -25,6 +25,7 @@ export const claudeLocalConfigSchema = z
     cwd: z.string().trim().min(1).max(8_192).optional(),
     chrome: z.boolean().default(false),
     dangerouslySkipPermissions: z.boolean().default(true),
+    tools: z.array(z.string().trim().min(1).max(128)).max(128).optional(),
   })
   .strict();
 export type ClaudeLocalConfig = z.infer<typeof claudeLocalConfigSchema>;
@@ -72,6 +73,7 @@ Core fields:
 - cwd (string, optional): default working directory
 - chrome (boolean, default false): pass --chrome
 - dangerouslySkipPermissions (boolean, default true): pass --dangerously-skip-permissions
+- tools (string[], optional): exact built-in tool set exposed through Claude CLI's --tools flag
 
 Notes:
 - The adapter spawns \`claude --output-format stream-json --verbose ...\` and parses

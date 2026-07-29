@@ -29,6 +29,7 @@ export interface ExecuteHarnessPlanInput {
   workspace: ExecutionWorkspace;
   agent?: HarnessAgentInput;
   profile?: ResolvedAgentProfile;
+  durableSessionId?: string;
   signal?: AbortSignal;
   /** Runtime-only credentials. Never persisted in the plan or session config. */
   ephemeralEnv?: Record<string, string>;
@@ -73,8 +74,20 @@ export class HarnessExecutionPlanRunner {
       cwd: input.workspace.path,
     } as ExecutionPlan["target"];
     const adapter = getAdapter(adapterType);
-    const adapterConfig = { ...agent.adapterConfig, ...input.plan.harnessConfig };
+    const policy = profile
+      ? enforceRuntimeToolPolicy(
+          adapterType,
+          { ...agent.adapterConfig, ...input.plan.harnessConfig },
+          profile,
+          agent.tools,
+        )
+      : {
+          adapterConfig: { ...agent.adapterConfig, ...input.plan.harnessConfig },
+          tools: agent.tools,
+        };
+    const adapterConfig = policy.adapterConfig;
     const session = await this.store.createHarnessSession({
+      id: input.durableSessionId,
       organizationId: input.plan.organizationId,
       agentId: agent.id,
       adapter: adapterType,
@@ -221,7 +234,7 @@ export class HarnessExecutionPlanRunner {
           }
         },
         onMeta: async (meta) => recordSessionEvent("system", { meta }),
-        tools: agent.tools,
+        tools: policy.tools,
       });
     } catch (error) {
       result = {
@@ -296,6 +309,128 @@ export class HarnessExecutionPlanRunner {
     if (input.workspace.status !== "ready") {
       throw new Error(`Execution workspace is not ready: ${input.workspace.status}`);
     }
+  }
+}
+
+export function enforceRuntimeToolPolicy(
+  adapter: AdapterType,
+  adapterConfig: JsonObject,
+  profile: ResolvedAgentProfile,
+  tools?: AdapterExecutionContext["tools"],
+): { adapterConfig: JsonObject; tools?: AdapterExecutionContext["tools"] } {
+  const approvalRequired = profile.tools.filter(
+    (decision) => decision.allowed && decision.requiresApproval,
+  );
+  if (approvalRequired.length > 0) {
+    throw new Error(
+      `Tool approval is required but no runtime approval broker is configured: ${approvalRequired
+        .map(({ name }) => name)
+        .join(", ")}`,
+    );
+  }
+
+  const allowed = new Set(
+    profile.tools
+      .filter((decision) => decision.allowed && decision.ready)
+      .map(({ name }) => name.toLowerCase()),
+  );
+  const nativeAllowed = profile.tools
+    .filter(
+      (decision) =>
+        decision.allowed && decision.ready && decision.tool?.description === "Harness-native tool",
+    )
+    .map(({ name }) => canonicalNativeTool(adapter, name));
+  const maxSubAgentSpawns =
+    typeof profile.inputs?.budget?.maxSubAgentSpawns === "number"
+      ? profile.inputs.budget.maxSubAgentSpawns
+      : 0;
+  if (maxSubAgentSpawns > 0) {
+    throw new Error(
+      "Sub-agent spawning requires a runtime spawn broker; refusing an unenforceable positive limit",
+    );
+  }
+  const boundedNativeAllowed = nativeAllowed.filter(
+    (name) => !["task", "spawn_agent"].includes(name.toLowerCase()),
+  );
+  const guardedTools = tools
+    ? {
+        invoke: async (...args: Parameters<NonNullable<typeof tools>["invoke"]>) => {
+          if (!allowed.has(args[0].toLowerCase())) {
+            throw new Error(`Tool "${args[0]}" is denied by the resolved agent profile`);
+          }
+          return tools.invoke(...args);
+        },
+      }
+    : undefined;
+
+  if (adapter === "codex_local") {
+    throw new Error(
+      "codex_local cannot enforce the resolved native tool allowlist; refusing execution",
+    );
+  }
+  if (adapter === "claude_local") {
+    assertNoPolicyOverrides(adapterConfig.extraArgs, [
+      "--tools",
+      "--allowedTools",
+      "--disallowedTools",
+      "--permission-mode",
+      "--dangerously-skip-permissions",
+    ]);
+    return {
+      adapterConfig: {
+        ...adapterConfig,
+        tools: boundedNativeAllowed,
+        permissionMode: "default",
+        dangerouslySkipPermissions: false,
+      },
+      tools: guardedTools,
+    };
+  }
+  if (adapter === "opencode_cli") {
+    return {
+      adapterConfig: {
+        ...adapterConfig,
+        autoApprove: false,
+        dangerouslySkipPermissions: false,
+        disableProjectConfig: true,
+        permissions: Object.fromEntries([
+          ["*", "deny"],
+          ...boundedNativeAllowed.map((name) => [name, "allow"]),
+        ]),
+      },
+      tools: guardedTools,
+    };
+  }
+  return { adapterConfig, tools: guardedTools };
+}
+
+function canonicalNativeTool(adapter: AdapterType, name: string): string {
+  if (adapter !== "claude_local") return name.toLowerCase();
+  const canonical = [
+    "Bash",
+    "Edit",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
+    "Read",
+    "Task",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+  ];
+  return canonical.find((candidate) => candidate.toLowerCase() === name.toLowerCase()) ?? name;
+}
+
+function assertNoPolicyOverrides(value: unknown, deniedFlags: string[]): void {
+  if (
+    Array.isArray(value) &&
+    value.some(
+      (entry) =>
+        typeof entry === "string" &&
+        deniedFlags.some((flag) => entry === flag || entry.startsWith(`${flag}=`)),
+    )
+  ) {
+    throw new Error("Adapter extraArgs cannot override the resolved agent tool policy");
   }
 }
 

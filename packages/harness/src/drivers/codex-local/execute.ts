@@ -24,6 +24,18 @@ export const codexLocal: ServerAdapterModule = {
   info: codexLocalInfo,
   execute,
   testEnvironment,
+  describe: () => ({
+    type: "codex_local",
+    label: codexLocalInfo.label,
+    models: [...codexLocalInfo.models],
+    nativeTools: ["apply_patch", "shell", "web_search", "view_image"],
+    supportsCancel: false,
+    supportsCompact: false,
+    supportsFork: false,
+    supportsResume: true,
+    supportsThinking: true,
+    supportsForkSession: false,
+  }),
 };
 
 const SCRUB_ENV_KEYS = new Set(["OPENAI_API_KEY"]);

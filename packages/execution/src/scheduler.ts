@@ -153,7 +153,7 @@ export class DependencyScheduler {
         repositoryConcurrency: this.maxRepositoryConcurrency,
         agentConcurrency: this.maxAgentConcurrency,
       });
-      if (!result) continue;
+      if (!result?.created) continue;
       dispatched.push({ workItem: current, ...result });
       organizationActive++;
       projectActive.set(current.projectId, projectCount + 1);

@@ -148,7 +148,7 @@ export class Sessions {
     }
 
     // 4. Build the session record
-    const sessionId = `sess_${randomUUID()}`;
+    const sessionId = req.durableSessionId ?? `sess_${randomUUID()}`;
     const now = new Date().toISOString();
     const insert: SessionInsert = {
       id: sessionId,
@@ -168,9 +168,28 @@ export class Sessions {
       parentSessionId: req.parentSessionId ?? null,
     };
     const db = getDefaultDb();
-    await db.db
-      .insert(sessionsTable)
-      .values({ ...insert, wakeupId: insert.wakeupId ?? "manual" } as never);
+    const existing = req.durableSessionId
+      ? (
+          await db.db.select().from(sessionsTable).where(eqId(sessionsTable.id, sessionId)).limit(1)
+        )[0]
+      : undefined;
+    if (
+      existing &&
+      (existing.organizationId !== req.organizationId ||
+        existing.wakeupId !== (req.wakeupId ?? "manual"))
+    ) {
+      throw new Error(`Durable session ${sessionId} belongs to another request`);
+    }
+    if (existing) {
+      await db.db
+        .update(sessionsTable)
+        .set({ ...insert, id: undefined } as never)
+        .where(eqId(sessionsTable.id, sessionId));
+    } else {
+      await db.db
+        .insert(sessionsTable)
+        .values({ ...insert, wakeupId: insert.wakeupId ?? "manual" } as never);
+    }
 
     // 5. Resolve the adapter and run the session
     const adapter = getAdapter(req.adapter as AdapterType);

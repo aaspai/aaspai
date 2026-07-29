@@ -32,6 +32,20 @@ export const loops = sqliteTable(
   }),
 );
 
+export const loopControls = sqliteTable(
+  "loop_controls",
+  {
+    organizationId: text("organization_id").notNull(),
+    loopId: text("loop_id").notNull(),
+    paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+    pauseReason: text("pause_reason"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => ({
+    orgLoopUniq: uniqueIndex("loop_controls_org_loop_uniq").on(t.organizationId, t.loopId),
+  }),
+);
+
 // ─── wakeups ───────────────────────────────────────────────────────
 export const wakeups = sqliteTable(
   "wakeups",
@@ -60,6 +74,11 @@ export const wakeups = sqliteTable(
   (t) => ({
     loopIdx: index("wakeups_loop_idx").on(t.loopId),
     orgRequestedIdx: index("wakeups_org_requested_idx").on(t.organizationId, t.requestedAt),
+    orgLoopRequestedIdx: index("wakeups_org_loop_requested_idx").on(
+      t.organizationId,
+      t.loopId,
+      t.requestedAt,
+    ),
     statusIdx: index("wakeups_status_idx").on(t.status),
     idemUniq: uniqueIndex("wakeups_idem_uniq").on(t.idempotencyKey),
   }),
@@ -165,6 +184,8 @@ export const auditEvents = sqliteTable(
 
 export type LoopRow = typeof loops.$inferSelect;
 export type LoopInsert = typeof loops.$inferInsert;
+export type LoopControlRow = typeof loopControls.$inferSelect;
+export type LoopControlInsert = typeof loopControls.$inferInsert;
 export type WakeupRow = typeof wakeups.$inferSelect;
 export type WakeupInsert = typeof wakeups.$inferInsert;
 export type SessionRow = typeof sessions.$inferSelect;

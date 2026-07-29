@@ -8,11 +8,11 @@
 
 import { randomUUID } from "node:crypto";
 import type { LoopPattern } from "@aaspai/contracts/phase2";
-import { getDefaultDb } from "@aaspai/db";
+import { and, desc, eq, getDefaultDb, inArray, type SqliteDb, workflowRuns } from "@aaspai/db";
 import { type WakeupInsert, wakeups as wakeupsTable } from "@aaspai/db/schema/phase2";
 import { getLogger } from "@aaspai/observability";
 import cronParser from "cron-parser";
-import { and, eq, inArray } from "drizzle-orm";
+import { LoopControlStore } from "./control.js";
 import type { KillSwitch } from "./kill-switch.js";
 import type { PatternRegistry, ResolvedLoopPattern } from "./pattern.js";
 
@@ -24,6 +24,12 @@ export interface TickResult {
   skipped: number;
 }
 
+export interface DueLoopOccurrence {
+  resolved: ResolvedLoopPattern;
+  key: string;
+  scheduledAt: Date;
+}
+
 export class Scheduler {
   private interval: NodeJS.Timeout | null = null;
   private running = false;
@@ -31,8 +37,19 @@ export class Scheduler {
   constructor(
     private readonly registry: PatternRegistry,
     private readonly killSwitch: KillSwitch,
-    private readonly opts: { tickIntervalMs?: number; organizationId?: string } = {},
-  ) {}
+    private readonly opts: {
+      tickIntervalMs?: number;
+      organizationId?: string;
+      db?: SqliteDb;
+      controlStore?: Pick<LoopControlStore, "isPaused">;
+    } = {},
+  ) {
+    this.db = opts.db ?? getDefaultDb().db;
+    this.controlStore = opts.controlStore ?? new LoopControlStore(this.db);
+  }
+
+  private readonly db: SqliteDb;
+  private readonly controlStore: Pick<LoopControlStore, "isPaused">;
 
   start(): void {
     if (this.running) return;
@@ -61,13 +78,18 @@ export class Scheduler {
     let deferred = 0;
     let skipped = 0;
 
-    for (const resolved of this.registry.resolved()) {
-      if (this.killSwitch.isPaused(resolved.pattern.id) || !isDue(resolved.pattern, now)) {
-        skipped++;
-        continue;
-      }
-      const fired2 = await this.fire(resolved.pattern, "scheduled", now);
-      if (fired2) fired++;
+    const occurrences = await this.dueOccurrences(now);
+    const dueIds = new Set(occurrences.map(({ resolved }) => resolved.pattern.id));
+    skipped = this.registry
+      .resolved()
+      .filter((resolved) => !dueIds.has(resolved.pattern.id)).length;
+    for (const occurrence of occurrences) {
+      const didFire = await this.fire(
+        occurrence.resolved.pattern,
+        "scheduled",
+        occurrence.scheduledAt,
+      );
+      if (didFire) fired++;
       else deferred++;
     }
     return { fired, deferred, skipped };
@@ -79,7 +101,69 @@ export class Scheduler {
     return this.registry
       .resolved()
       .filter((resolved) => !this.killSwitch.isPaused(resolved.pattern.id))
-      .filter((resolved) => isDue(resolved.pattern, now));
+      .filter((resolved) => isDue(resolved.pattern, now, this.opts.tickIntervalMs));
+  }
+
+  /** Durable pause and catch-up aware occurrences for worker orchestration. */
+  async dueOccurrences(now: Date): Promise<readonly DueLoopOccurrence[]> {
+    if (this.killSwitch.isGlobalPaused()) return [];
+    const organizationId = this.opts.organizationId ?? "default";
+    const due: DueLoopOccurrence[] = [];
+    for (const resolved of this.registry.resolved()) {
+      if (
+        this.killSwitch.isPaused(resolved.pattern.id) ||
+        (await this.controlStore.isPaused(organizationId, resolved.pattern.id))
+      ) {
+        continue;
+      }
+      const [lastRun, lastWakeup] = await Promise.all([
+        this.db
+          .select({
+            createdAt: workflowRuns.createdAt,
+            idempotencyKey: workflowRuns.idempotencyKey,
+          })
+          .from(workflowRuns)
+          .where(
+            and(
+              eq(workflowRuns.organizationId, organizationId),
+              eq(workflowRuns.sourceType, "loop"),
+              eq(workflowRuns.sourceId, resolved.pattern.id),
+            ),
+          )
+          .orderBy(desc(workflowRuns.createdAt))
+          .limit(1),
+        this.db
+          .select({
+            createdAt: wakeupsTable.requestedAt,
+            idempotencyKey: wakeupsTable.idempotencyKey,
+          })
+          .from(wakeupsTable)
+          .where(
+            and(
+              eq(wakeupsTable.organizationId, organizationId),
+              eq(wakeupsTable.loopId, resolved.pattern.id),
+            ),
+          )
+          .orderBy(desc(wakeupsTable.requestedAt))
+          .limit(1),
+      ]);
+      const last = [lastRun[0], lastWakeup[0]]
+        .filter((row): row is { createdAt: string; idempotencyKey: string } => Boolean(row))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      for (const scheduledAt of scheduledOccurrences(
+        resolved.pattern,
+        now,
+        last ? lastOccurrenceAt(resolved.pattern, last) : null,
+        this.opts.tickIntervalMs,
+      )) {
+        due.push({
+          resolved,
+          key: occurrenceKey(resolved.pattern, scheduledAt),
+          scheduledAt,
+        });
+      }
+    }
+    return due;
   }
 
   async fire(
@@ -126,12 +210,12 @@ export class Scheduler {
   }
 }
 
-function isDue(loop: LoopPattern, now: Date): boolean {
+export function isDue(loop: LoopPattern, now: Date, tickIntervalMs = 60_000): boolean {
   if (loop.schedule.kind === "manual") return false;
   if (loop.schedule.kind === "interval" && loop.schedule.seconds) {
-    // Foundation: naive — fire every tick if interval elapsed.
-    // Phase 3: track lastFiredAt per loop.
-    return true;
+    // Fire only when this tick crosses an interval boundary. Durable occurrence
+    // keys below prevent duplicate execution and support bounded catch-up.
+    return now.getTime() % (loop.schedule.seconds * 1_000) < tickIntervalMs;
   }
   if (loop.schedule.kind === "cron" && loop.schedule.expression) {
     try {
@@ -140,7 +224,7 @@ function isDue(loop: LoopPattern, now: Date): boolean {
         tz: loop.schedule.timezone ?? "UTC",
       });
       const prev = it.prev().toDate();
-      return now.getTime() - prev.getTime() < 60_000;
+      return now.getTime() - prev.getTime() < tickIntervalMs;
     } catch {
       return false;
     }
@@ -164,4 +248,99 @@ function occurrenceKey(loop: LoopPattern, now: Date): string {
     }
   }
   return `${loop.schedule.kind}:${now.toISOString().slice(0, 16)}`;
+}
+
+export function scheduledOccurrences(
+  loop: LoopPattern,
+  now: Date,
+  lastRunAt: Date | null,
+  tickIntervalMs = 60_000,
+): readonly Date[] {
+  if (loop.schedule.kind === "manual") return [];
+  if (loop.catchUpPolicy === "skip_missed" || !lastRunAt) {
+    return isDue(loop, now, tickIntervalMs) ? [occurrenceDate(loop, now)] : [];
+  }
+
+  const cap = catchUpCap(loop);
+  const result: Date[] = [];
+  if (loop.schedule.kind === "interval" && loop.schedule.seconds) {
+    const intervalMs = loop.schedule.seconds * 1_000;
+    let next = (Math.floor(lastRunAt.getTime() / intervalMs) + 1) * intervalMs;
+    while (next <= now.getTime() && result.length < cap) {
+      result.push(new Date(next));
+      next += intervalMs;
+    }
+    return result;
+  }
+  if (loop.schedule.kind === "cron" && loop.schedule.expression) {
+    try {
+      const iterator = cronParser.parseExpression(loop.schedule.expression, {
+        currentDate: lastRunAt,
+        endDate: now,
+        tz: loop.schedule.timezone ?? "UTC",
+      });
+      while (result.length < cap) {
+        try {
+          result.push(iterator.next().toDate());
+        } catch {
+          break;
+        }
+      }
+    } catch {
+      return [];
+    }
+  }
+  return result;
+}
+
+function occurrenceDate(loop: LoopPattern, now: Date): Date {
+  if (loop.schedule.kind === "interval" && loop.schedule.seconds) {
+    const intervalMs = loop.schedule.seconds * 1_000;
+    return new Date(Math.floor(now.getTime() / intervalMs) * intervalMs);
+  }
+  if (loop.schedule.kind === "cron" && loop.schedule.expression) {
+    try {
+      return cronParser
+        .parseExpression(loop.schedule.expression, {
+          currentDate: now,
+          tz: loop.schedule.timezone ?? "UTC",
+        })
+        .prev()
+        .toDate();
+    } catch {
+      return now;
+    }
+  }
+  return now;
+}
+
+function catchUpCap(loop: LoopPattern): number {
+  try {
+    const value = (JSON.parse(loop.configJson) as Record<string, unknown>).catchUpCap;
+    return typeof value === "number" && Number.isInteger(value)
+      ? Math.min(100, Math.max(1, value))
+      : 5;
+  } catch {
+    return 5;
+  }
+}
+
+function lastOccurrenceAt(
+  loop: LoopPattern,
+  run: { createdAt: string; idempotencyKey: string },
+): Date {
+  if (loop.schedule.kind === "interval" && loop.schedule.seconds) {
+    const match = /:interval:(\d+)(?::|$)/.exec(run.idempotencyKey);
+    if (match?.[1]) return new Date(Number(match[1]) * loop.schedule.seconds * 1_000);
+  }
+  if (loop.schedule.kind === "cron") {
+    const match = /:cron:(.+?)(?::(?:skip_missed|enqueue_missed_with_cap)|$)/.exec(
+      run.idempotencyKey,
+    );
+    if (match?.[1]) {
+      const parsed = new Date(match[1]);
+      if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+  }
+  return new Date(run.createdAt);
 }

@@ -221,16 +221,19 @@ export class FileAgentConfigSource implements AgentConfigSource {
     }
 
     const sidecar = configYaml ? (yaml.load(configYaml) as JsonObject) : ({} as JsonObject);
-    const adapterConfig =
-      sidecar.adapterConfig && typeof sidecar.adapterConfig === "object"
-        ? (sidecar.adapterConfig as JsonObject)
-        : sidecar;
-    const runtimeConfig =
-      sidecar.runtimeConfig && typeof sidecar.runtimeConfig === "object"
-        ? (sidecar.runtimeConfig as JsonObject)
-        : ((fm.runtime as JsonObject) ?? ({} as JsonObject));
-    const tools = toolsYaml ? (yaml.load(toolsYaml) as JsonObject) : ({} as JsonObject);
-    const skills = skillsLock ? JSON.parse(skillsLock) : [];
+    const nestedAdapterConfig = objectValue(sidecar.adapterConfig);
+    const legacyAdapterConfig = { ...sidecar };
+    delete legacyAdapterConfig.runtimeConfig;
+    const adapterConfig = {
+      ...objectValue(fm.adapterConfig),
+      ...("adapterConfig" in sidecar ? nestedAdapterConfig : legacyAdapterConfig),
+    };
+    const runtimeConfig = {
+      ...objectValue(fm.runtime),
+      ...objectValue(sidecar.runtimeConfig),
+    };
+    const tools = toolsYaml ? (yaml.load(toolsYaml) as JsonObject) : objectValue(fm.tools);
+    const skills = skillsLock ? JSON.parse(skillsLock) : ((fm.skills as unknown[]) ?? []);
     const relations = relationsYaml ? (yaml.load(relationsYaml) as JsonObject) : ({} as JsonObject);
 
     const config: AgentConfig = {
@@ -242,9 +245,12 @@ export class FileAgentConfigSource implements AgentConfigSource {
       adapter: (fm.adapter as string) ?? "claude_local",
       model: fm.model as string | undefined,
       role: (fm.role as AgentConfig["role"]) ?? "general",
-      reportsTo: (fm.reportsTo as string | null) ?? null,
-      manages: (fm.manages as string[]) ?? [],
-      peers: (fm.peers as string[]) ?? [],
+      reportsTo:
+        "reportsTo" in relations
+          ? (relations.reportsTo as string | null)
+          : ((fm.reportsTo as string | null) ?? null),
+      manages: (relations.manages as string[] | undefined) ?? (fm.manages as string[]) ?? [],
+      peers: (relations.peers as string[] | undefined) ?? (fm.peers as string[]) ?? [],
       systemPrompt: parsed.body,
       adapterConfig,
       runtimeConfig,
@@ -276,4 +282,10 @@ function nowIso(): string {
 
 function computeHash(config: Readonly<AgentConfig>): string {
   return sha256HexSync(JSON.stringify(config));
+}
+
+function objectValue(value: unknown): JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : ({} as JsonObject);
 }

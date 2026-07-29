@@ -70,10 +70,11 @@ async function insertQueued(
   wakeupsTable: unknown,
   id: string,
   reason: string,
+  organizationId = "org_test",
 ): Promise<void> {
   await (handle.db.insert(wakeupsTable) as { values: (v: unknown) => Promise<unknown> }).values({
     id,
-    organizationId: "org_test",
+    organizationId,
     loopId: "loop_daily_triage",
     source: "test",
     agentId: "operator",
@@ -118,6 +119,63 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
 
     // Should NOT have called sessions.execute — the wakeup was already claimed
     expect(sessionExecute).not.toHaveBeenCalled();
+    await teardownDb(tmpDir);
+  });
+
+  it("does not claim a wakeup owned by another organization", async () => {
+    const { tmpDir, wakeupsTable, handle } = await setupDb();
+    const wakeupId = `wup_${randomUUID()}`;
+    await insertQueued(handle, wakeupsTable, wakeupId, "foreign tenant", "org_other");
+
+    const { WorkerDaemon } = await import("../src/daemon.js");
+    const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
+    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+
+    expect(sessionExecute).not.toHaveBeenCalled();
+    const { wakeups } = await import("@aaspai/db");
+    const db = (await import("@aaspai/db")).getDefaultDb();
+    const rows = await (
+      db.db.select().from(wakeups) as {
+        all: () => Promise<Array<{ id: string; status: string }>>;
+      }
+    ).all();
+    expect(rows.find((row) => row.id === wakeupId)?.status).toBe("queued");
+    await teardownDb(tmpDir);
+  });
+
+  it("honors the queued adapter, runtime, and durable session identity", async () => {
+    const { tmpDir, wakeupsTable, handle } = await setupDb();
+    const wakeupId = `wup_${randomUUID()}`;
+    const sessionId = `sess_${randomUUID()}`;
+    await (handle.db.insert(wakeupsTable) as { values: (v: unknown) => Promise<unknown> }).values({
+      id: wakeupId,
+      organizationId: "org_test",
+      loopId: "manual",
+      source: "api",
+      agentId: "operator",
+      payloadJson: JSON.stringify({
+        agentId: "operator",
+        prompt: "do it",
+        adapter: "claude_local",
+        runtime: { kind: "local", envPassthrough: false },
+        sessionId,
+      }),
+      status: "queued",
+      requestedAt: new Date().toISOString(),
+      idempotencyKey: randomUUID(),
+    });
+
+    const { WorkerDaemon } = await import("../src/daemon.js");
+    const daemon = new WorkerDaemon({ organizationId: "org_test" });
+    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+
+    expect(sessionExecute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapter: "claude_local",
+        runtime: { kind: "local", envPassthrough: false },
+        durableSessionId: sessionId,
+      }),
+    );
     await teardownDb(tmpDir);
   });
 });
