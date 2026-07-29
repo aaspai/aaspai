@@ -147,6 +147,7 @@ export class LoopRunner {
       const state = {
         ...((await this.opts.stateStore?.view(resolved.pattern.id, {
           organizationId: this.opts.organizationId,
+          excludeWorkflowRunId: run.id,
         })) ?? {
           loopId: resolved.pattern.id,
           paused: false,
