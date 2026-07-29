@@ -1,6 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { PullRequest, PullRequestInput, PullRequestProvider } from "../contract/index.js";
+import type {
+  PullRequest,
+  PullRequestInput,
+  PullRequestLookup,
+  PullRequestProvider,
+} from "../contract/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,6 +81,46 @@ export class LocalGitHubPullRequestProvider implements PullRequestProvider {
     ]);
     return parsePullRequest(JSON.parse(result.stdout) as Record<string, unknown>);
   }
+
+  async find(input: PullRequestLookup): Promise<PullRequest | null> {
+    const result = await this.runner.run([
+      "pr",
+      "list",
+      "--repo",
+      normalizeRepository(input.repository),
+      "--head",
+      input.head,
+      "--base",
+      input.base,
+      "--state",
+      "all",
+      "--limit",
+      "2",
+      "--json",
+      "number,url,state,headRefName,baseRefName",
+    ]);
+    const parsed: unknown = JSON.parse(result.stdout);
+    if (!Array.isArray(parsed)) {
+      throw new Error("GitHub CLI returned an invalid pull request list");
+    }
+    const matches = parsed.map((item) => {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) {
+        throw new Error("GitHub CLI returned an invalid pull request");
+      }
+      return parsePullRequest(item as Record<string, unknown>);
+    });
+    if (
+      matches.some(
+        (pullRequest) => pullRequest.head !== input.head || pullRequest.base !== input.base,
+      )
+    ) {
+      throw new Error("GitHub CLI returned a pull request for different branches");
+    }
+    if (matches.length > 1) {
+      throw new Error("GitHub CLI returned multiple pull requests for the same branches");
+    }
+    return matches[0] ?? null;
+  }
 }
 
 function parseCreatedPullRequestUrl(stdout: string): { number: number; url: string } {
@@ -103,18 +148,34 @@ function normalizeRepository(repository: string): string {
 
 function parsePullRequest(input: Record<string, unknown>): PullRequest {
   const state = input.state;
-  const mappedState = state === "MERGED" ? "merged" : state === "CLOSED" ? "closed" : "open";
+  const url = typeof input.url === "string" ? input.url : null;
+  const urlMatch = url?.match(/^https?:\/\/[^\s]+\/pull\/(\d+)$/);
+  const mappedState =
+    state === "MERGED"
+      ? "merged"
+      : state === "CLOSED"
+        ? "closed"
+        : state === "OPEN"
+          ? "open"
+          : null;
   if (
     typeof input.number !== "number" ||
-    typeof input.url !== "string" ||
+    !Number.isSafeInteger(input.number) ||
+    input.number < 1 ||
+    !url ||
+    !urlMatch ||
+    Number(urlMatch[1]) !== input.number ||
     typeof input.headRefName !== "string" ||
-    typeof input.baseRefName !== "string"
+    input.headRefName.length === 0 ||
+    typeof input.baseRefName !== "string" ||
+    input.baseRefName.length === 0 ||
+    mappedState === null
   ) {
     throw new Error("GitHub CLI returned an invalid pull request");
   }
   return {
     number: input.number,
-    url: input.url,
+    url,
     state: mappedState,
     head: input.headRefName,
     base: input.baseRefName,
