@@ -17,7 +17,7 @@ SessionRequest ──► Sessions.execute()
                        ├── compose full prompt
                        │     (systemPrompt + cli hint + skills + prompt + knowledge)
                        │
-                       ├── insert session row (status="running")
+                       ├── insert or claim a durable session row (status="running")
                        │
                        ├── adapter.execute(ctx)            ← actual run
                        │     └─ emits transcript → session_events (kind: assistant|thinking|tool_call|…)
@@ -78,6 +78,7 @@ await sessions.start();                          // optional; warms up sources
 
 ```ts
 const result = await sessions.execute({
+  durableSessionId: "sess_preallocated", // optional; preserves an async API/Web identity
   organizationId: "org_…",
   agentId:        "agent/<slug>",
   adapter:        "opencode_cli" | "claude_local" | …,
@@ -102,6 +103,10 @@ const result = await sessions.execute({
   wakeupId:       "wakeup_…",         // optional; defaults to "manual"
 });
 ```
+
+When `durableSessionId` is present, `Sessions.execute()` updates the matching
+queued row instead of allocating a second identity. Organization and wakeup
+lineage must match the preallocated request.
 
 ### `SessionResult` shape
 

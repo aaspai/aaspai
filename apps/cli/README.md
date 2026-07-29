@@ -59,8 +59,8 @@ required, no network call. Switch to a real LLM by setting
   contract, swap adapters per agent.
 - **Seven starter loops** — `daily-triage`, `pr-babysitter`,
   `ci-sweeper`, `dependency-sweeper`, `changelog-drafter`,
-  `post-merge-cleanup`, `issue-triage`. Only `daily-triage` is wired
-  end-to-end today; the rest are stubs for you to extend.
+  `post-merge-cleanup`, `issue-triage`. Each performs organization-scoped
+  discovery and produces a safe L1 report by default.
 - **Port-and-adapter design** — every external system (filesystem
   watcher, LLM harness, DB) is behind a `Source` interface. Swap
   SQLite for Postgres, or file-based config for a database, without
@@ -73,7 +73,7 @@ aaspai init          Scaffold a new aaspai project
 aaspai db            Database operations (migrate, status, backup)
 aaspai agent         Agent operations (list, show, validate)
 aaspai knowledge     Knowledge (OKF) operations
-aaspai loop          Loop operations (list, show, tick)
+aaspai loop          Loop operations (create, list, show, fire, pause, resume, tick)
 aaspai session       Session operations (list, show, start, stop, cancel)
 aaspai skill         Skill operations
 aaspai tool          Tool operations

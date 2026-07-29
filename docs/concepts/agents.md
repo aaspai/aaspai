@@ -14,10 +14,15 @@ Git.
 `-- tools.yaml
 ```
 
-`AGENT.md` is the primary definition: YAML frontmatter supplies typed fields
-and the Markdown body supplies role instructions. The companion files keep
-runtime/provider configuration, relationships, pinned skills, and tool policy
-explicit.
+`AGENT.md` supplies typed defaults and role instructions. Companion files have
+explicit precedence: `config.yaml` merges over frontmatter runtime/adapter
+configuration, while `relations.yaml`, `skills.lock.json`, and `tools.yaml`
+replace their matching frontmatter fields when present.
+
+Resolved tool policy is enforced at execution time. Tools requiring approval
+fail closed when no approval broker is available, and harness-native tools are
+restricted to the resolved allowlist. An adapter that cannot enforce its
+native allowlist is refused for autonomous execution.
 
 ## Identity and execution
 
