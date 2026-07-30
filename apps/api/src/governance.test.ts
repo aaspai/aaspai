@@ -3,7 +3,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { InMemoryAuthVerifier } from "@aaspai/auth";
 import { authPrincipalSchema } from "@aaspai/contracts";
-import { closeDefaultDb, getDefaultDb, runMigrations } from "@aaspai/db";
+import { closeDefaultDb, eq, executionWorkItems, getDefaultDb, runMigrations } from "@aaspai/db";
 import { DependencyScheduler, ExecutionStore } from "@aaspai/execution";
 import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -227,6 +227,78 @@ describe("execution governance API", () => {
       if (previousEndpoint === undefined) delete process.env.AASPAI_CONNECTOR_SLACK_URL;
       else process.env.AASPAI_CONNECTOR_SLACK_URL = previousEndpoint;
     }
+  });
+
+  it("does not execute a completed external action without approved human evidence", async () => {
+    const handle = getDefaultDb();
+    const store = new ExecutionStore(handle.db);
+    const fixture = await createFixture(store);
+    const item = await store.createWorkItem({
+      ...fixture.lineage,
+      workKind: "external_action",
+      deliveryMode: "none",
+      title: "Legacy completed notification",
+      idempotencyKey: "external-action-without-approval",
+      metadata: {
+        externalAction: {
+          connector: "slack",
+          operation: "post.message",
+          payload: { text: "hello" },
+        },
+      },
+      governance: { approval: { required: true, actorType: "human" } },
+    });
+    await handle.db
+      .update(executionWorkItems)
+      .set({ status: "completed" })
+      .where(eq(executionWorkItems.id, item.id));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const response = await createApiApp({ authVerifier: verifier }).request(
+        `/v1/execution/work-items/${item.id}/external-actions`,
+        {
+          method: "POST",
+          headers: { cookie: "governance-session", "content-type": "application/json" },
+          body: JSON.stringify({
+            connector: "slack",
+            operation: "post.message",
+            payload: { text: "hello" },
+            idempotencyKey: "unapproved-send",
+          }),
+        },
+      );
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ error: "approval_required" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects connector operations outside the approved outbound set", async () => {
+    const store = new ExecutionStore(getDefaultDb().db);
+    const fixture = await createFixture(store);
+    const app = createApiApp({ authVerifier: verifier });
+    const response = await app.request("/v1/execution/work-items", {
+      method: "POST",
+      headers: { cookie: "governance-session", "content-type": "application/json" },
+      body: JSON.stringify({
+        ...fixture.lineage,
+        title: "Unapproved outbound action",
+        idempotencyKey: "unapproved-outbound-action",
+        workKind: "external_action",
+        deliveryMode: "none",
+        externalAction: {
+          connector: "shell",
+          operation: "execute",
+          payload: { command: "send" },
+        },
+        governance: { approval: { required: true, actorType: "human" } },
+      }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "connector_denied" });
   });
 
   it("pushes the verified commit SHA and reconciles an existing pull request", async () => {

@@ -72,10 +72,11 @@ import {
   HARNESS_PROTOCOL_VERSION,
   type ServerAdapterModule,
 } from "@aaspai/contracts/harness";
-import { type JsonObject, jsonObjectSchema } from "@aaspai/contracts/primitives";
+import { type JsonObject, type JsonValue, jsonObjectSchema } from "@aaspai/contracts/primitives";
 import { getLogger } from "@aaspai/observability";
 
 const log = getLogger("harness.opencode-cli");
+const MAX_RESULT_TEXT_BYTES = 1024 * 1024;
 
 const CLI_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 
@@ -94,7 +95,7 @@ interface OpenCodeEvent {
     messageID?: string;
     tool?: string;
     callID?: string;
-    state?: { status?: string; output?: unknown };
+    state?: { status?: string; input?: unknown; output?: unknown };
     [k: string]: unknown;
   };
   [k: string]: unknown;
@@ -514,6 +515,7 @@ function prepareConfigInjection(
       ...jsonDoc,
       ...(hasMcp ? { mcp: config.mcpServers } : {}),
     });
+    if (config.xdgConfigHome) extraEnv.XDG_CONFIG_HOME = config.xdgConfigHome;
   } else if (hasJson || hasMcp || config.xdgConfigHome) {
     const base = config.xdgConfigHome
       ? config.xdgConfigHome
@@ -620,6 +622,8 @@ interface RunResult {
   toolEventCount: number;
   /** Names of tools the dispatcher was asked to invoke. */
   toolsInvoked: string[];
+  /** Structured company actions captured from the native company_action tool. */
+  companyActions: JsonValue[];
 }
 
 async function runOpencodeCli(
@@ -752,6 +756,8 @@ async function runOpencodeCli(
     let toolEventCount = 0;
     const toolsInvoked: string[] = [];
     const toolsDispatched = new Set<string>();
+    const companyActions: JsonValue[] = [];
+    const companyActionCalls = new Set<string>();
     /** Most-recent JSON error event message (paperclip-style extraction). */
     let jsonErrorMessage: string | undefined;
     /** First non-fatal stderr line (for diagnostics). */
@@ -814,6 +820,7 @@ async function runOpencodeCli(
               thinkingEventCount,
               toolEventCount,
               toolsInvoked: [...toolsInvoked],
+              companyActions: [...companyActions],
             }),
           1000,
         );
@@ -832,13 +839,15 @@ async function runOpencodeCli(
         const line = stdoutBuf.slice(0, nl);
         stdoutBuf = stdoutBuf.slice(nl + 1);
         if (line.trim().length === 0) continue;
+        let ev: OpenCodeEvent;
         try {
-          const ev = JSON.parse(line) as OpenCodeEvent;
-          handleEvent(ev);
+          ev = JSON.parse(line) as OpenCodeEvent;
         } catch {
-          // Not JSON — emit as a raw line
           emitLog("stdout", line);
+          nl = stdoutBuf.indexOf("\n");
+          continue;
         }
+        handleEvent(ev);
         nl = stdoutBuf.indexOf("\n");
       }
     });
@@ -919,7 +928,26 @@ async function runOpencodeCli(
         const toolInput =
           (ev.part as { input?: unknown; args?: unknown }).input ??
           (ev.part as { args?: unknown }).args ??
+          ev.part?.state?.input ??
           {};
+        const toolKey = `${callId ?? "no-id"}:${toolName}`;
+        if (
+          toolName === "company_action" &&
+          status === "completed" &&
+          callId &&
+          !companyActionCalls.has(toolKey)
+        ) {
+          try {
+            const action = parseCompanyActionInput(toolInput);
+            if (action !== undefined) {
+              companyActions.push(action);
+              companyActionCalls.add(toolKey);
+            }
+          } catch (error) {
+            jsonErrorMessage =
+              error instanceof Error ? error.message : "company_action input is invalid";
+          }
+        }
         emitLog(
           "stdout",
           `${JSON.stringify({
@@ -1091,7 +1119,7 @@ async function runOpencodeCli(
       // The previous code coerced `null` exitCode to `0`, which
       // collapsed "killed by SIGTERM" and "exited 0" into the same
       // shape and lost the signal info. Surface both.
-      const exitCode = code;
+      const exitCode = code === 0 && jsonErrorMessage ? 1 : code;
       const childSignal = (closeSignal ?? null) as NodeJS.Signals | null;
       // Compose the errorMessage with a clear priority order:
       //   1. JSON error event message (paperclip-style) — most specific
@@ -1126,6 +1154,7 @@ async function runOpencodeCli(
         thinkingEventCount,
         toolEventCount,
         toolsInvoked,
+        companyActions,
       });
     });
   });
@@ -1159,72 +1188,106 @@ async function runOpencodeThroughRuntime(input: {
   let toolEventCount = 0;
   const toolsInvoked: string[] = [];
   const toolsDispatched = new Set<string>();
+  const companyActions: JsonValue[] = [];
+  const companyActionCalls = new Set<string>();
+  let stdoutBuffer = "";
+  let companyActionError: string | undefined;
   let pendingTools: Promise<void> = Promise.resolve();
-  const parse = (chunk: string): void => {
-    for (const line of chunk.split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      try {
-        const event = JSON.parse(line) as OpenCodeEvent & { error?: unknown };
-        if (event.sessionID) sessionId = event.sessionID;
-        if (event.type === "text" && event.part?.type === "text") {
-          text += String(event.part.text ?? "");
-        }
-        if (event.part?.type === "reasoning" || event.type === "thinking") thinkingEventCount += 1;
-        if (event.part?.type === "tool" || event.type === "tool_use" || event.type === "tool") {
-          toolEventCount += 1;
-          const toolName = String(event.part?.tool ?? event.part?.name ?? "unknown");
-          const callId = String(event.part?.callID ?? "no-id");
-          if (input.tools && !toolsDispatched.has(`${callId}:${toolName}`)) {
-            toolsDispatched.add(`${callId}:${toolName}`);
-            toolsInvoked.push(toolName);
-            const toolInput =
-              (event.part as { input?: unknown; args?: unknown } | undefined)?.input ??
-              (event.part as { args?: unknown } | undefined)?.args ??
-              {};
-            pendingTools = pendingTools.then(async () => {
-              try {
-                const output = await input.tools?.invoke(toolName, toolInput, {
-                  callId,
-                  sessionId: event.sessionID,
-                });
-                await input.onLog?.(
-                  "stdout",
-                  `${JSON.stringify({
-                    kind: "tool_result",
-                    ts: new Date().toISOString(),
-                    name: toolName,
-                    id: callId,
-                    status: "completed",
-                    output: typeof output === "string" ? output : JSON.stringify(output),
-                  })}\n`,
-                );
-              } catch (error) {
-                await input.onLog?.(
-                  "stdout",
-                  `${JSON.stringify({
-                    kind: "tool_result",
-                    ts: new Date().toISOString(),
-                    name: toolName,
-                    id: callId,
-                    status: "failed",
-                    isError: true,
-                    output: error instanceof Error ? error.message : String(error),
-                  })}\n`,
-                );
-              }
-            });
+  const parseLine = (line: string): void => {
+    if (!line.trim()) return;
+    let event: OpenCodeEvent & { error?: unknown };
+    try {
+      event = JSON.parse(line) as OpenCodeEvent & { error?: unknown };
+    } catch {
+      return;
+    }
+    if (event.sessionID) sessionId = event.sessionID;
+    if (event.type === "text" && event.part?.type === "text") {
+      text += String(event.part.text ?? "");
+    }
+    if (event.part?.type === "reasoning" || event.type === "thinking") thinkingEventCount += 1;
+    if (event.part?.type === "tool" || event.type === "tool_use" || event.type === "tool") {
+      toolEventCount += 1;
+      const toolName = String(event.part?.tool ?? event.part?.name ?? "unknown");
+      const callId = String(event.part?.callID ?? "no-id");
+      const toolInput =
+        (event.part as { input?: unknown; args?: unknown } | undefined)?.input ??
+        (event.part as { args?: unknown } | undefined)?.args ??
+        event.part?.state?.input ??
+        {};
+      const toolKey = `${callId}:${toolName}`;
+      const status = String(event.part?.state?.status ?? "started");
+      if (
+        toolName === "company_action" &&
+        status === "completed" &&
+        callId !== "no-id" &&
+        !companyActionCalls.has(toolKey)
+      ) {
+        try {
+          const action = parseCompanyActionInput(toolInput);
+          if (action !== undefined) {
+            companyActions.push(action);
+            companyActionCalls.add(toolKey);
           }
+        } catch (error) {
+          companyActionError =
+            error instanceof Error ? error.message : "company_action input is invalid";
         }
-        const tokens = event.part?.tokens as { input?: unknown; output?: unknown } | undefined;
-        if (typeof tokens?.input === "number") inputTokens = tokens.input;
-        if (typeof tokens?.output === "number") outputTokens = tokens.output;
-        if (typeof event.part?.cost === "number") cost = event.part.cost;
-        const message = extractErrorMessage(event.error);
-        if (message) errorMessage = message;
-      } catch {
-        // The raw line is retained by the execution boundary.
+      }
+      if (input.tools && !toolsDispatched.has(`${callId}:${toolName}`)) {
+        toolsDispatched.add(`${callId}:${toolName}`);
+        toolsInvoked.push(toolName);
+        pendingTools = pendingTools.then(async () => {
+          try {
+            const output = await input.tools?.invoke(toolName, toolInput, {
+              callId,
+              sessionId: event.sessionID,
+            });
+            await input.onLog?.(
+              "stdout",
+              `${JSON.stringify({
+                kind: "tool_result",
+                ts: new Date().toISOString(),
+                name: toolName,
+                id: callId,
+                status: "completed",
+                output: typeof output === "string" ? output : JSON.stringify(output),
+              })}\n`,
+            );
+          } catch (error) {
+            await input.onLog?.(
+              "stdout",
+              `${JSON.stringify({
+                kind: "tool_result",
+                ts: new Date().toISOString(),
+                name: toolName,
+                id: callId,
+                status: "failed",
+                isError: true,
+                output: error instanceof Error ? error.message : String(error),
+              })}\n`,
+            );
+          }
+        });
       }
     }
+    const tokens = event.part?.tokens as { input?: unknown; output?: unknown } | undefined;
+    if (typeof tokens?.input === "number") inputTokens = tokens.input;
+    if (typeof tokens?.output === "number") outputTokens = tokens.output;
+    if (typeof event.part?.cost === "number") cost = event.part.cost;
+    const message = extractErrorMessage(event.error);
+    if (message) errorMessage = message;
+  };
+  const parse = (chunk: string, flush = false): void => {
+    stdoutBuffer += chunk;
+    let newline = stdoutBuffer.indexOf("\n");
+    while (newline >= 0) {
+      parseLine(stdoutBuffer.slice(0, newline));
+      stdoutBuffer = stdoutBuffer.slice(newline + 1);
+      newline = stdoutBuffer.indexOf("\n");
+    }
+    if (flush && stdoutBuffer.trim()) parseLine(stdoutBuffer);
+    if (flush) stdoutBuffer = "";
   };
   const result = await input.execution.run({
     command: input.cli,
@@ -1239,6 +1302,7 @@ async function runOpencodeThroughRuntime(input: {
       await input.onLog?.(stream, chunk);
     },
   });
+  parse("", true);
   await pendingTools;
   return {
     sessionId,
@@ -1246,10 +1310,10 @@ async function runOpencodeThroughRuntime(input: {
     inputTokens,
     outputTokens,
     cost,
-    exitCode: result.exitCode,
+    exitCode: result.exitCode === 0 && companyActionError ? 1 : result.exitCode,
     signal: (result.signal as NodeJS.Signals | undefined) ?? null,
     timedOut: result.timedOut,
-    errorMessage,
+    errorMessage: companyActionError ?? errorMessage,
     resumedSession: Boolean(input.resumeSessionId),
     continuedLast: input.continuedLast,
     attached: input.attached,
@@ -1257,6 +1321,7 @@ async function runOpencodeThroughRuntime(input: {
     thinkingEventCount,
     toolEventCount,
     toolsInvoked,
+    companyActions,
   };
 }
 
@@ -1296,6 +1361,18 @@ function extractErrorMessage(value: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+function parseCompanyActionInput(value: unknown): JsonValue | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("company_action input must be an object");
+  }
+  const payload = (value as { payload?: unknown }).payload;
+  if (payload === undefined) return undefined;
+  if (typeof payload !== "string" || payload.length > 65_536) {
+    throw new Error("company_action payload must be a JSON string up to 64 KiB");
+  }
+  return JSON.parse(payload) as JsonValue;
 }
 
 /**
@@ -2556,6 +2633,9 @@ export const opencodeCli: ServerAdapterModule = {
       await release();
     }
 
+    if (Buffer.byteLength(cliResult.text, "utf8") > MAX_RESULT_TEXT_BYTES) {
+      throw new Error("opencode response exceeds the 1 MiB result limit");
+    }
     const sessionId = cliResult.sessionId ?? shortId("oc");
     return {
       protocolVersion: HARNESS_PROTOCOL_VERSION,
@@ -2595,7 +2675,7 @@ export const opencodeCli: ServerAdapterModule = {
       provider: "opencode",
       biller: "opencode-cli",
       model: config.model,
-      summary: cliResult.text.slice(0, 500),
+      summary: cliResult.text.slice(0, 8_192),
       clearSession: false,
       errorCode: cliResult.timedOut
         ? "timeout"
@@ -2615,12 +2695,14 @@ export const opencodeCli: ServerAdapterModule = {
       // shape so downstream consumers (sessions layer, UI, future
       // `opencode stats` link) can correlate.
       resultJson: {
+        text: cliResult.text,
         ...(cliResult.cliSessionId ? { cliSessionId: cliResult.cliSessionId } : {}),
         continuedLast: cliResult.continuedLast,
         attached: cliResult.attached,
         thinkingEventCount: cliResult.thinkingEventCount,
         toolEventCount: cliResult.toolEventCount,
         toolsInvoked: cliResult.toolsInvoked,
+        companyActions: cliResult.companyActions,
       },
     };
   },
@@ -2804,6 +2886,7 @@ export const opencodeCli: ServerAdapterModule = {
         "task",
         "skill",
         "lsp",
+        "company_action",
       ],
       supportsCancel: true,
       supportsCompact: true,

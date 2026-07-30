@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Running-company command center** — onboarding now creates only the CEO and
+  launches real company work; dedicated goal, work-item, employee, session, and
+  governance pages expose the complete operating trail.
+- **Governed company staffing and commercial work** — CEOs can hire role-scoped
+  agents through a structured company action, delegate durable work, export
+  sandbox artifacts and full responses, and require cited lead evidence plus
+  human approval before external commercial actions.
+- **Hardened Daytona baseline** — the v2 OpenCode snapshot includes certificates,
+  web and developer essentials while keeping permanent provider credentials out
+  of agent sandboxes.
 - **Governed autonomous loop execution** — file-defined loops now run with durable pause,
   catch-up scheduling, organization-scoped discovery, persisted state, token/cost budgets,
   and working starter-loop discovery instead of no-op placeholders.

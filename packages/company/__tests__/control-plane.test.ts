@@ -37,6 +37,12 @@ describe("Layer 4 company control plane", () => {
     const control = new CompanyControlPlaneService(handle.db, {
       async createWorkItem(input: CompanyWorkItemInput) {
         expect(input.idempotencyKey).toBe("route/security-1");
+        expect(input.metadata).toMatchObject({
+          assignedAgentId: "agent/specialist",
+          risk: "medium",
+          capability: "security",
+          evidencePolicy: { citationPaths: ["evidence.md"] },
+        });
         return { id: "work/security-1" };
       },
     });
@@ -63,6 +69,12 @@ describe("Layer 4 company control plane", () => {
       projectId: "project/security",
       repositoryId: "repo/security",
       definitionRevisionId: "revision/security",
+      metadata: {
+        assignedAgentId: "agent/attacker",
+        risk: "low",
+        capability: "other",
+        evidencePolicy: { citationPaths: ["evidence.md"] },
+      },
     };
     const delegation = await control.delegate(input);
     expect(delegation.status).toBe("created");

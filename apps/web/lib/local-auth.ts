@@ -50,14 +50,6 @@ function hashPassword(password: string, salt: string): string {
   return scryptSync(password, salt, 32).toString("hex");
 }
 
-function organizationId(companyName: string): string {
-  const slug = companyName
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
-  return `org_${slug || randomUUID().slice(0, 8)}`;
-}
-
 export async function signup(input: {
   name: string;
   email: string;
@@ -65,6 +57,9 @@ export async function signup(input: {
   companyName: string;
 }): Promise<{ user: LocalUser; token: string }> {
   const state = await loadState();
+  if (state.users.length > 0) {
+    throw new Error("This local workspace already has an owner");
+  }
   const email = input.email.trim().toLowerCase();
   if (state.users.some((user) => user.email === email))
     throw new Error("Email is already registered");
@@ -75,7 +70,7 @@ export async function signup(input: {
     email,
     salt,
     passwordHash: hashPassword(input.password, salt),
-    organizationId: organizationId(input.companyName),
+    organizationId: "default",
     companyName: input.companyName.trim(),
   };
   const token = await createSession(state, user);

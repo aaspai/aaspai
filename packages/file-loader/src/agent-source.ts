@@ -28,6 +28,7 @@ export class FileAgentConfigSource implements AgentConfigSource {
   private readonly knownDirs = new Map<string, string>(); // dirPath -> agentId
   private rescanInterval: NodeJS.Timeout | null = null;
   private watching = false;
+  private startPromise: Promise<void> | null = null;
   private readonly callbacks = new Set<(change: ChangeEvent) => void>();
 
   constructor(private readonly agentsDir: string) {
@@ -35,8 +36,21 @@ export class FileAgentConfigSource implements AgentConfigSource {
   }
 
   async start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
     if (this.watching) return;
     this.watching = true;
+    this.startPromise = this.startWatching();
+    try {
+      await this.startPromise;
+    } catch (error) {
+      this.watching = false;
+      throw error;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  private async startWatching(): Promise<void> {
     this.watcher.on("changed", (event) => {
       this.handleChange(event.path, event.kind).catch((err) =>
         log.error("watcher change failed", { path: event.path, err: String(err) }),

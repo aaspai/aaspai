@@ -27,7 +27,6 @@ await writeFile(
     "daytonaTarget.run(node -e workspace-roundtrip-probe)",
     "daytonaTarget.run(node -e cancellation-probe)",
     "daytonaTarget.run(node -e timeout-probe)",
-    "daytonaTarget.run(opencode run + --session resume) # when AASPAI_HOST_AUTH_PATH is set",
     "",
   ].join("\n"),
   "utf8",
@@ -45,7 +44,6 @@ await writeFile(
       sdk: "@daytonaio/sdk",
       apiKeyConfigured: apiKey.length > 0,
       apiUrlConfigured: Boolean(process.env.DAYTONA_API_URL),
-      hostAuthConfigured: Boolean(process.env.AASPAI_HOST_AUTH_PATH),
     },
     null,
     2,
@@ -152,88 +150,6 @@ try {
     "utf8",
   );
 
-  let agentStatus = "skipped (AASPAI_HOST_AUTH_PATH not set)";
-  if (process.env.AASPAI_HOST_AUTH_PATH) {
-    const resumableTarget: ExecutionTarget = {
-      ...target,
-      metadata: { reuseLease: true },
-    };
-    const firstAgentResult = await resolveTarget(resumableTarget).run(resumableTarget, {
-      command: "opencode",
-      args: [
-        "run",
-        "--format",
-        "json",
-        "--model",
-        process.env.AASPAI_OPENCODE_MODEL ?? "opencode-go/mimo-v2.5",
-        "--title",
-        `daytona-agent-e2e/${runId}`,
-        "Use your tools to create resume-first.txt containing exactly FIRST followed by a newline. Do not only explain; make the file.",
-      ],
-      cwd: root,
-      timeoutMs: 180_000,
-    });
-    const leaseId =
-      firstAgentResult.runtimeIdentity?.connectionIdentity?.slice("daytona:".length) ?? "";
-    leaseIds.push(leaseId);
-    const sessionId = firstAgentResult.stdout.split(/\r?\n/).flatMap((line) => {
-      try {
-        const value = JSON.parse(line) as { sessionID?: string; sessionId?: string };
-        return [value.sessionID ?? value.sessionId].filter((entry): entry is string =>
-          Boolean(entry),
-        );
-      } catch {
-        return [];
-      }
-    })[0];
-    const resumedTarget: ExecutionTarget = {
-      ...target,
-      metadata: {
-        providerLeaseId: leaseId,
-        providerLeaseRemoteCwd: firstAgentResult.runtimeIdentity?.remoteCwd ?? "/aaspai-workspace",
-      },
-    };
-    const resumedAgentResult = await resolveTarget(resumedTarget).run(resumedTarget, {
-      command: "opencode",
-      args: [
-        "run",
-        "--format",
-        "json",
-        "--model",
-        process.env.AASPAI_OPENCODE_MODEL ?? "opencode-go/mimo-v2.5",
-        "--session",
-        sessionId ?? "missing-session",
-        "Read resume-first.txt, then create resume-second.txt containing exactly SECOND followed by a newline.",
-      ],
-      cwd: root,
-      timeoutMs: 180_000,
-    });
-    await writeFile(
-      join(root, "raw", "agent-resume-result.json"),
-      JSON.stringify({ firstAgentResult, resumedAgentResult, sessionId }, null, 2),
-      "utf8",
-    );
-    if (
-      firstAgentResult.exitCode !== 0 ||
-      resumedAgentResult.exitCode !== 0 ||
-      !sessionId ||
-      resumedAgentResult.runtimeIdentity?.connectionIdentity !==
-        firstAgentResult.runtimeIdentity?.connectionIdentity
-    ) {
-      throw new Error(
-        `Daytona agent resume assertion failed: ${JSON.stringify({ firstAgentResult, resumedAgentResult, sessionId })}`,
-      );
-    }
-    const firstOutput = await readFile(join(root, "resume-first.txt"), "utf8");
-    const secondOutput = await readFile(join(root, "resume-second.txt"), "utf8");
-    if (firstOutput !== "FIRST\n" || secondOutput !== "SECOND\n") {
-      throw new Error(
-        `Daytona resumed agent output assertion failed: ${JSON.stringify({ firstOutput, secondOutput })}`,
-      );
-    }
-    agentStatus = "passed (same Daytona lease + same OpenCode session)";
-  }
-
   const daytona = new Daytona({
     apiKey,
     ...(process.env.DAYTONA_API_URL ? { apiUrl: process.env.DAYTONA_API_URL } : {}),
@@ -257,7 +173,7 @@ try {
   }
   await writeFile(
     join(root, "RESULT.md"),
-    `# Daytona real execution evidence\n\nStatus: passed\n\nWorkspace, stdin, streaming, cancellation, timeout, binary restore, deletion restore: passed\n\nAgent CLI + resume: ${agentStatus}\n\nRuntime identity: ${JSON.stringify(result.runtimeIdentity)}\n\nCleanup: verified (${listedSandboxes} sandboxes listed; ${leaseIds.length} test leases absent)\n\nStarted: ${startedAt}\n`,
+    `# Daytona real execution evidence\n\nStatus: passed\n\nWorkspace, stdin, streaming, cancellation, timeout, binary restore, deletion restore: passed\n\nRuntime identity: ${JSON.stringify(result.runtimeIdentity)}\n\nCleanup: verified (${listedSandboxes} sandboxes listed; ${leaseIds.length} test leases absent)\n\nStarted: ${startedAt}\n`,
     "utf8",
   );
   console.log(JSON.stringify({ runId, root, status: result.exitCode === 0 ? "passed" : "failed" }));

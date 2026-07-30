@@ -1,0 +1,57 @@
+import { describe, expect, it } from "vitest";
+import { companyActionPayload, companyActions } from "../src/company-actions.js";
+
+describe("company actions", () => {
+  it("accepts bounded structured hires and rejects untrusted provider output", () => {
+    const action = {
+      type: "hire_and_delegate",
+      agentId: "agent/market-researcher",
+      title: "Market Researcher",
+      role: "researcher",
+      description: "Validates demand.",
+      workTitle: "Validate the offer",
+      workDescription: "Collect evidence.",
+    };
+    expect(
+      companyActions({
+        exitCode: 0,
+        timedOut: false,
+        resultJson: { dryRun: true, companyActions: [action] },
+      }),
+    ).toEqual([action]);
+    expect(
+      companyActions({
+        exitCode: 0,
+        timedOut: false,
+        resultJson: { dryRun: false, companyActions: [action] },
+      }),
+    ).toEqual([]);
+    expect(
+      companyActions({
+        exitCode: 0,
+        timedOut: false,
+        resultJson: {
+          companyActions: [{ actions: [action] }],
+        },
+      }),
+    ).toEqual([action]);
+    expect(companyActionPayload({ actions: [action] })).toEqual([action]);
+    expect(() =>
+      companyActionPayload({ actions: [{ ...action, agentId: "../../escape" }] }),
+    ).toThrow("invalid");
+    expect(() => companyActionPayload({ actions: [{ ...action, agentId: "agent/ceo" }] })).toThrow(
+      "invalid",
+    );
+    expect(() =>
+      companyActionPayload({
+        actions: [
+          {
+            ...action,
+            role: "cmo",
+            workTitle: "Build a lead campaign",
+          },
+        ],
+      }),
+    ).toThrow("invalid");
+  });
+});

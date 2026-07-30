@@ -4,12 +4,13 @@ import { Sidebar } from "@/components/sidebar";
 import { currentUser } from "@/lib/local-auth";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
-  if (!(await currentUser())) redirect("/login");
+  const user = await currentUser();
+  if (!user) redirect("/login");
   return (
     <div className="flex min-h-screen w-full">
-      <Sidebar />
+      <Sidebar companyName={user.companyName} founderName={user.name} />
       <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-6xl px-6 py-8">{children}</div>
+        <div className="mx-auto w-full max-w-[1280px] px-6 pb-8 pt-20 md:py-8">{children}</div>
       </main>
     </div>
   );

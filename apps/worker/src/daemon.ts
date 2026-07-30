@@ -22,12 +22,18 @@ import {
   readdir,
   readFile,
   realpath,
+  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
-import { extname, isAbsolute, join, relative, resolve } from "node:path";
-import { OperationalGovernanceService } from "@aaspai/company";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  CompanyControlPlaneService,
+  CompanyOperationsService,
+  OperationalGovernanceService,
+} from "@aaspai/company";
+import type { AgentConfig } from "@aaspai/contracts";
 import type { AgentAttempt, ExecutionWorkItem } from "@aaspai/contracts/execution";
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
 import { resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
@@ -38,6 +44,8 @@ import {
   getDefaultDb,
   projects,
   repositories,
+  runMigrations,
+  sessions as sessionsTable,
   wakeups as wakeupsTable,
 } from "@aaspai/db";
 import {
@@ -77,11 +85,64 @@ import { Sessions } from "@aaspai/sessions";
 import { loadSkillDirectory, SkillRegistry } from "@aaspai/skills";
 import { createBuiltInRegistry } from "@aaspai/tools";
 import { and, eq } from "drizzle-orm";
+import {
+  COMPANY_ACTION_TOOL_SOURCE,
+  companyActions,
+  type HireAndDelegateAction,
+} from "./company-actions.js";
+import { validateEvidencePolicy } from "./output-policy.js";
 
 const log = getLogger("worker.daemon");
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_WAKEUP_POLL_INTERVAL_MS = 5_000;
+
+function hiredAgentTools(tools: AgentConfig["tools"], role: HireAndDelegateAction["role"]) {
+  const source = tools && typeof tools === "object" ? (tools as Record<string, unknown>) : {};
+  const allowedForRole = new Set([
+    "bash",
+    "edit",
+    "glob",
+    "grep",
+    "list",
+    "read",
+    "shell",
+    "skill",
+    "write",
+    ...(role === "cmo" || role === "researcher" ? ["webfetch", "websearch", "web_search"] : []),
+    ...(role === "designer" ? ["view_image"] : []),
+  ]);
+  const allow = Array.isArray(source.allow)
+    ? source.allow.filter(
+        (tool): tool is string =>
+          typeof tool === "string" && allowedForRole.has(tool.toLowerCase()),
+      )
+    : [];
+  const allowed = new Set(allow.map((tool) => tool.toLowerCase()));
+  return {
+    allow,
+    deny: Array.isArray(source.deny)
+      ? source.deny.filter((tool): tool is string => typeof tool === "string")
+      : [],
+    require_approval_for: Array.isArray(source.require_approval_for)
+      ? source.require_approval_for.filter(
+          (tool): tool is string => typeof tool === "string" && allowed.has(tool.toLowerCase()),
+        )
+      : [],
+  };
+}
+
+async function hashAgentDefinition(directory: string): Promise<string> {
+  const files = ["AGENT.md", "config.yaml", "relations.yaml", "skills.lock.json", "tools.yaml"];
+  const hash = createHash("sha256");
+  for (const file of files) {
+    hash.update(file);
+    hash.update("\0");
+    hash.update(await readFile(join(directory, file)));
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
 
 export function changedPathsFromStatus(entries: readonly string[]): string[] {
   return [
@@ -121,6 +182,25 @@ const ARTIFACT_KINDS = new Set([
   "result",
   "other",
 ] as const);
+
+function outputMediaType(path: string): string {
+  switch (extname(path).toLowerCase()) {
+    case ".md":
+      return "text/markdown";
+    case ".json":
+      return "application/json";
+    case ".html":
+      return "text/html";
+    case ".css":
+      return "text/css";
+    case ".csv":
+      return "text/csv";
+    case ".txt":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
+}
 
 interface DeclaredArtifact {
   path: string;
@@ -387,6 +467,7 @@ export class WorkerDaemon {
       wakeupPollIntervalMs: this.wakeupPollIntervalMs,
     });
 
+    runMigrations(getDefaultDb());
     await this.agentSource.start();
     await this.knowledgeSource.start();
     await this.loopSource.start();
@@ -723,7 +804,8 @@ export class WorkerDaemon {
     const agentId = wakeupRow.agentId ?? request.agentId;
     if (!agentId) throw new Error("wakeup has no agentId");
     const adapter = request.adapter ?? "dry_run_local";
-    const runtime = executionTargetSchema.parse(request.runtime ?? { kind: "local" });
+    const runtime =
+      request.runtime === undefined ? undefined : executionTargetSchema.parse(request.runtime);
     const prompt =
       request.prompt ??
       `Worker-triggered wakeup for ${wakeupRow.loopId} (${wakeupRow.reason ?? "no reason"})`;
@@ -766,7 +848,7 @@ export class WorkerDaemon {
         organizationId: this.organizationId,
         agentId,
         adapter,
-        runtime,
+        runtime: runtime ?? { kind: "local" },
         prompt,
         config: {},
         skills: [],
@@ -1210,7 +1292,22 @@ export class WorkerDaemon {
       !Array.isArray(profile.inputs.adapterConfig.skillsPaths)
         ? { skillsPaths: [".opencode_cli/skills"] }
         : {}),
+      ...(input.adapter === "opencode_cli" && input.agentId === "agent/ceo"
+        ? { xdgConfigHome: ".opencode_cli" }
+        : {}),
     };
+    if (input.adapter === "opencode_cli" && input.agentId === "agent/ceo") {
+      const companyActionTool = join(
+        workspacePath,
+        ".opencode_cli",
+        "opencode",
+        "tools",
+        "company_action.ts",
+      );
+      await mkdir(dirname(companyActionTool), { recursive: true });
+      await writeFile(companyActionTool, COMPANY_ACTION_TOOL_SOURCE, "utf8");
+      materializedPaths.push(companyActionTool);
+    }
     let credential: AttemptCredential | null = null;
     let credentialRevoked = false;
     try {
@@ -1244,7 +1341,7 @@ export class WorkerDaemon {
       assertGovernedRuntimeIsolation(plan.harness, plan.target, true);
       credential = await issueAttemptCredential(this.organizationId, input.attempt.id);
 
-      return await new HarnessExecutionPlanRunner(this.executionStore).run({
+      const result = await new HarnessExecutionPlanRunner(this.executionStore).run({
         plan,
         workspace: { ...workspace, status: "ready" },
         profile,
@@ -1267,8 +1364,17 @@ export class WorkerDaemon {
             branchName: workspace.branchName,
             repositoryWork,
           });
+          if (input.agentId === "agent/ceo" && !result.timedOut && result.exitCode === 0) {
+            await this.applyCompanyActions(companyActions(result), {
+              attempt: input.attempt,
+              workItem: input.workItem,
+              managerAgentId: input.agentId,
+            });
+          }
         },
       });
+      await this.recordGeneralWorkEvidence(result, input.attempt, input.workItem);
+      return result;
     } finally {
       if (credential && !credentialRevoked) {
         await revokeAttemptCredential(credential).catch((error) =>
@@ -1285,6 +1391,299 @@ export class WorkerDaemon {
     }
   }
 
+  private async recordGeneralWorkEvidence(
+    result: AdapterExecutionResult,
+    attempt: AgentAttempt,
+    workItem: ExecutionWorkItem,
+  ): Promise<void> {
+    if (
+      attempt.role !== "maker" ||
+      workItem.workKind !== "general" ||
+      !workItem.workflowRunId ||
+      result.timedOut ||
+      result.exitCode !== 0
+    ) {
+      return;
+    }
+    const text =
+      typeof result.resultJson?.text === "string" ? result.resultJson.text : result.summary;
+    if (!text?.trim()) throw new Error("Successful general work produced no report");
+    await this.executionStore.createLoopOutput({
+      organizationId: this.organizationId,
+      loopId: "company/runtime",
+      workflowRunId: workItem.workflowRunId,
+      kind: "report",
+      sourceRef: attempt.id,
+      title: `Work result: ${workItem.title}`.slice(0, 512),
+      body: text.trim().slice(0, 65_536),
+      severity: "info",
+      workItemId: workItem.id,
+    });
+  }
+
+  private async applyCompanyActions(
+    actions: HireAndDelegateAction[],
+    input: {
+      attempt: AgentAttempt;
+      workItem: ExecutionWorkItem;
+      managerAgentId: string;
+    },
+  ): Promise<void> {
+    if (actions.length === 0 || input.managerAgentId !== "agent/ceo") return;
+    const manager = await this.agentSource.get(input.managerAgentId);
+    const operations = new CompanyOperationsService(getDefaultDb().db);
+    const control = new CompanyControlPlaneService(getDefaultDb().db, this.executionStore);
+
+    for (const action of actions) {
+      const definition = await this.writeHiredAgent(action, manager);
+      await operations.registerServiceAgent({
+        organizationId: this.organizationId,
+        agentId: action.agentId,
+        metadata: {
+          roles: [action.role],
+          capabilities: [action.role],
+          definitionManaged: true,
+          hiredBy: input.managerAgentId,
+        },
+      });
+      await control.setAuthorityEdge({
+        organizationId: this.organizationId,
+        fromAgentId: input.managerAgentId,
+        toAgentId: action.agentId,
+        relation: "may_delegate_to",
+      });
+      const definitionRevision = await this.executionStore.createDefinitionRevision({
+        organizationId: this.organizationId,
+        repositoryId: input.workItem.repositoryId,
+        commitSha: input.workItem.sourceCommitSha ?? "0000000",
+        sourcePath: definition.sourcePath,
+        dirty: true,
+        contentHash: definition.contentHash,
+      });
+      const delegation = await control.delegate({
+        organizationId: this.organizationId,
+        idempotencyKey: `ceo-action:${input.workItem.id}:${action.agentId}`,
+        requestedByAgentId: input.managerAgentId,
+        targetAgentId: action.agentId,
+        departmentId: null,
+        requiredRole: action.role,
+        capability: null,
+        risk: "low",
+        priority: Math.min(100, input.workItem.priority + 1),
+        title: action.workTitle,
+        description: action.workDescription,
+        goalId: input.workItem.goalId,
+        projectId: input.workItem.projectId,
+        repositoryId: input.workItem.repositoryId,
+        workflowRunId: input.workItem.workflowRunId,
+        definitionRevisionId: definitionRevision.id,
+        sourceCommitSha: input.workItem.sourceCommitSha,
+        maxAttempts: input.workItem.maxAttempts,
+        workKind: "general",
+        deliveryMode: "none",
+        metadata: {
+          ...(action.artifactPaths
+            ? {
+                declaredArtifacts: action.artifactPaths.map((path) => ({
+                  path,
+                  kind: "other",
+                })),
+              }
+            : {}),
+          evidencePolicy: {
+            citationPaths: action.citationPaths ?? [],
+            commercialClaimPaths: action.commercialClaimPaths ?? [],
+            scanAllArtifacts: true,
+          },
+        },
+      });
+      if (!delegation.workItemId) throw new Error(`Delegation ${delegation.id} has no work item`);
+      const delegated = await this.executionStore.getWorkItem(delegation.workItemId);
+      if (!delegated) throw new Error(`Delegated work ${delegation.workItemId} disappeared`);
+      await this.queueDelegatedWork(action, delegated, manager.adapter);
+      await this.executionStore.recordGovernanceEvent({
+        organizationId: this.organizationId,
+        workItemId: input.workItem.id,
+        attemptId: input.attempt.id,
+        action: "agent.hire_and_delegate",
+        decision: "allowed",
+        reason: `${action.title} hired and assigned ${delegated.id}`,
+        metadata: {
+          agentId: action.agentId,
+          delegationId: delegation.id,
+          delegatedWorkItemId: delegated.id,
+        },
+      });
+    }
+  }
+
+  private async writeHiredAgent(
+    action: HireAndDelegateAction,
+    manager: Readonly<AgentConfig>,
+  ): Promise<{ sourcePath: string; contentHash: string }> {
+    const slug = action.agentId.slice("agent/".length);
+    const root = resolve(process.env.AASPAI_AGENTS_DIR ?? DEFAULT_AGENTS_DIR);
+    const directory = resolve(root, slug);
+    if (await this.agentSource.has(action.agentId)) {
+      const existing = await this.agentSource.get(action.agentId);
+      if (existing.title !== action.title || existing.role !== action.role) {
+        throw new Error(`Agent ${action.agentId} already exists with a different profile`);
+      }
+      return {
+        sourcePath: `agents/${slug}`,
+        contentHash: await hashAgentDefinition(directory),
+      };
+    }
+    const scoped = relative(root, directory);
+    if (!scoped || scoped.startsWith("..") || isAbsolute(scoped)) {
+      throw new Error(`Unsafe hired-agent path for ${action.agentId}`);
+    }
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, "config.yaml"),
+      `${JSON.stringify(
+        {
+          adapterConfig: manager.adapterConfig,
+          runtimeConfig: manager.runtimeConfig,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(directory, "tools.yaml"),
+      `${JSON.stringify(hiredAgentTools(manager.tools, action.role), null, 2)}\n`,
+      "utf8",
+    );
+    const requestedSkills = new Set(action.skillKeys ?? []);
+    const skills = manager.skills.filter(
+      (skill) =>
+        skill &&
+        typeof skill === "object" &&
+        "key" in skill &&
+        requestedSkills.has(String(skill.key)),
+    );
+    if (skills.length !== requestedSkills.size) {
+      throw new Error("Hired agent requested a skill not approved for the CEO");
+    }
+    await writeFile(
+      join(directory, "skills.lock.json"),
+      `${JSON.stringify(skills, null, 2)}\n`,
+      "utf8",
+    );
+    await writeFile(
+      join(directory, "relations.yaml"),
+      "reportsTo: agent/ceo\nmanages: []\npeers: []\n",
+      "utf8",
+    );
+    const agentDefinition = join(directory, "AGENT.md");
+    const pendingDefinition = `${agentDefinition}.tmp`;
+    await writeFile(
+      pendingDefinition,
+      `---
+id: ${action.agentId}
+type: Agent
+title: ${JSON.stringify(action.title)}
+description: ${JSON.stringify(action.description)}
+timestamp: ${new Date().toISOString()}
+adapter: ${manager.adapter}
+${manager.model ? `model: ${JSON.stringify(manager.model)}\n` : ""}role: ${action.role}
+reportsTo: agent/ceo
+manages: []
+peers: []
+tools:
+  allow: []
+  deny: []
+  require_approval_for: []
+skills: []
+knowledge:
+  include: ["**"]
+  exclude: []
+runtime:
+  default: { kind: local }
+---
+
+# ${action.title}
+
+${action.description}
+
+Complete assigned work with concrete evidence. Report what you did, what remains uncertain, and the next action.
+`,
+      "utf8",
+    );
+    await rename(pendingDefinition, agentDefinition);
+
+    const ceo = await this.agentSource.get("agent/ceo");
+    const manages = [...new Set([...ceo.manages, action.agentId])];
+    await writeFile(
+      join(root, "ceo", "relations.yaml"),
+      `reportsTo: null\nmanages:\n${manages.map((id) => `  - ${id}`).join("\n")}\npeers: []\n`,
+      "utf8",
+    );
+    return {
+      sourcePath: `agents/${slug}`,
+      contentHash: await hashAgentDefinition(directory),
+    };
+  }
+
+  private async queueDelegatedWork(
+    action: HireAndDelegateAction,
+    workItem: ExecutionWorkItem,
+    adapter: string,
+  ): Promise<void> {
+    if (!workItem.workflowRunId) throw new Error("Delegated work has no workflow run");
+    const suffix = createHash("sha256")
+      .update(`${workItem.id}\0${action.agentId}`)
+      .digest("hex")
+      .slice(0, 32);
+    const sessionId = `sess_${suffix}`;
+    const wakeupId = `wake_${suffix}`;
+    const requestedAt = new Date().toISOString();
+    const prompt = `${action.workDescription}\n\nAssignment: ${action.workTitle}\n\nReturn concrete evidence and the next action.`;
+    getDefaultDb().db.transaction((tx) => {
+      tx.insert(wakeupsTable)
+        .values({
+          id: wakeupId,
+          organizationId: this.organizationId,
+          loopId: "manual",
+          source: "agent",
+          triggerDetail: "ceo-delegation",
+          reason: `Delegated by agent/ceo to ${action.agentId}`,
+          agentId: action.agentId,
+          payloadJson: JSON.stringify({
+            prompt,
+            adapter,
+            sessionId,
+            workItemId: workItem.id,
+            workflowRunId: workItem.workflowRunId,
+            traceId: sessionId,
+          }),
+          status: "queued",
+          idempotencyKey: `delegated-run:${workItem.id}`,
+          requestedAt,
+          requestedByActorId: "agent/ceo",
+          requestedByActorType: "agent",
+        } as never)
+        .onConflictDoNothing()
+        .run();
+      tx.insert(sessionsTable)
+        .values({
+          id: sessionId,
+          organizationId: this.organizationId,
+          wakeupId,
+          agentId: action.agentId,
+          adapter,
+          runtimeJson: "{}",
+          prompt,
+          configJson: "{}",
+          status: "queued",
+        })
+        .onConflictDoNothing()
+        .run();
+    });
+  }
+
   private async persistAttemptOutput(input: {
     result: AdapterExecutionResult;
     attempt: AgentAttempt;
@@ -1295,7 +1694,22 @@ export class WorkerDaemon {
     repositoryWork: boolean;
   }): Promise<void> {
     const successful = input.result.exitCode === 0 && !input.result.timedOut;
-    const artifactDeclarations = declaredArtifacts(input.workItem.metadata);
+    let artifactDeclarations = declaredArtifacts(input.workItem.metadata);
+    if (
+      !input.repositoryWork &&
+      input.attempt.role === "maker" &&
+      artifactDeclarations.length === 0
+    ) {
+      const outputPaths = await listWorkspaceFiles(input.workspacePath);
+      if (outputPaths.length > 32) {
+        throw new Error("General work produced more than 32 artifact files");
+      }
+      artifactDeclarations = outputPaths.map((path) => ({
+        path,
+        kind: "other",
+        mediaType: outputMediaType(path),
+      }));
+    }
     const changedPaths = input.repositoryWork
       ? changedPathsFromStatus((await this.git.status(input.workspacePath)).entries)
       : input.attempt.role === "checker"
@@ -1318,6 +1732,13 @@ export class WorkerDaemon {
         metadata: { paths: changedPaths },
       });
       throw new Error(`post-run policy denied changes: ${policyDecision.reason}`);
+    }
+    if (successful && input.attempt.role === "maker") {
+      await validateEvidencePolicy(
+        input.workspacePath,
+        input.workItem.metadata,
+        artifactDeclarations.map((artifact) => artifact.path),
+      );
     }
     const commit =
       successful &&
@@ -1359,6 +1780,7 @@ export class WorkerDaemon {
           exitCode: input.result.exitCode,
           timedOut: input.result.timedOut,
           summary: input.result.summary ?? null,
+          resultJson: input.result.resultJson ?? null,
           errorMessage: input.result.errorMessage ?? null,
           usage: input.result.usage ?? null,
           costUsd: input.result.costUsd ?? null,
@@ -1376,6 +1798,7 @@ export class WorkerDaemon {
     }
 
     const workspaceRoot = await realpath(input.workspacePath);
+    let artifactBytes = 0;
     for (const declaration of artifactDeclarations) {
       if (isAbsolute(declaration.path)) throw new Error("Declared artifact path must be relative");
       const source = await realpath(resolve(workspaceRoot, declaration.path));
@@ -1383,8 +1806,16 @@ export class WorkerDaemon {
       if (!safePath || safePath.startsWith("..") || isAbsolute(safePath)) {
         throw new Error(`Declared artifact escapes the workspace: ${declaration.path}`);
       }
-      if (!(await stat(source)).isFile()) {
+      const sourceStat = await stat(source);
+      if (!sourceStat.isFile()) {
         throw new Error(`Declared artifact is not a file: ${declaration.path}`);
+      }
+      if (sourceStat.size > 16 * 1024 * 1024) {
+        throw new Error(`Declared artifact exceeds 16 MiB: ${declaration.path}`);
+      }
+      artifactBytes += sourceStat.size;
+      if (artifactBytes > 64 * 1024 * 1024) {
+        throw new Error("Declared artifacts exceed 64 MiB total");
       }
       const destination = join(attemptRoot, "files", safePath);
       await mkdir(resolve(destination, ".."), { recursive: true });

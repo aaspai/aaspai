@@ -42,4 +42,39 @@ describe("dry_run_local adapter", () => {
     expect(result.ok).toBe(true);
     expect(result.checks.length).toBeGreaterThan(0);
   });
+
+  it("emits a structured CEO hire and delegation for a company objective", async () => {
+    const result = await dryRunLocal.execute({
+      protocolVersion: 1 as const,
+      runId: "run_company",
+      organizationId: "default",
+      agent: {
+        id: "agent/ceo",
+        organizationId: "default",
+        name: "CEO",
+        adapterType: "dry_run_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {
+        cwd: "/tmp",
+        role: "ceo",
+        prompt: "Company objective: validate the agency offer and build the operating plan.",
+      },
+      onLog: async () => {},
+      onMeta: async () => {},
+    });
+
+    expect(result.resultJson).toMatchObject({
+      dryRun: true,
+      companyActions: [
+        {
+          type: "hire_and_delegate",
+          agentId: "agent/market-researcher",
+          role: "researcher",
+        },
+      ],
+    });
+  });
 });

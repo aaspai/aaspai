@@ -69,9 +69,12 @@ resulting source changes. A normal release deletes the sandbox. A resumable
 release stops it; the next invocation reconnects to the same lease and starts it
 before resuming the provider session.
 
-Production runs can select the versioned `aaspai-opencode-1-18-5-v1` Daytona
+Production runs can select the versioned `aaspai-opencode-1-18-5-v2` Daytona
 snapshot through `DAYTONA_SNAPSHOT`. Bootstrap remains as an idempotent fallback
-for accounts that have not built the snapshot.
+for accounts that have not built the snapshot. The image includes CA
+certificates, Git, curl, wget, jq, ripgrep, Python, build tools, archive tools,
+and a lightweight web-search CLI so agents can use governed web tools without
+installing basic operating-system dependencies during each attempt.
 
 Real acceptance evidence currently covers:
 
@@ -97,8 +100,7 @@ remains false.
 
 ## Real-environment acceptance
 
-The runtime acceptance requires `DAYTONA_API_KEY`. Its direct provider-session
-resume probe uses an explicitly selected `AASPAI_HOST_AUTH_PATH`:
+The runtime boundary acceptance requires `DAYTONA_API_KEY`:
 
 ```sh
 yarn workspace @aaspai/runtime test:real:daytona
@@ -121,4 +123,7 @@ yarn workspace @aaspai/worker test:real:daytona
 
 Production must configure a reachable gateway with
 `AASPAI_GATEWAY_CONTROL_URL` and `AASPAI_GATEWAY_CONTROL_TOKEN`; the test gateway
-is acceptance infrastructure, not the production gateway deployment.
+is acceptance infrastructure, not the production gateway deployment. Host
+provider-auth files are never copied into Daytona. `AASPAI_HOST_AUTH_PATH` is
+rejected for sandbox execution; provider access must use the attempt-scoped
+gateway credential.

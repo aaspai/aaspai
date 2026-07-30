@@ -6,14 +6,14 @@ export async function POST(request: Request) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-  const steps = Array.isArray(body?.steps)
-    ? body.steps.filter(
-        (step): step is string => typeof step === "string" && step.trim().length > 0,
-      )
-    : [];
-  if (typeof body?.title !== "string" || !body.title.trim() || steps.length === 0) {
+  if (
+    typeof body?.title !== "string" ||
+    !body.title.trim() ||
+    typeof body.mandate !== "string" ||
+    !body.mandate.trim()
+  ) {
     return NextResponse.json(
-      { error: "A goal title and at least one pipeline step are required" },
+      { error: "An objective and direction for the CEO are required" },
       { status: 400 },
     );
   }
@@ -23,7 +23,8 @@ export async function POST(request: Request) {
     title: body.title.trim(),
     description: typeof body.description === "string" ? body.description : undefined,
     projectTitle: typeof body.projectTitle === "string" ? body.projectTitle : undefined,
-    steps,
+    mandate: body.mandate,
+    requestedByActorId: user.id,
   });
   return NextResponse.json({ data: result }, { status: 201 });
 }

@@ -24,17 +24,21 @@ workspace/
 test/
 .gstack/
 
-# aaspai runtime artifacts; definitions and config remain versioned
-.aaspai/state.db
-.aaspai/state.db-journal
-.aaspai/state.db-wal
-.aaspai/state.db-shm
-.aaspai/views/
-.aaspai/events/
-.aaspai/tmp/
-.aaspai/*.pid
+# aaspai runtime artifacts; agent, knowledge, loop, and config definitions remain versionable
+.aaspai/*
+!.aaspai/agents/
+!.aaspai/knowledge/
+!.aaspai/loops/
+!.aaspai/aaspai.config.json
+!.aaspai/AGENTS.md
+.aaspai/artifacts/
+.aaspai/workspaces/
+.aaspai/*.db
+.aaspai/*.db-*
 .aaspai/*.log
+.aaspai/*.pid
 .aaspai/frontend-onboarding.json
+.aaspai/web-auth.json
 
 # Test dumps (per-target scenario results, input/result.json)
 .aaspai-e2e/
@@ -53,5 +57,7 @@ Thumbs.db
 scratch/
 tmp/
 playground/
+.playwright-cli/
+output/
 
 # `docs/` is public concept documentation and IS committed.

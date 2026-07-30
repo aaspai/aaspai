@@ -317,6 +317,25 @@ export async function listRecentSessions(limit = 20): Promise<SessionSummary[]> 
   }
 }
 
+export async function getLatestAgentBriefing(agentId: string): Promise<string | null> {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) return null;
+  const rows = await getDefaultDb()
+    .db.select({ resultJson: sessions.resultJson })
+    .from(sessions)
+    .where(eq(sessions.agentId, agentId))
+    .orderBy(desc(sessions.finishedAt))
+    .limit(1);
+  const result = safeJson(rows[0]?.resultJson);
+  return typeof result?.summary === "string" && result.summary.trim()
+    ? result.summary
+        .replace(/[*_`#]/g, "")
+        .replace(/\s+/g, " ")
+        .replace(/^Got it:\s*/i, "")
+        .trim()
+    : null;
+}
+
 export async function getSession(id: string): Promise<SessionSummary | null> {
   ensureWorkspaceEnv();
   if (!isAaspaiWorkspace()) return null;

@@ -167,6 +167,18 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
         400,
       );
     }
+    if (
+      externalAction &&
+      !isApprovedConnectorOperation(externalAction.connector, externalAction.operation)
+    ) {
+      return c.json(
+        {
+          error: "connector_denied",
+          message: "Connector operation is not approved for external actions",
+        },
+        400,
+      );
+    }
     const workItem = await store.createWorkItem({
       organizationId: auth.principal.organizationId,
       goalId: body.goalId as string,
@@ -304,6 +316,17 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
         409,
       );
     }
+    const approvals = await store.listApprovalsForWorkItem(item.id);
+    if (
+      !approvals.some(
+        (approval) => approval.actorType === "human" && approval.status === "approved",
+      )
+    ) {
+      return c.json(
+        { error: "approval_required", message: "External action requires human approval" },
+        409,
+      );
+    }
     const expected = parseExternalActionPlan(item.metadata.externalAction);
     const requested = parseExternalActionPlan({
       connector: body.connector,
@@ -317,6 +340,15 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
           message: "External action does not match the approved work item plan",
         },
         409,
+      );
+    }
+    if (!isApprovedConnectorOperation(requested.connector, requested.operation)) {
+      return c.json(
+        {
+          error: "connector_denied",
+          message: "Connector operation is not approved for external actions",
+        },
+        403,
       );
     }
     let claimed: Awaited<ReturnType<ExecutionStore["claimExternalAction"]>>;
@@ -801,6 +833,18 @@ function parseExternalActionPlan(value: unknown): {
     return null;
   }
   return { connector: value.connector, operation: value.operation, payload: value.payload };
+}
+
+const APPROVED_CONNECTOR_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
+  email: ["send"],
+  linkedin: ["send_message"],
+  crm: ["create_lead", "update_lead", "book_meeting", "create_proposal", "mark_closed"],
+  calendar: ["book"],
+  slack: ["post.message"],
+};
+
+function isApprovedConnectorOperation(connector: string, operation: string): boolean {
+  return APPROVED_CONNECTOR_OPERATIONS[connector]?.includes(operation) === true;
 }
 
 function boundedConcurrency(value: unknown, fallback: number): number {

@@ -39,7 +39,12 @@ export default async function ExecutionPage() {
             {goals.map((goal) => (
               <div key={goal.id} className="space-y-2">
                 <div className="flex items-center justify-between gap-4 text-sm">
-                  <span className="font-medium">{goal.title}</span>
+                  <Link
+                    href={`/goals/${encodeURIComponent(goal.id)}`}
+                    className="font-medium hover:underline"
+                  >
+                    {goal.title}
+                  </Link>
                   <span className="text-muted-foreground">
                     {goal.percent}% · {goal.completed}/{goal.total} completed
                   </span>
@@ -107,9 +112,20 @@ export default async function ExecutionPage() {
                           </Badge>
                         </Link>
                       </td>
-                      <td className="px-2 py-2">{attempt.agentId}</td>
+                      <td className="px-2 py-2">
+                        <Link href={`/agents/${attempt.agentId}`} className="hover:underline">
+                          {attempt.agentId}
+                        </Link>
+                      </td>
                       <td className="px-2 py-2 text-muted-foreground">{attempt.harness}</td>
-                      <td className="px-2 py-2 font-mono text-xs">{attempt.workItemId}</td>
+                      <td className="px-2 py-2 font-mono text-xs">
+                        <Link
+                          href={`/work/${encodeURIComponent(attempt.workItemId)}`}
+                          className="hover:underline"
+                        >
+                          {attempt.workItemId}
+                        </Link>
+                      </td>
                       <td className="px-2 py-2 text-xs text-muted-foreground">
                         {attempt.createdAt}
                       </td>
