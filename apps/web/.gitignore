@@ -2,6 +2,7 @@
 .next/
 .next-dev-*/
 .next-dev-*.tsconfig.json
+.next-dev.tsconfig.json
 out/
 build/
 

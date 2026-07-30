@@ -133,6 +133,7 @@ your-aaspai-project/
 
 ```bash
 yarn install              # corepack + dependencies
+yarn dev                  # API + worker + web command center
 yarn build                # build all packages
 yarn test                 # run all tests
 yarn lint                 # biome

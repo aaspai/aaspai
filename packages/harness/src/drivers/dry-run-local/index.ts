@@ -101,6 +101,30 @@ function synthesizeResponse(prompt: string, systemPrompt: string, role: string):
   ].join("\n");
 }
 
+function synthesizeCompanyActions(prompt: string, role: string): Array<Record<string, string>> {
+  const lower = prompt.toLowerCase();
+  if (
+    role !== "ceo" ||
+    lower.includes("do not hire") ||
+    (!lower.includes("company objective:") && !lower.includes("hire"))
+  ) {
+    return [];
+  }
+  return [
+    {
+      type: "hire_and_delegate",
+      agentId: "agent/market-researcher",
+      title: "Market Researcher",
+      role: "researcher",
+      description:
+        "Validates target customer niches, demand signals, competitor positioning, and offer assumptions.",
+      workTitle: "Validate the first client niche and agency offer",
+      workDescription:
+        "Research the most promising local-service niche, document the strongest demand evidence, test the proposed website offer assumptions, and recommend the next smallest validation step. Keep all work internal and cite the evidence used.",
+    },
+  ];
+}
+
 /**
  * CEO-style response. Recognizes a few common intents and gives
  * concise, actionable replies that point at the right CLI command.
@@ -259,7 +283,16 @@ export const dryRunLocal: ServerAdapterModule = {
       typeof ctx.context === "object" && ctx.context !== null && "role" in ctx.context
         ? String((ctx.context as { role: unknown }).role ?? "general")
         : "general";
-    const response = synthesizeResponse(prompt, systemPrompt, role);
+    const companyActions = synthesizeCompanyActions(prompt, role);
+    const response =
+      companyActions.length > 0
+        ? [
+            "I found a current capability gap in customer and offer validation.",
+            "",
+            "I am hiring a **Market Researcher** and delegating the first evidence-gathering work item now.",
+            "The company run remains active until that employee completes the assignment.",
+          ].join("\n")
+        : synthesizeResponse(prompt, systemPrompt, role);
 
     const sessionId = shortId("dry");
 
@@ -298,7 +331,7 @@ export const dryRunLocal: ServerAdapterModule = {
       biller: "dry-run",
       model: "dry-run",
       // The full response — what the chat command reads.
-      resultJson: { text: response, role, dryRun: true },
+      resultJson: { text: response, role, dryRun: true, companyActions },
       summary: response.split("\n").slice(0, 3).join(" "),
       clearSession: false,
     };

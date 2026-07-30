@@ -22,7 +22,7 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
     <div className="flex h-[calc(100vh-4rem)] flex-col space-y-3">
       <div className="flex items-center justify-between gap-3">
         <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link href={`/agents/${encodeURIComponent(agentId)}`}>
+          <Link href={`/agents/${agentId}`}>
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
             Back to {agent.title}
           </Link>

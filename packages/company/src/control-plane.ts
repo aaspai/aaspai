@@ -42,6 +42,8 @@ export interface CompanyWorkItemInput {
   idempotencyKey: string;
   metadata: Record<string, unknown>;
   governance: Record<string, unknown>;
+  workKind?: "repository" | "general";
+  deliveryMode?: "commit" | "pull_request" | "artifact" | "none";
 }
 
 export interface CompanyWorkItemPort {
@@ -58,6 +60,9 @@ export interface DelegateWorkInput extends RoutingRequest {
   sourceCommitSha?: string | null;
   maxAttempts?: number;
   governance?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  workKind?: CompanyWorkItemInput["workKind"];
+  deliveryMode?: CompanyWorkItemInput["deliveryMode"];
 }
 
 export class CompanyControlPlaneError extends Error {}
@@ -194,6 +199,9 @@ export class CompanyControlPlaneService {
       sourceCommitSha: _sourceCommitSha,
       maxAttempts: _maxAttempts,
       governance: _governance,
+      metadata: _metadata,
+      workKind: _workKind,
+      deliveryMode: _deliveryMode,
       ...routingInput
     } = input;
     const request = routingRequestSchema.parse(routingInput);
@@ -221,12 +229,15 @@ export class CompanyControlPlaneService {
         maxAttempts: input.maxAttempts ?? 1,
         idempotencyKey: request.idempotencyKey,
         metadata: {
+          ...input.metadata,
           routedBy: request.requestedByAgentId,
           assignedAgentId: decision.selectedAgentId,
           risk: request.risk,
           capability: request.capability,
         },
         governance: input.governance ?? {},
+        workKind: input.workKind,
+        deliveryMode: input.deliveryMode,
       });
       workItemId = workItem.id;
     } catch (error) {

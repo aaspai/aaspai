@@ -10,7 +10,9 @@ export default async function OnboardingPage() {
   const user = await currentUser();
   const existingOnboarding = await readFrontendOnboarding();
   if (existingOnboarding?.completedAt) redirect("/company");
-  const providers = await listFrontendProviders();
+  const providers = (await listFrontendProviders()).filter(
+    (provider) => provider.type === "opencode_cli",
+  );
   return (
     <OnboardingWizard companyName={user?.companyName ?? "your company"} providers={providers} />
   );

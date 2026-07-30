@@ -31,9 +31,9 @@ const ROLE_LABEL: Record<string, string> = {
   general: "Generalist",
 };
 
-export default async function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function AgentDetailPage({ params }: { params: Promise<{ id: string[] }> }) {
   const { id } = await params;
-  const agentId = decodeURIComponent(id);
+  const agentId = id.map(decodeURIComponent).join("/");
 
   if (!isAaspaiWorkspace()) notFound();
 
@@ -66,7 +66,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
           </p>
         </div>
         <Button asChild>
-          <Link href={`/chat/${encodeURIComponent(agentId)}`}>
+          <Link href={`/chat/${agentId}`}>
             <MessagesSquare className="mr-1.5 h-4 w-4" />
             Chat with {agent.title}
           </Link>
@@ -85,7 +85,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
             <Row
               label="Reports to"
               value={agent.reportsTo ?? "—"}
-              href={agent.reportsTo ? `/agents/${encodeURIComponent(agent.reportsTo)}` : undefined}
+              href={agent.reportsTo ? `/agents/${agent.reportsTo}` : undefined}
             />
             <Separator />
             <div>
@@ -99,7 +99,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
                   {agent.manages.map((m) => (
                     <li key={m}>
                       <Link
-                        href={`/agents/${encodeURIComponent(m)}`}
+                        href={`/agents/${m}`}
                         className="text-sm text-foreground/80 hover:text-foreground hover:underline"
                       >
                         {m.replace(/^agent\//, "")}
@@ -118,7 +118,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
                   {agent.peers.map((p) => (
                     <li key={p}>
                       <Link
-                        href={`/agents/${encodeURIComponent(p)}`}
+                        href={`/agents/${p}`}
                         className="text-sm text-foreground/80 hover:text-foreground hover:underline"
                       >
                         {p.replace(/^agent\//, "")}
@@ -168,38 +168,37 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
           {ownSessions.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               No sessions yet for this agent.{" "}
-              <Link
-                href={`/chat/${encodeURIComponent(agentId)}`}
-                className="text-foreground hover:underline"
-              >
+              <Link href={`/chat/${agentId}`} className="text-foreground hover:underline">
                 Start one →
               </Link>
             </p>
           ) : (
             <ul className="space-y-2 text-sm">
               {ownSessions.map((s) => (
-                <li
-                  key={s.id}
-                  className="flex items-center justify-between gap-3 rounded-md border bg-background/50 px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <Badge
-                      variant={
-                        s.status === "succeeded"
-                          ? "default"
-                          : s.status === "failed"
-                            ? "destructive"
-                            : "secondary"
-                      }
-                    >
-                      {s.status}
-                    </Badge>
-                    <span className="ml-2 text-xs text-muted-foreground">via {s.adapter}</span>
-                  </div>
-                  <div className="shrink-0 text-right text-xs text-muted-foreground">
-                    <div>{formatRelative(s.startedAt)}</div>
-                    {s.durationMs != null && <div className="tabular-nums">{s.durationMs}ms</div>}
-                  </div>
+                <li key={s.id}>
+                  <Link
+                    href={`/sessions/${encodeURIComponent(s.id)}`}
+                    className="flex items-center justify-between gap-3 rounded-md border bg-background/50 px-3 py-2 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <div className="min-w-0">
+                      <Badge
+                        variant={
+                          s.status === "succeeded"
+                            ? "default"
+                            : s.status === "failed"
+                              ? "destructive"
+                              : "secondary"
+                        }
+                      >
+                        {s.status}
+                      </Badge>
+                      <span className="ml-2 text-xs text-muted-foreground">via {s.adapter}</span>
+                    </div>
+                    <div className="shrink-0 text-right text-xs text-muted-foreground">
+                      <div>{formatRelative(s.startedAt)}</div>
+                      {s.durationMs != null && <div className="tabular-nums">{s.durationMs}ms</div>}
+                    </div>
+                  </Link>
                 </li>
               ))}
             </ul>

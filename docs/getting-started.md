@@ -70,7 +70,13 @@ yarn workspace @aaspai/cli start loop create release-notes
 
 ## Run locally
 
-Use separate terminals:
+Start the API, durable worker, and web command center together:
+
+```sh
+yarn dev
+```
+
+Or use separate terminals:
 
 ```sh
 # API: http://127.0.0.1:7420
@@ -86,6 +92,12 @@ yarn workspace @aaspai/web dev
 The worker loads definitions from `.aaspai/`, polls durable wakeups, schedules
 eligible work, creates isolated execution workspaces, and records attempts and
 evidence in SQLite.
+
+The web onboarding flow launches real OpenCode work in Daytona; it does not
+fall back to `dry_run_local`. Before onboarding, configure `DAYTONA_API_KEY`,
+`AASPAI_GATEWAY_CONTROL_URL`, and `AASPAI_GATEWAY_CONTROL_TOKEN`. The gateway
+keeps permanent provider credentials outside the agent sandbox and issues only
+short-lived attempt credentials.
 
 For a single scheduler tick:
 

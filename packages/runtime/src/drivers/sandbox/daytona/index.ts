@@ -28,10 +28,7 @@ const DAYTONA_CAPABILITIES: ProviderCapabilities = {
 
 export const daytonaTarget: RuntimeTarget = createSdkSandboxTarget({
   driver: new DaytonaSandboxDriver({
-    // node:22-bookworm-slim has node + npm pre-installed; we install
-    // opencode-ai in the bootstrap step. For production deployments,
-    // pre-baking a "aaspai-daytona:latest" snapshot with opencode
-    // already installed would skip the ~30s install per lease.
+    snapshot: "aaspai-opencode-1-18-5-v2",
     image: "node:22-bookworm-slim",
     timeoutMs: 120_000,
   }),

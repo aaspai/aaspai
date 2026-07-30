@@ -35,7 +35,8 @@ export default async function GovernancePage() {
     listAutonomyChangeRequests(overview.organizationId ?? undefined),
     listAutonomyProposals(overview.organizationId ?? undefined),
   ]);
-  const approvals = overview.approvals.filter((approval) => approval.status === "requested");
+  const approvals = overview.approvals;
+  const pendingApprovals = approvals.filter((approval) => approval.status === "requested");
   const verificationItems = overview.workItems.filter((item) => item.verificationRequired);
   const failedRequests = changeRequests.filter((request) => request.status === "failed");
 
@@ -52,8 +53,8 @@ export default async function GovernancePage() {
         </p>
       </header>
 
-      <section className="grid gap-3 sm:grid-cols-3">
-        <SummaryCard icon={ShieldCheck} label="Approvals waiting" value={approvals.length} />
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard icon={ShieldCheck} label="Approvals waiting" value={pendingApprovals.length} />
         <SummaryCard
           icon={FileCheck2}
           label="Verification-scoped work"
@@ -74,9 +75,9 @@ export default async function GovernancePage() {
       <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <Card>
           <CardHeader>
-            <CardTitle>Human decisions</CardTitle>
+            <CardTitle>Decision history</CardTitle>
             <CardDescription>
-              Work that is paused until an explicit approval is recorded.
+              Approval requests and their durable outcomes, newest first.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -87,14 +88,22 @@ export default async function GovernancePage() {
                 <div key={approval.id} className="rounded-lg border p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">
+                      <Link
+                        href={`/governance/${encodeURIComponent(approval.id)}`}
+                        className="block truncate text-sm font-medium hover:underline"
+                      >
                         {approval.workItemTitle ?? approval.workItemId}
-                      </p>
+                      </Link>
                       <p className="mt-1 text-xs text-muted-foreground">
                         {approval.reason || `Requested by ${approval.actorType}`}
                       </p>
                     </div>
-                    <Badge variant="outline">{approval.actorType}</Badge>
+                    <div className="flex gap-2">
+                      <Badge variant="outline">{approval.actorType}</Badge>
+                      <Badge variant={approval.status === "rejected" ? "destructive" : "secondary"}>
+                        {approval.status}
+                      </Badge>
+                    </div>
                   </div>
                   <div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground">
                     <span>Requested {formatRelative(approval.requestedAt)}</span>
@@ -134,16 +143,12 @@ export default async function GovernancePage() {
                   className="flex items-center justify-between gap-3 rounded-lg border p-3"
                 >
                   <div className="min-w-0">
-                    {item.attemptId ? (
-                      <Link
-                        className="truncate text-sm font-medium text-primary hover:underline"
-                        href={`/execution/attempts/${encodeURIComponent(item.attemptId)}`}
-                      >
-                        {item.title}
-                      </Link>
-                    ) : (
-                      <p className="truncate text-sm font-medium">{item.title}</p>
-                    )}
+                    <Link
+                      className="block truncate text-sm font-medium text-primary hover:underline"
+                      href={`/work/${encodeURIComponent(item.id)}`}
+                    >
+                      {item.title}
+                    </Link>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {item.status} · {item.evidenceCount} evidence item(s)
                     </p>

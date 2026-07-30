@@ -55,7 +55,12 @@ export default async function ExecutionAttemptPage({
           </p>
         </div>
         <div className="text-right text-xs text-muted-foreground">
-          <div>{detail.attempt.agentId}</div>
+          <Link
+            href={`/agents/${detail.attempt.agentId}`}
+            className="hover:text-foreground hover:underline"
+          >
+            {detail.attempt.agentId}
+          </Link>
           <div>{detail.attempt.harness}</div>
         </div>
       </header>
@@ -88,6 +93,7 @@ export default async function ExecutionAttemptPage({
             <Field
               label="Work item"
               value={String(detail.workItem?.title ?? detail.attempt.workItemId)}
+              href={`/work/${encodeURIComponent(detail.attempt.workItemId)}`}
             />
             <Field
               label="Definition revision"
@@ -221,16 +227,22 @@ function Field({
   value,
   mono,
   code,
+  href,
 }: {
   label: string;
   value: string;
   mono?: boolean;
   code?: boolean;
+  href?: string;
 }) {
   return (
     <div>
       <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
-      {code ? (
+      {href ? (
+        <Link href={href} className="mt-1 block break-all text-sm text-primary hover:underline">
+          {value}
+        </Link>
+      ) : code ? (
         <pre className="mt-1 max-h-36 overflow-auto rounded bg-muted p-3 text-xs">{value}</pre>
       ) : (
         <div className={`mt-1 break-all text-sm ${mono ? "font-mono" : ""}`}>{value}</div>

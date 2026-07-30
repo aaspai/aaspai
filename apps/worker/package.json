@@ -15,6 +15,9 @@
     "lint": "biome check .",
     "test": "vitest run --passWithNoTests",
     "test:real:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-daytona-webpage.ts",
+    "test:real:company:docker": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts docker",
+    "test:real:company:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts daytona",
+    "test:real:zedblock:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts daytona zedblock",
     "clean": "rimraf dist"
   },
   "dependencies": {

@@ -72,7 +72,7 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
           <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{session.id}</p>
         </div>
         <Button asChild variant="outline" size="sm">
-          <Link href={`/agents/${encodeURIComponent(session.agentId)}`}>
+          <Link href={`/agents/${session.agentId}`}>
             View agent <ChevronRight className="ml-1.5 h-3.5 w-3.5" />
           </Link>
         </Button>
@@ -82,7 +82,7 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
         <Stat
           label="Agent"
           value={session.agentId.replace(/^agent\//, "")}
-          href={`/agents/${encodeURIComponent(session.agentId)}`}
+          href={`/agents/${session.agentId}`}
           icon={Cpu}
         />
         <Stat label="Adapter" value={session.adapter} icon={Layers} />

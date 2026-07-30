@@ -20,6 +20,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { RunProcessOptions } from "@aaspai/contracts/runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -140,8 +141,9 @@ describe("e2e: opencode_cli driver", () => {
       cachedInputTokens: 0,
     });
     expect(result.costUsd).toBeCloseTo(0.5, 6);
-    // Summary is the first 500 chars of the assistant text
+    // The display summary is bounded, while resultJson preserves the full response.
     expect(result.summary).toBe("world");
+    expect((result.resultJson as { text: string }).text).toBe("world");
 
     // The onLog stream must have carried the assistant message
     // to the caller (in addition to the adapter's internal collection).
@@ -175,6 +177,80 @@ describe("e2e: opencode_cli driver", () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.summary).toBe("chunk (1/3)chunk (2/3)chunk (3/3)");
+    rmRf(cwd);
+  });
+
+  it("captures structured company_action tool input", async () => {
+    const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
+    const cwd = makeScratchDir("company-action-");
+    const result = await opencodeCli.execute(
+      buildAdapterContext({
+        prompt: "hire <e2e:company-action> <e2e:response:done>",
+        cwd,
+        runId: `run_company_action_${Date.now()}`,
+      }) as never,
+    );
+    expect((result.resultJson as { companyActions: unknown[] }).companyActions).toEqual([
+      { actions: [{ type: "hire_and_delegate" }] },
+    ]);
+    rmRf(cwd);
+  });
+
+  it("buffers split managed-runtime events and fails malformed company actions", async () => {
+    const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
+    const cwd = makeScratchDir("company-action-runtime-");
+    const run = async (payload: string, status = "completed") => {
+      const toolEvent = `${JSON.stringify({
+        type: "tool_use",
+        sessionID: "session-managed",
+        part: {
+          type: "tool",
+          tool: "company_action",
+          callID: "call-1",
+          state: { status, input: { payload }, output: status === "completed" ? "ok" : "denied" },
+        },
+      })}\n`;
+      const split = Math.floor(toolEvent.length / 2);
+      return opencodeCli.execute({
+        ...buildAdapterContext({
+          prompt: "hire through managed execution",
+          cwd,
+          runId: `run_company_action_runtime_${Date.now()}`,
+        }),
+        execution: {
+          run: async (options: RunProcessOptions) => {
+            await options.onLog?.("stdout", toolEvent.slice(0, split));
+            await options.onLog?.("stdout", toolEvent.slice(split));
+            const now = new Date().toISOString();
+            return {
+              exitCode: 0,
+              timedOut: false,
+              stdout: toolEvent,
+              stderr: "",
+              startedAt: now,
+              finishedAt: now,
+              durationMs: 1,
+            };
+          },
+        },
+      } as never);
+    };
+
+    const valid = await run(JSON.stringify({ actions: [{ type: "hire_and_delegate" }] }));
+    expect(valid.exitCode).toBe(0);
+    expect((valid.resultJson as { companyActions: unknown[] }).companyActions).toEqual([
+      { actions: [{ type: "hire_and_delegate" }] },
+    ]);
+
+    const failed = await run(
+      JSON.stringify({ actions: [{ type: "hire_and_delegate" }] }),
+      "failed",
+    );
+    expect((failed.resultJson as { companyActions: unknown[] }).companyActions).toEqual([]);
+
+    const invalid = await run("{");
+    expect(invalid.exitCode).toBe(1);
+    expect(invalid.errorMessage).toContain("JSON");
     rmRf(cwd);
   });
 

@@ -23,6 +23,9 @@ Run these processes from the same checked-out workspace:
 | Web | `yarn workspace @aaspai/web start` | Requires a prior web build and trusted access to the workspace/database. |
 | CLI | `yarn workspace @aaspai/cli start ...` | On-demand administrative and user commands. |
 
+For local development, `yarn dev` starts the API, worker, and Next.js
+development server together.
+
 Build and initialize first:
 
 ```sh
@@ -70,8 +73,9 @@ yarn workspace @aaspai/cli start db backup
 - Do not bind the API publicly unless authentication is configured and every
   exposed route has been reviewed for organization scoping.
 - Execution mutations fail closed when the API auth verifier is absent.
-- External CLI credentials are managed by those CLIs or the process
-  environment, not by definition files.
+- Daytona agent sandboxes receive short-lived attempt credentials from the
+  configured gateway. Permanent provider credentials stay outside agent
+  sandboxes and definition files.
 - Treat the worker as privileged: it can create workspaces and invoke local or
   remote runtimes according to policy.
 

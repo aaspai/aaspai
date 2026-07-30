@@ -1,6 +1,9 @@
-import { getDefaultDb, runMigrations } from "@aaspai/db";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import { getDefaultDb, runMigrations, sessions, wakeups } from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
-import { ensureWorkspaceEnv } from "@/lib/aaspai";
+import { DEFAULT_AGENTS_DIR, FileAgentConfigSource } from "@aaspai/file-loader";
+import { ensureWorkspaceEnv, workspaceRoot } from "@/lib/aaspai";
 import { ensureFrontendWorkspace } from "@/lib/workspace-bootstrap";
 
 export async function createFrontendGoal(input: {
@@ -9,7 +12,8 @@ export async function createFrontendGoal(input: {
   title: string;
   description?: string;
   projectTitle?: string;
-  steps: string[];
+  mandate: string;
+  requestedByActorId: string;
 }) {
   ensureWorkspaceEnv();
   await ensureFrontendWorkspace(input.companyName);
@@ -36,7 +40,7 @@ export async function createFrontendGoal(input: {
   const revision = await store.createDefinitionRevision({
     organizationId: input.organizationId,
     repositoryId: repository.id,
-    commitSha: "frontend-definition",
+    commitSha: "0000000",
     sourcePath: ".",
     dirty: true,
     contentHash: "frontend-definition",
@@ -49,24 +53,107 @@ export async function createFrontendGoal(input: {
     sourceId: goal.id,
     idempotencyKey: `frontend:${goal.id}`,
   });
-  const workItems: Awaited<ReturnType<ExecutionStore["createWorkItem"]>>[] = [];
-  let previous: string | undefined;
-  for (const [index, step] of input.steps.entries()) {
-    const item = await store.createWorkItem({
-      organizationId: input.organizationId,
-      goalId: goal.id,
-      projectId: project.id,
-      repositoryId: repository.id,
-      workflowRunId: run.id,
-      title: step.trim(),
-      status: index === 0 ? "ready" : "proposed",
-      priority: input.steps.length - index,
-      idempotencyKey: `frontend:${goal.id}:${index}`,
-      metadata: { ownerAgentId: "agent/developer", validationOwnerAgentId: "agent/tester" },
+  const workItem = await store.createWorkItem({
+    organizationId: input.organizationId,
+    goalId: goal.id,
+    projectId: project.id,
+    repositoryId: repository.id,
+    workflowRunId: run.id,
+    definitionRevisionId: revision.id,
+    title: input.mandate.trim(),
+    description: [
+      `Company objective: ${goal.title}`,
+      goal.description ? `Success outcome: ${goal.description}` : "",
+      "Create the operating plan, do the next useful work, and flag capability gaps or founder decisions that block progress.",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    status: "ready",
+    priority: 1,
+    idempotencyKey: `frontend:${goal.id}:ceo-mandate`,
+    metadata: { ownerAgentId: "agent/ceo" },
+    workKind: "general",
+    deliveryMode: "none",
+  });
+  const queued = await queueAgentWork({
+    organizationId: input.organizationId,
+    actorId: input.requestedByActorId,
+    goalId: goal.id,
+    workItemId: workItem.id,
+    agentId: "agent/ceo",
+  });
+  return { goal, project, repository, run, workItems: [workItem], queued };
+}
+
+export async function queueAgentWork(input: {
+  organizationId: string;
+  actorId: string;
+  goalId: string;
+  workItemId: string;
+  agentId: string;
+}) {
+  ensureWorkspaceEnv();
+  const db = getDefaultDb();
+  const store = new ExecutionStore(db.db);
+  const goal = await store.getGoal(input.goalId);
+  const item = await store.getWorkItem(input.workItemId);
+  if (!goal || !item || item.organizationId !== input.organizationId || !item.workflowRunId)
+    throw new Error("Work item is not runnable");
+
+  const source = new FileAgentConfigSource(join(workspaceRoot(), DEFAULT_AGENTS_DIR));
+  await source.start();
+  try {
+    const agent = await source.get(input.agentId);
+    const runtime =
+      typeof agent.runtimeConfig.default === "object" && agent.runtimeConfig.default
+        ? agent.runtimeConfig.default
+        : { kind: "local" };
+    const sessionId = `sess_${randomUUID()}`;
+    const wakeupId = `wake_${randomUUID()}`;
+    const prompt = `${item.description}\n\nMandate: ${item.title}\n\nUse the company mission and operating principles in your agent definition.`;
+    const now = new Date().toISOString();
+    db.db.transaction((tx) => {
+      tx.insert(wakeups)
+        .values({
+          id: wakeupId,
+          organizationId: input.organizationId,
+          loopId: "manual",
+          source: "web",
+          triggerDetail: "company-direction",
+          reason: `CEO mandate ${item.id}`,
+          agentId: agent.id,
+          payloadJson: JSON.stringify({
+            prompt,
+            adapter: agent.adapter,
+            runtime,
+            sessionId,
+            workItemId: item.id,
+            workflowRunId: item.workflowRunId,
+            traceId: sessionId,
+          }),
+          status: "queued",
+          idempotencyKey: `frontend-run:${item.id}`,
+          requestedAt: now,
+          requestedByActorId: input.actorId,
+          requestedByActorType: "user",
+        } as never)
+        .run();
+      tx.insert(sessions)
+        .values({
+          id: sessionId,
+          organizationId: input.organizationId,
+          wakeupId,
+          agentId: agent.id,
+          adapter: agent.adapter,
+          runtimeJson: JSON.stringify(runtime),
+          prompt,
+          configJson: "{}",
+          status: "queued",
+        })
+        .run();
     });
-    if (previous) await store.addWorkItemDependency(input.organizationId, item.id, previous);
-    workItems.push(item);
-    previous = item.id;
+    return { sessionId, wakeupId, status: "queued" as const };
+  } finally {
+    await source.stop();
   }
-  return { goal, project, repository, run, workItems };
 }

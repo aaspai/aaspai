@@ -169,6 +169,7 @@ export class HarnessExecutionPlanRunner {
         context: {
           cwd: input.workspace.path,
           prompt: input.plan.prompt,
+          systemPrompt: profile?.agent.systemPrompt ?? "",
           role: agent.role,
         },
         execution: {

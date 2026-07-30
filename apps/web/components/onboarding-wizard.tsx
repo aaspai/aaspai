@@ -20,7 +20,7 @@ export function OnboardingWizard({
   providers: Provider[];
 }) {
   const router = useRouter();
-  const firstReady = providers.find((provider) => provider.ready)?.type ?? "dry_run_local";
+  const firstReady = providers.find((item) => item.ready)?.type ?? "opencode_cli";
   const [provider, setProvider] = useState(firstReady);
   const selectedProvider = providers.find((item) => item.type === provider) ?? providers[0];
   const [model, setModel] = useState(selectedProvider?.models[0]?.id ?? "");
@@ -28,7 +28,7 @@ export function OnboardingWizard({
   const [instructions, setInstructions] = useState("");
   const [goalTitle, setGoalTitle] = useState("");
   const [goalOutcome, setGoalOutcome] = useState("");
-  const [steps, setSteps] = useState([{ id: "step-1", value: "Define the first deliverable" }]);
+  const [firstPriority, setFirstPriority] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -47,7 +47,7 @@ export function OnboardingWizard({
           ceoInstructions: instructions,
           goalTitle,
           goalOutcome,
-          steps: steps.map((step) => step.value).filter(Boolean),
+          firstPriority,
         }),
       });
       const body = (await response.json()) as { error?: string };
@@ -72,8 +72,8 @@ export function OnboardingWizard({
             Put the CEO in the driver's seat
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {companyName} starts with one provider and model, one company agenda, and one measurable
-            goal.
+            {companyName} starts with a founder mandate and one CEO. The CEO creates the plan and
+            proposes hires only when the work requires them.
           </p>
         </header>
 
@@ -82,7 +82,8 @@ export function OnboardingWizard({
             <CardHeader>
               <CardTitle>1. Choose the CEO's execution engine and model</CardTitle>
               <CardDescription>
-                Only verified local providers can be selected. Dry-run is safe for a first test.
+                OpenCode runs in Daytona with short-lived gateway credentials. Simulation is not
+                used for company work.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -146,14 +147,14 @@ export function OnboardingWizard({
 
           <Card>
             <CardHeader>
-              <CardTitle>2. Give the CEO direction</CardTitle>
+              <CardTitle>2. Define the company</CardTitle>
               <CardDescription>
                 These instructions become the CEO's durable company context.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="ceo-agenda">Core agenda</Label>
+                <Label htmlFor="ceo-agenda">Mission</Label>
                 <Textarea
                   id="ceo-agenda"
                   value={agenda}
@@ -164,7 +165,7 @@ export function OnboardingWizard({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="ceo-instructions">Operating instructions</Label>
+                <Label htmlFor="ceo-instructions">Principles and boundaries</Label>
                 <Textarea
                   id="ceo-instructions"
                   value={instructions}
@@ -179,9 +180,9 @@ export function OnboardingWizard({
 
           <Card>
             <CardHeader>
-              <CardTitle>3. Set the first company goal</CardTitle>
+              <CardTitle>3. Set the first measurable objective</CardTitle>
               <CardDescription>
-                The CEO starts with an ordered pipeline, not an empty dashboard.
+                Give the outcome and immediate priority. The CEO decides how to achieve it.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -206,36 +207,15 @@ export function OnboardingWizard({
                   minLength={3}
                 />
               </div>
-              <div className="space-y-2">
-                <Label>First pipeline steps</Label>
-                {steps.map((step, index) => (
-                  <Input
-                    key={step.id}
-                    value={step.value}
-                    onChange={(event) =>
-                      setSteps((current) =>
-                        current.map((value, stepIndex) =>
-                          stepIndex === index ? { ...value, value: event.target.value } : value,
-                        ),
-                      )
-                    }
-                    aria-label={`Onboarding pipeline step ${index + 1}`}
-                    required
-                  />
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    setSteps((current) => [
-                      ...current,
-                      { id: `step-${current.length + 1}`, value: "" },
-                    ])
-                  }
-                >
-                  Add step
-                </Button>
+              <div className="space-y-1.5">
+                <Label htmlFor="first-priority">CEO&apos;s first priority</Label>
+                <Input
+                  id="first-priority"
+                  value={firstPriority}
+                  onChange={(event) => setFirstPriority(event.target.value)}
+                  placeholder="Validate our offer and choose the first client niche"
+                  required
+                />
               </div>
             </CardContent>
           </Card>
@@ -249,7 +229,7 @@ export function OnboardingWizard({
             </p>
           )}
           <Button className="w-full" disabled={busy}>
-            {busy ? "Setting up company..." : "Start with the CEO"}
+            {busy ? "Launching company..." : "Launch company"}
           </Button>
         </form>
       </div>

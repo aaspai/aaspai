@@ -152,13 +152,14 @@ function stepFinishEvent(sessionID, tokens, reason) {
   };
 }
 
-function toolUseEvent(sessionID, name) {
+function toolUseEvent(sessionID, name, input) {
   return {
     type: "tool_use",
     timestamp: Date.now(),
     sessionID,
     part: part("tool", {
       tool: name,
+      input,
       callID: `call_${Math.random().toString(36).slice(2, 10)}`,
       state: { status: "completed", output: "ok" },
     }),
@@ -222,6 +223,13 @@ async function runSuccessStream(prompt) {
 
   if (/<e2e:tool>/.test(prompt)) {
     emit(toolUseEvent(sessionID, "bash"));
+  }
+  if (/<e2e:company-action>/.test(prompt)) {
+    emit(
+      toolUseEvent(sessionID, "company_action", {
+        payload: '{"actions":[{"type":"hire_and_delegate"}]}',
+      }),
+    );
   }
 
   emit(stepFinishEvent(sessionID, tokens));

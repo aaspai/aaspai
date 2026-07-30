@@ -3,6 +3,7 @@ import http from "node:http";
 
 const controlToken = process.env.GATEWAY_CONTROL_TOKEN;
 const upstreamKey = process.env.OPENROUTER_API_KEY;
+const port = Number(process.env.GATEWAY_PORT || 8787);
 if (!controlToken || !upstreamKey) throw new Error("gateway credentials missing");
 
 const credentials = new Map();
@@ -86,4 +87,4 @@ http
       json(response, 500, { error: String(error) });
     }
   })
-  .listen(8787, "0.0.0.0");
+  .listen(port, "0.0.0.0");

@@ -8,13 +8,13 @@ import { listFrontendProviderModels } from "@/lib/provider-status";
 import { ensureFrontendWorkspace } from "@/lib/workspace-bootstrap";
 
 const bodySchema = z.object({
-  provider: z.enum(["codex_local", "claude_local", "opencode_cli", "dry_run_local"]),
+  provider: z.literal("opencode_cli"),
   model: z.string().trim().min(1).max(256),
   ceoAgenda: z.string().trim().min(10).max(10_000),
   ceoInstructions: z.string().trim().min(10).max(10_000),
   goalTitle: z.string().trim().min(3).max(300),
   goalOutcome: z.string().trim().min(3).max(10_000),
-  steps: z.array(z.string().trim().min(1).max(300)).min(1).max(20),
+  firstPriority: z.string().trim().min(3).max(500),
 });
 
 export async function POST(request: Request) {
@@ -25,6 +25,19 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "Complete the company setup before continuing" },
       { status: 400 },
+    );
+  }
+  if (
+    !process.env.DAYTONA_API_KEY ||
+    !process.env.AASPAI_GATEWAY_CONTROL_URL ||
+    !process.env.AASPAI_GATEWAY_CONTROL_TOKEN
+  ) {
+    return NextResponse.json(
+      {
+        error:
+          "Daytona and the attempt-credential gateway must be configured before launching a real company.",
+      },
+      { status: 503 },
     );
   }
 
@@ -40,7 +53,7 @@ export async function POST(request: Request) {
     config: { model: parsed.data.model },
     cwd: workspaceRoot(),
   });
-  if (parsed.data.provider !== "dry_run_local" && !environment.ok) {
+  if (!environment.ok) {
     return NextResponse.json(
       { error: `${parsed.data.provider} is not ready. Connect it on the setup page first.` },
       { status: 400 },
@@ -59,7 +72,8 @@ export async function POST(request: Request) {
     title: parsed.data.goalTitle,
     description: parsed.data.goalOutcome,
     projectTitle: `${parsed.data.goalTitle} delivery`,
-    steps: parsed.data.steps,
+    mandate: parsed.data.firstPriority,
+    requestedByActorId: user.id,
   });
   return NextResponse.json({ data: result }, { status: 201 });
 }

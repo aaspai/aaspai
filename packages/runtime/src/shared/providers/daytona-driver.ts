@@ -119,7 +119,7 @@ export class DaytonaSandboxDriver extends SdkSandboxDriver<Sandbox> {
     this.getCredentials();
     const client = this.getClient();
     const attemptId = randomUUID();
-    const snapshot = this.defaultSnapshot ?? (process.env.DAYTONA_SNAPSHOT?.trim() || undefined);
+    const snapshot = process.env.DAYTONA_SNAPSHOT?.trim() || this.defaultSnapshot;
     const baseParams = {
       ephemeral: input.reuseLease !== true,
       ...(input.reuseLease ? { autoDeleteInterval: -1 } : {}),
@@ -143,15 +143,36 @@ export class DaytonaSandboxDriver extends SdkSandboxDriver<Sandbox> {
             : {}),
         };
     let sandbox: Sandbox;
+    let usedSnapshot = Boolean(snapshot);
     try {
       sandbox = await client.create(params, {
         // Daytona SDK expects seconds, not ms
         timeout: Math.ceil((input.timeoutMs ?? this.defaultTimeoutMs) / 1000),
       });
     } catch (error) {
-      const leaked = await client.list({ "aaspai-attempt": attemptId }, 1, 10).catch(() => null);
-      await Promise.all(leaked?.items.map((item) => item.delete(60).catch(() => undefined)) ?? []);
-      throw error;
+      if (snapshot && error instanceof DaytonaNotFoundError) {
+        usedSnapshot = false;
+        try {
+          sandbox = await client.create(
+            { ...baseParams, image: this.defaultImage },
+            { timeout: Math.ceil((input.timeoutMs ?? this.defaultTimeoutMs) / 1000) },
+          );
+        } catch (fallbackError) {
+          const leaked = await client
+            .list({ "aaspai-attempt": attemptId }, 1, 10)
+            .catch(() => null);
+          await Promise.all(
+            leaked?.items.map((item) => item.delete(60).catch(() => undefined)) ?? [],
+          );
+          throw fallbackError;
+        }
+      } else {
+        const leaked = await client.list({ "aaspai-attempt": attemptId }, 1, 10).catch(() => null);
+        await Promise.all(
+          leaked?.items.map((item) => item.delete(60).catch(() => undefined)) ?? [],
+        );
+        throw error;
+      }
     }
 
     try {
@@ -183,7 +204,7 @@ export class DaytonaSandboxDriver extends SdkSandboxDriver<Sandbox> {
           sandboxId: sandbox.id,
           remoteCwd,
           state: sandbox.state,
-          ...(snapshot ? { snapshot } : { image: this.defaultImage }),
+          ...(usedSnapshot ? { snapshot } : { image: this.defaultImage }),
         },
       };
     } catch (error) {
@@ -197,16 +218,23 @@ export class DaytonaSandboxDriver extends SdkSandboxDriver<Sandbox> {
    * Idempotent — skips work that's already done.
    */
   private async bootstrapSandbox(sandbox: Sandbox): Promise<void> {
-    // 1. Git is used for the workspace baseline and by agentic CLIs.
-    const git = await sandbox.process.executeCommand("which git || true", "/", DEFAULT_ENV, 30);
-    if (!(git.result ?? "").trim()) {
+    // 1. Install the bounded baseline used by company agents and evidence checks.
+    const baseline = await sandbox.process.executeCommand(
+      "command -v git >/dev/null && command -v curl >/dev/null && command -v ddgr >/dev/null && command -v jq >/dev/null && command -v python3 >/dev/null && command -v rg >/dev/null && test -s /etc/ssl/certs/ca-certificates.crt; echo $?",
+      "/",
+      DEFAULT_ENV,
+      30,
+    );
+    if ((baseline.result ?? "").trim() !== "0") {
       const install = await sandbox.process.executeCommand(
-        "apt-get update -qq && apt-get install -y -qq git",
+        "apt-get update -qq && apt-get install -y -qq bash build-essential ca-certificates curl ddgr file git jq openssh-client openssl python3 python3-pip ripgrep rsync unzip wget zip && update-ca-certificates && rm -rf /var/lib/apt/lists/*",
         "/",
         DEFAULT_ENV,
         240,
       );
-      if (install.exitCode !== 0) throw new Error("daytona bootstrap failed to install git");
+      if (install.exitCode !== 0) {
+        throw new Error("daytona bootstrap failed to install the required tool baseline");
+      }
     }
 
     // 2. Check + install opencode
@@ -227,17 +255,10 @@ export class DaytonaSandboxDriver extends SdkSandboxDriver<Sandbox> {
       );
       console.log("[daytona] bootstrap: install result:", install.result);
     }
-    // 3. Upload host's auth.json if available
+    // Host provider credentials must never enter an agent-controlled sandbox.
     if (process.env.AASPAI_HOST_AUTH_PATH) {
-      await sandbox.process.executeCommand(
-        "mkdir -p /root/.local/share/opencode",
-        "/",
-        DEFAULT_ENV,
-        30,
-      );
-      await sandbox.fs.uploadFile(
-        process.env.AASPAI_HOST_AUTH_PATH,
-        "/root/.local/share/opencode/auth.json",
+      throw new Error(
+        "AASPAI_HOST_AUTH_PATH is not supported for Daytona; use attempt-scoped gateway credentials",
       );
     }
   }

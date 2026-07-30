@@ -11,6 +11,36 @@ afterEach(async () => {
 });
 
 describe("FileAgentConfigSource", () => {
+  it("waits for the initial scan when start is called concurrently", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aaspai-agent-source-"));
+    directories.push(root);
+    const agentDir = join(root, "tester");
+    await mkdir(agentDir);
+    await writeFile(
+      join(agentDir, "AGENT.md"),
+      `---
+id: agent/tester
+type: Agent
+title: Tester
+description: Verifies delivery.
+timestamp: 2026-07-24T00:00:00Z
+adapter: dry_run_local
+role: qa
+---
+Verify the outcome.
+`,
+    );
+
+    const source = new FileAgentConfigSource(root);
+    const firstStart = source.start();
+    await source.start();
+    const agent = await source.get("agent/tester");
+    await firstStart;
+    await source.stop();
+
+    expect(agent.systemPrompt).toContain("Verify the outcome.");
+  });
+
   it("separates adapter and runtime config sidecars", async () => {
     const root = await mkdtemp(join(tmpdir(), "aaspai-agent-source-"));
     directories.push(root);

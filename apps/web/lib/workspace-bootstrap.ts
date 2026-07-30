@@ -24,15 +24,6 @@ export type FrontendOnboarding = {
   completedAt: string;
 };
 
-const agents = [
-  ["ceo", "Chief Executive Officer", "ceo", "null"],
-  ["operator", "Operations Lead", "operator", "agent/ceo", "dry_run_local"],
-  // Keep interactive roles dry-run by default. Verification must use an
-  // adapter whose autonomous tool policy can be enforced.
-  ["developer", "Developer", "engineer", "agent/operator", "dry_run_local"],
-  ["tester", "Tester", "qa", "agent/operator", "opencode_cli"],
-] as const;
-
 const defaultAgenda =
   "Set the company direction, turn the mission into measurable goals, and keep every team focused on the next useful outcome.";
 const defaultInstructions =
@@ -59,7 +50,7 @@ export async function ensureFrontendWorkspace(
   const root = workspaceRoot();
   const stored = await readStoredOnboarding();
   const onboarding: FrontendOnboarding = {
-    ceoProvider: options.ceoProvider ?? stored?.ceoProvider ?? "dry_run_local",
+    ceoProvider: options.ceoProvider ?? stored?.ceoProvider ?? "opencode_cli",
     ceoModel: options.ceoModel ?? stored?.ceoModel,
     ceoAgenda: options.ceoAgenda?.trim() || stored?.ceoAgenda || defaultAgenda,
     ceoInstructions:
@@ -89,31 +80,37 @@ export async function ensureFrontendWorkspace(
       "utf8",
     );
   }
-  for (const [id, title, role, reportsTo, defaultAdapter] of agents) {
-    const adapter = id === "ceo" ? onboarding.ceoProvider : defaultAdapter;
-    const directory = join(root, DEFAULT_AGENTS_DIR, id);
-    await mkdir(directory, { recursive: true });
-    const body =
-      id === "ceo"
-        ? `# ${title}\n\n## Core agenda\n${onboarding.ceoAgenda}\n\n## Operating instructions\n${onboarding.ceoInstructions}\n\nReport decisions, delegation, evidence, blockers, and the next action.\n`
-        : `# ${title}\n\nWork toward measurable company goals. Report evidence, blockers, and the next action.\n`;
-    await writeFile(
-      join(directory, "AGENT.md"),
-      `---\nid: agent/${id}\ntype: Agent\ntitle: "${title}"\ndescription: "${title} for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${adapter}\n${id === "ceo" && onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ${role}\nreportsTo: ${reportsTo}\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\nruntime:\n  default: ${adapter === "dry_run_local" ? "{ kind: local }" : "{ kind: sandbox, provider: daytona, remoteCwd: /workspace }"}\n---\n\n${body}`,
-      "utf8",
-    );
-    await writeFile(
-      join(directory, "config.yaml"),
-      "adapterConfig: {}\nruntimeConfig: {}\n",
-      "utf8",
-    );
-    await writeFile(
-      join(directory, "tools.yaml"),
-      id === "tester"
-        ? "allow:\n  - Read\n  - Bash\ndeny:\n  - Write\n  - Edit\nrequire_approval_for: []\n"
-        : "allow:\n  - Read\n  - ListSkills\n  - ListAgents\n  - AskUserQuestion\ndeny: []\nrequire_approval_for: []\n",
-      "utf8",
-    );
-    await writeFile(join(directory, "skills.lock.json"), "[]\n", "utf8");
-  }
+  const directory = join(root, DEFAULT_AGENTS_DIR, "ceo");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, "AGENT.md"),
+    `---\nid: agent/ceo\ntype: Agent\ntitle: "Chief Executive Officer"\ndescription: "Chief Executive Officer for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${onboarding.ceoProvider}\n${onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ceo\nreportsTo: null\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\nruntime:\n  default: ${onboarding.ceoProvider === "dry_run_local" ? "{ kind: local }" : "{ kind: sandbox, provider: daytona, remoteCwd: /workspace }"}\n---\n\n# Chief Executive Officer\n\n## Company mission\n${onboarding.ceoAgenda}\n\n## Operating principles and boundaries\n${onboarding.ceoInstructions}\n\nYou are the only initial employee. Turn founder direction into a measurable operating plan. Do useful work yourself until a specialist is justified. When a hire is needed, call the company_action tool with a hire_and_delegate action; never merely describe or invent an employee. Include the role, why it is needed now, scope, evidence requirements, and durable artifact paths. Never claim external actions happened. Ask for approval before spending money, contacting people, publishing, deploying, or changing company governance.\n\nEnd every run with decisions made, evidence produced, blockers, requested founder decisions, and the next action.\n`,
+    "utf8",
+  );
+  await writeFile(join(directory, "config.yaml"), "adapterConfig: {}\nruntimeConfig: {}\n", "utf8");
+  await writeFile(join(directory, "tools.yaml"), toolsYaml(onboarding.ceoProvider), "utf8");
+  await writeFile(join(directory, "skills.lock.json"), "[]\n", "utf8");
+}
+
+function toolsYaml(provider: string): string {
+  const tools =
+    provider === "codex_local"
+      ? ["apply_patch", "shell", "web_search", "view_image"]
+      : provider === "claude_local"
+        ? ["Bash", "Edit", "Glob", "Grep", "Read", "WebFetch", "WebSearch", "Write"]
+        : provider === "opencode_cli"
+          ? [
+              "bash",
+              "edit",
+              "read",
+              "write",
+              "glob",
+              "grep",
+              "list",
+              "webfetch",
+              "skill",
+              "company_action",
+            ]
+          : [];
+  return `allow:${tools.map((tool) => `\n  - ${tool}`).join("")}\ndeny: []\nrequire_approval_for: []\n`;
 }
