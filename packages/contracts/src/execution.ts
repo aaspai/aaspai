@@ -24,7 +24,16 @@ export const definitionRevisionSchema = z
   .strict();
 export type DefinitionRevision = z.infer<typeof definitionRevisionSchema>;
 
-export const goalStatusSchema = z.enum(["planned", "active", "blocked", "completed", "archived"]);
+export const goalStatusSchema = z.enum([
+  "planned",
+  "active",
+  "at_risk",
+  "blocked",
+  "achieved",
+  "completed",
+  "cancelled",
+  "archived",
+]);
 export type GoalStatus = z.infer<typeof goalStatusSchema>;
 
 export const goalSchema = z
@@ -33,6 +42,12 @@ export const goalSchema = z
     organizationId: identifierSchema,
     title: z.string().trim().min(1).max(512),
     description: z.string().max(16_384).default(""),
+    priority: z.number().int().default(0),
+    horizon: z.string().max(128).nullable().default(null),
+    successCriteriaJson: z.string().default("[]"),
+    targetAt: isoTimestampSchema.nullable().default(null),
+    reviewCadence: z.string().max(128).nullable().default(null),
+    ownerAgentId: identifierSchema.nullable().default(null),
     status: goalStatusSchema.default("planned"),
     createdAt: isoTimestampSchema,
     updatedAt: isoTimestampSchema,
@@ -40,7 +55,18 @@ export const goalSchema = z
   .strict();
 export type Goal = z.infer<typeof goalSchema>;
 
-export const projectStatusSchema = z.enum(["active", "paused", "completed", "archived"]);
+export const projectStatusSchema = z.enum([
+  "proposed",
+  "approved",
+  "staffed",
+  "active",
+  "reviewing",
+  "paused",
+  "blocked",
+  "completed",
+  "cancelled",
+  "archived",
+]);
 export type ProjectStatus = z.infer<typeof projectStatusSchema>;
 
 export const projectSchema = z
@@ -50,6 +76,12 @@ export const projectSchema = z
     goalId: identifierSchema,
     title: z.string().trim().min(1).max(512),
     description: z.string().max(16_384).default(""),
+    managerAgentId: identifierSchema.nullable().default(null),
+    budgetJson: z.string().default("{}"),
+    riskLevel: z.string().max(64).default("medium"),
+    reviewCadence: z.string().max(128).nullable().default(null),
+    healthStatus: z.string().max(64).default("healthy"),
+    successCriteriaJson: z.string().default("[]"),
     status: projectStatusSchema.default("active"),
     createdAt: isoTimestampSchema,
     updatedAt: isoTimestampSchema,
@@ -127,6 +159,11 @@ export const executionWorkItemSchema = z
     deliveryClaimOwner: identifierSchema.nullable().default(null),
     deliveryLeaseExpiresAt: isoTimestampSchema.nullable().default(null),
     workflowRunId: identifierSchema.nullable().default(null),
+    milestoneId: identifierSchema.nullable().default(null),
+    processBindingId: identifierSchema.nullable().default(null),
+    parentWorkItemId: identifierSchema.nullable().default(null),
+    assignedAgentId: identifierSchema.nullable().default(null),
+    alignmentRationale: z.string().trim().max(4_096).default(""),
     title: z.string().trim().min(1).max(512),
     description: z.string().max(16_384).default(""),
     status: workItemStatusSchema.default("proposed"),

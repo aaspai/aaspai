@@ -1,6 +1,6 @@
+import { ProcessImprovementService } from "@aaspai/company";
 import { knowledgeReviewInputSchema } from "@aaspai/contracts/knowledge";
 import { getDefaultDb, runMigrations } from "@aaspai/db";
-import { createKnowledgeCurator } from "@aaspai/knowledge";
 import { NextResponse } from "next/server";
 import { ensureWorkspaceEnv, isAaspaiWorkspace } from "@/lib/aaspai";
 
@@ -14,7 +14,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const input = knowledgeReviewInputSchema.parse({ ...body, proposalId: id });
     const handle = getDefaultDb();
     runMigrations(handle);
-    const result = await createKnowledgeCurator(handle.db).reviewProposal(input);
+    const result = await new ProcessImprovementService(handle.db).review(input);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(

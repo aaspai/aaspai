@@ -1,11 +1,22 @@
 import type { AuthVerifier } from "@aaspai/auth";
 import {
   CompanyControlPlaneService,
+  CompanyFullExportService,
   CompanyOperationsService,
   type CompanyWorkItemInput,
   OperationalGovernanceService,
+  ProcessImprovementService,
 } from "@aaspai/company";
-import { getDefaultDb } from "@aaspai/db";
+import {
+  and,
+  eq,
+  executionOperatorLeases,
+  executionOperatorRuns,
+  getDefaultDb,
+  isNull,
+  lt,
+  wakeups,
+} from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
 import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 import { LocalGitHubPullRequestProvider, LocalGitRepository } from "@aaspai/git";
@@ -20,6 +31,44 @@ export function registerCompanyRoutes(
     pullRequests?: PullRequestProvider;
   } = {},
 ): void {
+  app.post("/v1/company/process-improvements/evaluate", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const staleAfterDays =
+      typeof body.staleAfterDays === "number" ? body.staleAfterDays : undefined;
+    try {
+      const data = await new ProcessImprovementService(getDefaultDb().db).evaluate({
+        organizationId: auth.principal.organizationId,
+        actorId: auth.principal.userId,
+        staleAfterDays,
+      });
+      return c.json({ data }, 201);
+    } catch (error) {
+      return companyError(c, error);
+    }
+  });
+
+  app.post("/v1/company/process-improvements/:id/review", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body.action !== "string" || typeof body.reason !== "string")
+      return c.json({ error: "invalid_request", message: "action and reason are required" }, 400);
+    try {
+      const data = await new ProcessImprovementService(getDefaultDb().db).review({
+        organizationId: auth.principal.organizationId,
+        proposalId: c.req.param("id"),
+        actorId: auth.principal.userId,
+        action: body.action as "accept" | "reject" | "withdraw",
+        reason: body.reason,
+      });
+      return c.json({ data });
+    } catch (error) {
+      return companyError(c, error);
+    }
+  });
+
   app.get("/v1/company/operations", async (c) => {
     const auth = await authenticate(c, options.authVerifier, "read");
     if ("response" in auth) return auth.response;
@@ -304,6 +353,87 @@ export function registerCompanyRoutes(
     });
   });
 
+  app.get("/v1/company/recovery", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "read");
+    if ("response" in auth) return auth.response;
+    const db = getDefaultDb().db;
+    const [queuedWakeups, claimedWakeups, activeLeases, runs] = await Promise.all([
+      db
+        .select({ id: wakeups.id })
+        .from(wakeups)
+        .where(
+          and(
+            eq(wakeups.organizationId, auth.principal.organizationId),
+            eq(wakeups.status, "queued"),
+          ),
+        ),
+      db
+        .select({ id: wakeups.id, claimedAt: wakeups.claimedAt })
+        .from(wakeups)
+        .where(
+          and(
+            eq(wakeups.organizationId, auth.principal.organizationId),
+            eq(wakeups.status, "claimed"),
+          ),
+        ),
+      db
+        .select({ id: executionOperatorLeases.id, expiresAt: executionOperatorLeases.expiresAt })
+        .from(executionOperatorLeases)
+        .where(
+          and(
+            eq(executionOperatorLeases.organizationId, auth.principal.organizationId),
+            isNull(executionOperatorLeases.releasedAt),
+          ),
+        ),
+      db
+        .select({ id: executionOperatorRuns.id, status: executionOperatorRuns.status })
+        .from(executionOperatorRuns)
+        .where(eq(executionOperatorRuns.organizationId, auth.principal.organizationId)),
+    ]);
+    const now = new Date().toISOString();
+    return c.json({
+      data: {
+        queuedWakeups: queuedWakeups.length,
+        staleClaimedWakeups: claimedWakeups.filter(
+          (row) => row.claimedAt && row.claimedAt < new Date(Date.now() - 5 * 60_000).toISOString(),
+        ).length,
+        expiredManagerLeases: activeLeases.filter((row) => row.expiresAt < now).length,
+        blockedManagerRuns: runs.filter(
+          (row) => row.status === "blocked" || row.status === "failed",
+        ).length,
+      },
+    });
+  });
+
+  app.post("/v1/company/recovery/reconcile", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const db = getDefaultDb().db;
+    const cutoff = new Date(Date.now() - 5 * 60_000).toISOString();
+    try {
+      const [lostAttempts, releasedLocks, reclaimedWakeups] = await Promise.all([
+        new ExecutionStore(db).reconcileLostAttempts(cutoff, auth.principal.organizationId),
+        new ExecutionStore(db).reconcileExpiredLocks(undefined, auth.principal.organizationId),
+        db
+          .update(wakeups)
+          .set({ status: "queued", claimedAt: null, error: "requeued by recovery" })
+          .where(
+            and(
+              eq(wakeups.organizationId, auth.principal.organizationId),
+              eq(wakeups.status, "claimed"),
+              lt(wakeups.claimedAt, cutoff),
+            ),
+          )
+          .returning({ id: wakeups.id }),
+      ]);
+      return c.json({
+        data: { lostAttempts, releasedLocks, reclaimedWakeups: reclaimedWakeups.length },
+      });
+    } catch (error) {
+      return companyError(c, error);
+    }
+  });
+
   app.get("/v1/company/digest/weekly", async (c) => {
     const auth = await authenticate(c, options.authVerifier, "read");
     if ("response" in auth) return auth.response;
@@ -477,9 +607,14 @@ export function registerCompanyRoutes(
   app.get("/v1/company/export", async (c) => {
     const auth = await authenticate(c, options.authVerifier, "read");
     if ("response" in auth) return auth.response;
-    const bundle = await new CompanyOperationsService(getDefaultDb().db).exportCompany(
-      auth.principal.organizationId,
-    );
+    const bundle =
+      c.req.query("version") === "2"
+        ? await new CompanyFullExportService(getDefaultDb().db).exportCompany(
+            auth.principal.organizationId,
+          )
+        : await new CompanyOperationsService(getDefaultDb().db).exportCompany(
+            auth.principal.organizationId,
+          );
     return c.json({ data: bundle });
   });
 
@@ -487,9 +622,10 @@ export function registerCompanyRoutes(
     const auth = await authenticate(c, options.authVerifier, "read");
     if ("response" in auth) return auth.response;
     try {
-      const bundle = new CompanyOperationsService(getDefaultDb().db).validateImport(
-        await c.req.json(),
-      );
+      const input = await c.req.json();
+      const bundle = isFullBundle(input)
+        ? new CompanyFullExportService(getDefaultDb().db).validateImport(input)
+        : new CompanyOperationsService(getDefaultDb().db).validateImport(input);
       return c.json({ data: { valid: true, counts: counts(bundle) } });
     } catch (error) {
       return c.json(
@@ -506,11 +642,17 @@ export function registerCompanyRoutes(
     const auth = await authenticate(c, options.authVerifier, "write");
     if ("response" in auth) return auth.response;
     try {
-      const overview = await new CompanyOperationsService(getDefaultDb().db).importCompany(
-        auth.principal.organizationId,
-        await c.req.json(),
-      );
-      return c.json({ data: overview }, 200);
+      const input = await c.req.json();
+      const data = isFullBundle(input)
+        ? await new CompanyFullExportService(getDefaultDb().db).importCompany(
+            auth.principal.organizationId,
+            input,
+          )
+        : await new CompanyOperationsService(getDefaultDb().db).importCompany(
+            auth.principal.organizationId,
+            input,
+          );
+      return c.json({ data }, 200);
     } catch (error) {
       return c.json(
         {
@@ -540,16 +682,37 @@ function stringArray(value: unknown): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) return [];
   return value;
 }
-function counts(bundle: {
-  departments: unknown[];
-  members: unknown[];
-  serviceAgents: unknown[];
-  autonomyProposals: unknown[];
-}) {
-  return {
-    departments: bundle.departments.length,
-    members: bundle.members.length,
-    serviceAgents: bundle.serviceAgents.length,
-    autonomyProposals: bundle.autonomyProposals.length,
+function counts(bundle: unknown) {
+  if (isFullBundle(bundle)) {
+    const full = bundle as {
+      operations?: Record<string, unknown[]>;
+      strategy?: Record<string, unknown[]>;
+      execution?: Record<string, unknown[]>;
+      knowledge?: Record<string, unknown[]>;
+    };
+    return Object.fromEntries(
+      Object.entries({
+        ...full.operations,
+        ...full.strategy,
+        ...full.execution,
+        ...full.knowledge,
+      }).map(([key, rows]) => [key, rows.length]),
+    );
+  }
+  const legacy = bundle as {
+    departments: unknown[];
+    members: unknown[];
+    serviceAgents: unknown[];
+    autonomyProposals: unknown[];
   };
+  return {
+    departments: legacy.departments.length,
+    members: legacy.members.length,
+    serviceAgents: legacy.serviceAgents.length,
+    autonomyProposals: legacy.autonomyProposals.length,
+  };
+}
+
+function isFullBundle(input: unknown): input is { protocolVersion: 2 } {
+  return isRecord(input) && input.protocolVersion === 2;
 }

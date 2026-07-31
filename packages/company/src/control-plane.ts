@@ -32,6 +32,11 @@ export interface CompanyWorkItemInput {
   projectId: string;
   repositoryId: string;
   workflowRunId?: string | null;
+  milestoneId?: string | null;
+  processBindingId?: string | null;
+  parentWorkItemId?: string | null;
+  assignedAgentId?: string | null;
+  alignmentRationale?: string;
   definitionRevisionId: string;
   title: string;
   description: string;
@@ -56,6 +61,9 @@ export interface DelegateWorkInput extends RoutingRequest {
   repositoryId: string;
   definitionRevisionId: string;
   workflowRunId?: string | null;
+  milestoneId?: string | null;
+  processBindingId?: string | null;
+  parentWorkItemId?: string | null;
   branchName?: string | null;
   sourceCommitSha?: string | null;
   maxAttempts?: number;
@@ -220,6 +228,11 @@ export class CompanyControlPlaneService {
         projectId: input.projectId,
         repositoryId: input.repositoryId,
         workflowRunId: input.workflowRunId,
+        milestoneId: input.milestoneId ?? null,
+        processBindingId: input.processBindingId ?? null,
+        parentWorkItemId: input.parentWorkItemId ?? null,
+        assignedAgentId: decision.selectedAgentId,
+        alignmentRationale: `Delegated by ${request.requestedByAgentId} for ${request.title}`,
         definitionRevisionId: input.definitionRevisionId,
         title: request.title,
         description: request.description,

@@ -49,3 +49,4 @@ export {
   wakeups,
 } from "./schema/phase2";
 export * as sqliteSchema from "./schema/sqlite";
+export * from "./schema/strategic";

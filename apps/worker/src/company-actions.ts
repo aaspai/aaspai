@@ -1,11 +1,12 @@
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
+import { type ProcessDefinition, processDefinitionSchema } from "@aaspai/contracts/operator";
 
 export const COMPANY_ACTION_TOOL_SOURCE = `import { tool } from "@opencode-ai/plugin";
 
 export default tool({
-  description: "Submit a structured company hiring and delegation action to the AASPAI orchestrator.",
+  description: "Submit company actions. Supported types: hire_and_delegate {agentId,title,role,description,workTitle,workDescription,projectId,projectRole}; create_milestone {projectId,title,outcome,sequence,acceptance}; define_and_start_process {projectId,milestoneSequence?,definition,loopId?,policy?}.",
   args: {
-    payload: tool.schema.string().max(65536).describe("JSON object containing an actions array"),
+    payload: tool.schema.string().max(65536).describe('JSON object: {"actions":[...]}'),
   },
   async execute({ payload }) {
     JSON.parse(payload);
@@ -51,13 +52,38 @@ export interface HireAndDelegateAction {
   description: string;
   workTitle: string;
   workDescription: string;
+  projectId?: string;
+  projectRole?: "manager" | "member";
   skillKeys?: string[];
   artifactPaths?: string[];
   citationPaths?: string[];
   commercialClaimPaths?: string[];
 }
 
-export function companyActions(result: AdapterExecutionResult): HireAndDelegateAction[] {
+export interface CreateMilestoneAction {
+  type: "create_milestone";
+  projectId: string;
+  title: string;
+  outcome: string;
+  sequence: number;
+  acceptance: Record<string, unknown>;
+}
+
+export interface DefineAndStartProcessAction {
+  type: "define_and_start_process";
+  projectId: string;
+  milestoneSequence?: number;
+  definition: ProcessDefinition;
+  loopId?: string;
+  policy?: Record<string, unknown>;
+}
+
+export type CompanyAction =
+  | HireAndDelegateAction
+  | CreateMilestoneAction
+  | DefineAndStartProcessAction;
+
+export function companyActions(result: AdapterExecutionResult): CompanyAction[] {
   const payload = result.resultJson;
   if (!Array.isArray(payload?.companyActions)) return [];
   if (payload.dryRun !== undefined) {
@@ -66,7 +92,7 @@ export function companyActions(result: AdapterExecutionResult): HireAndDelegateA
   return payload.companyActions.flatMap((action) => companyActionPayload(action));
 }
 
-export function companyActionPayload(value: unknown): HireAndDelegateAction[] {
+export function companyActionPayload(value: unknown): CompanyAction[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Company action payload must be an object");
   }
@@ -90,10 +116,12 @@ export function requiresCommercialEvidence(
   );
 }
 
-function parseCompanyActions(values: unknown[]): HireAndDelegateAction[] {
-  const actions: HireAndDelegateAction[] = [];
+function parseCompanyActions(values: unknown[]): CompanyAction[] {
+  const actions: CompanyAction[] = [];
   for (const action of values) {
     if (isHireAndDelegateAction(action)) actions.push(action);
+    else if (isCreateMilestoneAction(action)) actions.push(action);
+    else if (isDefineAndStartProcessAction(action)) actions.push(action);
   }
   return actions;
 }
@@ -130,6 +158,12 @@ function isHireAndDelegateAction(value: unknown): value is HireAndDelegateAction
     typeof action.workDescription === "string" &&
     action.workDescription.trim().length > 0 &&
     action.workDescription.length <= 16_384 &&
+    (action.projectId === undefined ||
+      (typeof action.projectId === "string" &&
+        /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/.test(action.projectId))) &&
+    (action.projectRole === undefined ||
+      action.projectRole === "manager" ||
+      action.projectRole === "member") &&
     (action.skillKeys === undefined ||
       (Array.isArray(action.skillKeys) &&
         action.skillKeys.length <= 16 &&
@@ -159,4 +193,41 @@ function isHireAndDelegateAction(value: unknown): value is HireAndDelegateAction
         Array.isArray(action.commercialClaimPaths) &&
         action.commercialClaimPaths.length > 0))
   );
+}
+
+function isCreateMilestoneAction(value: unknown): value is CreateMilestoneAction {
+  if (!isRecord(value)) return false;
+  return (
+    value.type === "create_milestone" &&
+    isIdentifier(value.projectId) &&
+    typeof value.title === "string" &&
+    value.title.trim().length > 0 &&
+    value.title.length <= 512 &&
+    typeof value.outcome === "string" &&
+    value.outcome.length <= 16_384 &&
+    Number.isInteger(value.sequence) &&
+    Number(value.sequence) >= 0 &&
+    isRecord(value.acceptance)
+  );
+}
+
+function isDefineAndStartProcessAction(value: unknown): value is DefineAndStartProcessAction {
+  if (!isRecord(value)) return false;
+  return (
+    value.type === "define_and_start_process" &&
+    isIdentifier(value.projectId) &&
+    (value.milestoneSequence === undefined ||
+      (Number.isInteger(value.milestoneSequence) && Number(value.milestoneSequence) >= 0)) &&
+    processDefinitionSchema.safeParse(value.definition).success &&
+    (value.loopId === undefined || isIdentifier(value.loopId)) &&
+    (value.policy === undefined || isRecord(value.policy))
+  );
+}
+
+function isIdentifier(value: unknown): value is string {
+  return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

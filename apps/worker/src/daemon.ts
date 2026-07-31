@@ -29,6 +29,7 @@ import {
 } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  CompanyCommandService,
   CompanyControlPlaneService,
   CompanyOperationsService,
   OperationalGovernanceService,
@@ -40,8 +41,13 @@ import { resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
 import { executionTargetSchema } from "@aaspai/contracts/runtime";
 import {
   closeDefaultDb,
+  companyProfiles,
   definitionRevisions,
+  executionOperatorRuns,
   getDefaultDb,
+  loops,
+  milestones,
+  projectAssignments,
   projects,
   repositories,
   runMigrations,
@@ -57,6 +63,7 @@ import {
   evaluateExecutionPolicy,
   HarnessExecutionPlanRunner,
   LocalExecutionWorkspaceManager,
+  OperatorService,
 } from "@aaspai/execution";
 import {
   DEFAULT_AGENTS_DIR,
@@ -87,6 +94,7 @@ import { createBuiltInRegistry } from "@aaspai/tools";
 import { and, eq } from "drizzle-orm";
 import {
   COMPANY_ACTION_TOOL_SOURCE,
+  type CompanyAction,
   companyActions,
   type HireAndDelegateAction,
 } from "./company-actions.js";
@@ -130,6 +138,21 @@ function hiredAgentTools(tools: AgentConfig["tools"], role: HireAndDelegateActio
         )
       : [],
   };
+}
+
+function parsePortfolioProposal(
+  summary: string | undefined,
+): { summary: string; projects: unknown[] } | null {
+  const json = summary?.match(/^AASPAI_PORTFOLIO_PROPOSAL=(\{.*\})$/m)?.[1];
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    return typeof parsed.summary === "string" && Array.isArray(parsed.projects)
+      ? { summary: parsed.summary, projects: parsed.projects }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 async function hashAgentDefinition(directory: string): Promise<string> {
@@ -395,6 +418,7 @@ export class WorkerDaemon {
   private readonly legacySessionExecutor?: (request: Record<string, unknown>) => Promise<{
     sessionId?: string;
     status?: string;
+    summary?: string;
   }>;
   private loopLineage: LoopExecutionLineage | null = null;
   private unwatchAgents: (() => void) | null = null;
@@ -431,7 +455,7 @@ export class WorkerDaemon {
       start?: unknown;
       execute?: (
         request: Record<string, unknown>,
-      ) => Promise<{ sessionId?: string; status?: string }>;
+      ) => Promise<{ sessionId?: string; status?: string; summary?: string }>;
     };
     if (typeof compatibility.start !== "function" && compatibility.execute) {
       this.legacySessionExecutor = compatibility.execute.bind(sessionFacade);
@@ -651,6 +675,7 @@ export class WorkerDaemon {
     }
     this.pollInFlight = true;
     try {
+      await this.enqueueDueManagerRuns();
       const handle = getDefaultDb();
       const queued = await handle.db
         .select()
@@ -752,6 +777,39 @@ export class WorkerDaemon {
       throw new Error(`wakeup ${wakeupId} belongs to another organization`);
     }
 
+    const controlPayload = (safeJsonParse(wakeupRow.payloadJson) ?? {}) as Record<string, unknown>;
+    if (typeof controlPayload.operatorRunId === "string") {
+      const result = await new OperatorService(this.executionStore).tick(
+        {
+          organizationId: this.organizationId,
+          actorId: "worker",
+          correlationId: wakeupId,
+        },
+        controlPayload.operatorRunId,
+      );
+      if (result.decision?.action === "dispatch" && result.run.workflowRunId) {
+        await this.executeManagerWorkItem(
+          result.run.workflowRunId,
+          result.decision.targetId,
+          result.run.operatorAgentId,
+        );
+        await this.queueManagerWake(
+          result.run.id,
+          result.run.operatorAgentId,
+          result.run.observedStateVersion,
+          "Manager work item finished",
+        );
+      } else if (result.decision?.action === "complete" && result.run.workflowRunId) {
+        await this.finalizeManagerRun(
+          result.run.id,
+          result.run.workflowRunId,
+          result.run.operatorAgentId,
+        );
+      }
+      await this.finishWakeup(wakeupId);
+      return;
+    }
+
     const resolved = this.patternRegistry.get(wakeupRow.loopId);
     if (!resolved || !this.loopLineage) {
       // Compatibility seam for callers that invoke the private wakeup
@@ -791,7 +849,7 @@ export class WorkerDaemon {
     wakeupRow: typeof wakeupsTable.$inferSelect,
     wakeupId: string,
   ): Promise<void> {
-    const payload = safeJsonParse(wakeupRow.payloadJson) ?? {};
+    const payload = (safeJsonParse(wakeupRow.payloadJson) ?? {}) as Record<string, unknown>;
     const request = payload as {
       agentId?: string;
       adapter?: string;
@@ -863,6 +921,12 @@ export class WorkerDaemon {
           `session ${result.sessionId ?? request.sessionId ?? "unknown"} ${result.status ?? "failed"}`,
         );
       }
+      await this.applyDiscoveryProposal(
+        payload,
+        result.summary,
+        result.sessionId ?? request.sessionId ?? wakeupId,
+        wakeupId,
+      );
       await this.finishWakeup(wakeupId, result.sessionId ?? request.sessionId);
       return;
     }
@@ -920,7 +984,35 @@ export class WorkerDaemon {
     await this.executionStore.updateWorkItemStatus(claimedWorkItem.id, legacyStatus, {
       blockedReason: legacyStatus === "completed" ? null : (result.errorMessage ?? result.summary),
     });
+    if (legacyStatus === "completed") {
+      await this.applyDiscoveryProposal(
+        payload,
+        result.summary,
+        result.sessionId ?? request.sessionId ?? wakeupId,
+        wakeupId,
+      );
+    }
     await this.finishWakeup(wakeupId, result.sessionId ?? request.sessionId);
+  }
+
+  private async applyDiscoveryProposal(
+    payload: Record<string, unknown>,
+    summary: string | undefined,
+    sessionId: string,
+    wakeupId: string,
+  ): Promise<void> {
+    if (payload.command !== "start_discovery") return;
+    const proposal = parsePortfolioProposal(summary);
+    if (!proposal) throw new Error("CEO discovery did not return AASPAI_PORTFOLIO_PROPOSAL");
+    await new CompanyCommandService(getDefaultDb().db).execute({
+      type: "submit_portfolio_proposal",
+      organizationId: this.organizationId,
+      actorId: typeof payload.operatorAgentId === "string" ? payload.operatorAgentId : "agent/ceo",
+      idempotencyKey: `discovery-proposal:${wakeupId}`,
+      summary: proposal.summary,
+      evidence: [`session/${sessionId}`],
+      projects: proposal.projects,
+    });
   }
 
   private async finishWakeup(wakeupId: string, sessionId?: string | null): Promise<void> {
@@ -988,6 +1080,190 @@ export class WorkerDaemon {
       { maxTicks: 100, executorOwnsAttempt: true },
     );
     await this.verifyPendingWorkItems(workflowRunId);
+  }
+
+  private async executeManagerWorkItem(
+    workflowRunId: string,
+    workItemId: string | null,
+    managerAgentId: string,
+  ): Promise<void> {
+    if (!workItemId) throw new Error("manager dispatch has no work item");
+    const workItem = await this.executionStore.getWorkItem(workItemId, {
+      organizationId: this.organizationId,
+      actorId: managerAgentId,
+      correlationId: workflowRunId,
+    });
+    if (!workItem || workItem.workflowRunId !== workflowRunId)
+      throw new Error("manager dispatch target is outside its workflow");
+    const assignedAgentId = workItem.assignedAgentId ?? managerAgentId;
+    const agent = await this.agentSource.get(assignedAgentId);
+    await this.autonomousExecutor.execute({
+      organizationId: this.organizationId,
+      workflowRunId,
+      workItemId,
+      agentId: assignedAgentId,
+      harness: agent.adapter,
+      runProvider: async ({ attempt }) => {
+        const result = await this.executeDurableAttempt({
+          attempt,
+          workItem,
+          agentId: assignedAgentId,
+          adapter: agent.adapter,
+          prompt: workItem.description,
+        });
+        return {
+          status: result.timedOut
+            ? ("timed_out" as const)
+            : result.exitCode === 0
+              ? ("succeeded" as const)
+              : ("failed" as const),
+          usage: {
+            tokens: (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
+            costUsd: result.costUsd,
+          },
+        };
+      },
+    });
+    await this.verifyPendingWorkItems(workflowRunId);
+  }
+
+  private async queueManagerWake(
+    managerRunId: string,
+    managerAgentId: string,
+    stateVersion: number,
+    reason: string,
+  ): Promise<void> {
+    const timestamp = new Date().toISOString();
+    const loopId = `loop/manager/${this.organizationId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    const key = `manager:${managerRunId}:${stateVersion}`;
+    const db = getDefaultDb().db;
+    db.transaction((tx) => {
+      tx.insert(loops)
+        .values({
+          id: loopId,
+          organizationId: this.organizationId,
+          patternId: "manager",
+          configJson: "{}",
+          gateJson: "{}",
+          budgetJson: "{}",
+          scheduleJson: "{}",
+          paused: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .onConflictDoNothing()
+        .run();
+      tx.insert(wakeupsTable)
+        .values({
+          id: `wake/manager/${createHash("sha256").update(key).digest("hex").slice(0, 24)}`,
+          organizationId: this.organizationId,
+          loopId,
+          source: "continuation",
+          triggerDetail: "manager",
+          reason,
+          agentId: managerAgentId,
+          payloadJson: JSON.stringify({ managerRunId, operatorRunId: managerRunId }),
+          status: "queued",
+          idempotencyKey: key,
+          requestedAt: timestamp,
+          requestedByActorId: "worker",
+          requestedByActorType: "system",
+        })
+        .onConflictDoNothing()
+        .run();
+    });
+  }
+
+  private async finalizeManagerRun(
+    managerRunId: string,
+    workflowRunId: string,
+    managerAgentId: string,
+  ): Promise<void> {
+    const items = await this.executionStore.listWorkItemsForWorkflow(
+      this.organizationId,
+      workflowRunId,
+    );
+    if (items.length === 0 || items.some((item) => item.status !== "completed"))
+      throw new Error("Manager run cannot roll up incomplete work");
+    const evidence: string[] = [];
+    for (const item of items) {
+      const verification = await this.executionStore.getVerificationForWorkItem(item.id);
+      if (verification?.status !== "passed")
+        throw new Error(`Manager work ${item.id} has no passed verification`);
+      evidence.push(verification.id);
+    }
+    const milestoneIds = [...new Set(items.map((item) => item.milestoneId).filter(Boolean))];
+    if (milestoneIds.length !== 1)
+      throw new Error("Manager process must align to exactly one milestone");
+    const projectId = items[0]?.projectId;
+    if (!projectId) throw new Error("Manager process has no project");
+    const commands = new CompanyCommandService(getDefaultDb().db);
+    await commands.execute({
+      type: "record_milestone_evaluation",
+      organizationId: this.organizationId,
+      actorId: managerAgentId,
+      idempotencyKey: `manager-rollup:${managerRunId}:${milestoneIds[0]}`,
+      projectId,
+      milestoneId: milestoneIds[0] as string,
+      status: "accepted",
+      evidence,
+      rationale: "All milestone process steps passed independent verification.",
+    });
+    const projectMilestones = await getDefaultDb()
+      .db.select({ status: milestones.status })
+      .from(milestones)
+      .where(
+        and(
+          eq(milestones.organizationId, this.organizationId),
+          eq(milestones.projectId, projectId),
+        ),
+      );
+    if (!projectMilestones.every((milestone) => milestone.status === "accepted")) return;
+    await commands.execute({
+      type: "evaluate_project",
+      organizationId: this.organizationId,
+      actorId: managerAgentId,
+      idempotencyKey: `manager-rollup:${managerRunId}:project`,
+      projectId,
+      evidence,
+    });
+    const [project] = await getDefaultDb()
+      .db.select({ goalId: projects.goalId })
+      .from(projects)
+      .where(and(eq(projects.organizationId, this.organizationId), eq(projects.id, projectId)))
+      .limit(1);
+    const [profile] = await getDefaultDb()
+      .db.select({ ceoAgentId: companyProfiles.ceoAgentId })
+      .from(companyProfiles)
+      .where(eq(companyProfiles.organizationId, this.organizationId))
+      .limit(1);
+    if (project?.goalId && profile?.ceoAgentId) {
+      await commands.execute({
+        type: "evaluate_objective",
+        organizationId: this.organizationId,
+        actorId: profile.ceoAgentId,
+        idempotencyKey: `manager-rollup:${managerRunId}:objective`,
+        goalId: project.goalId,
+        evidence,
+      });
+    }
+  }
+
+  private async enqueueDueManagerRuns(): Promise<void> {
+    const rows = await getDefaultDb()
+      .db.select()
+      .from(executionOperatorRuns)
+      .where(eq(executionOperatorRuns.organizationId, this.organizationId));
+    const timestamp = new Date().toISOString();
+    for (const run of rows) {
+      if (run.status !== "waiting" || !run.wakeAt || run.wakeAt > timestamp) continue;
+      await this.queueManagerWake(
+        run.id,
+        run.operatorAgentId,
+        run.observedStateVersion,
+        "Scheduled manager review",
+      );
+    }
   }
 
   private async verifyPendingWorkItems(workflowRunId: string): Promise<void> {
@@ -1175,6 +1451,24 @@ export class WorkerDaemon {
           prompt: input.prompt,
           definitionRevisionId: input.workItem.definitionRevisionId ?? "",
         });
+    const requestedTools = Array.isArray(input.workItem.metadata.tools)
+      ? input.workItem.metadata.tools.filter((tool): tool is string => typeof tool === "string")
+      : [];
+    const availableTools = new Set(
+      profile.tools
+        .filter((tool) => tool.allowed && tool.ready)
+        .map((tool) => tool.name.toLowerCase()),
+    );
+    const missingTools = requestedTools.filter((tool) => !availableTools.has(tool.toLowerCase()));
+    if (missingTools.length > 0)
+      throw new Error(`Assigned agent lacks required tools: ${missingTools.join(", ")}`);
+    const requestedSkills = Array.isArray(input.workItem.metadata.skills)
+      ? input.workItem.metadata.skills.filter((skill): skill is string => typeof skill === "string")
+      : [];
+    const availableSkills = new Set(profile.skills.map((skill) => skill.key));
+    const missingSkills = requestedSkills.filter((skill) => !availableSkills.has(skill));
+    if (missingSkills.length > 0)
+      throw new Error(`Assigned agent lacks required skills: ${missingSkills.join(", ")}`);
     const skillRegistry = persistedPlan
       ? null
       : await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
@@ -1285,6 +1579,9 @@ export class WorkerDaemon {
       ).catch(() => undefined);
       throw error;
     }
+    const mayManageCompany =
+      input.attempt.role === "maker" &&
+      (await this.isAuthorizedManager(input.agentId, input.workItem.projectId));
     const adapterConfig = {
       ...profile.inputs.adapterConfig,
       ...(input.adapter === "opencode_cli" &&
@@ -1292,11 +1589,11 @@ export class WorkerDaemon {
       !Array.isArray(profile.inputs.adapterConfig.skillsPaths)
         ? { skillsPaths: [".opencode_cli/skills"] }
         : {}),
-      ...(input.adapter === "opencode_cli" && input.agentId === "agent/ceo"
+      ...(input.adapter === "opencode_cli" && mayManageCompany
         ? { xdgConfigHome: ".opencode_cli" }
         : {}),
     };
-    if (input.adapter === "opencode_cli" && input.agentId === "agent/ceo") {
+    if (input.adapter === "opencode_cli" && mayManageCompany) {
       const companyActionTool = join(
         workspacePath,
         ".opencode_cli",
@@ -1364,8 +1661,20 @@ export class WorkerDaemon {
             branchName: workspace.branchName,
             repositoryWork,
           });
-          if (input.agentId === "agent/ceo" && !result.timedOut && result.exitCode === 0) {
-            await this.applyCompanyActions(companyActions(result), {
+          if (mayManageCompany && !result.timedOut && result.exitCode === 0) {
+            const actions = companyActions(result);
+            const requiredActions = Array.isArray(input.workItem.metadata.requiredCompanyActions)
+              ? input.workItem.metadata.requiredCompanyActions.filter(
+                  (action): action is string => typeof action === "string",
+                )
+              : [];
+            const submitted = new Set<string>(actions.map((action) => action.type));
+            const missingActions = requiredActions.filter((action) => !submitted.has(action));
+            if (missingActions.length > 0)
+              throw new Error(
+                `Manager run omitted required company actions: ${missingActions.join(", ")}`,
+              );
+            await this.applyCompanyActions(actions, {
               attempt: input.attempt,
               workItem: input.workItem,
               managerAgentId: input.agentId,
@@ -1422,19 +1731,108 @@ export class WorkerDaemon {
   }
 
   private async applyCompanyActions(
-    actions: HireAndDelegateAction[],
+    actions: CompanyAction[],
     input: {
       attempt: AgentAttempt;
       workItem: ExecutionWorkItem;
       managerAgentId: string;
     },
   ): Promise<void> {
-    if (actions.length === 0 || input.managerAgentId !== "agent/ceo") return;
+    if (actions.length === 0) return;
+    if (!(await this.isAuthorizedManager(input.managerAgentId, input.workItem.projectId))) {
+      throw new Error(`${input.managerAgentId} is not authorized to hire for this project`);
+    }
     const manager = await this.agentSource.get(input.managerAgentId);
     const operations = new CompanyOperationsService(getDefaultDb().db);
     const control = new CompanyControlPlaneService(getDefaultDb().db, this.executionStore);
+    const commands = new CompanyCommandService(getDefaultDb().db);
+    const [companyProfile] = await getDefaultDb()
+      .db.select({ ceoAgentId: companyProfiles.ceoAgentId })
+      .from(companyProfiles)
+      .where(eq(companyProfiles.organizationId, this.organizationId))
+      .limit(1);
+    const isCeo = input.managerAgentId === companyProfile?.ceoAgentId;
+    const createdMilestones = new Map<string, string>();
 
-    for (const action of actions) {
+    for (const [actionIndex, action] of actions.entries()) {
+      const targetProjectId = action.projectId ?? input.workItem.projectId;
+      if (!targetProjectId) throw new Error("Company action has no project");
+      if (!isCeo && targetProjectId !== input.workItem.projectId)
+        throw new Error("A manager may only hire within their assigned project");
+      const [targetProject] = await getDefaultDb()
+        .db.select({ id: projects.id, goalId: projects.goalId })
+        .from(projects)
+        .where(
+          and(eq(projects.organizationId, this.organizationId), eq(projects.id, targetProjectId)),
+        )
+        .limit(1);
+      if (!targetProject) throw new Error(`Project ${targetProjectId} not found`);
+      if (action.type === "create_milestone") {
+        const created = await commands.execute({
+          type: "create_milestone",
+          organizationId: this.organizationId,
+          actorId: input.managerAgentId,
+          idempotencyKey: `manager-action:${input.workItem.id}:milestone:${actionIndex}`,
+          projectId: targetProject.id,
+          title: action.title,
+          outcome: action.outcome,
+          sequence: action.sequence,
+          acceptance: action.acceptance,
+          ownerAgentId: input.managerAgentId,
+        });
+        if (created.id) createdMilestones.set(targetProject.id, created.id);
+        continue;
+      }
+      if (action.type === "define_and_start_process") {
+        if (!input.workItem.definitionRevisionId)
+          throw new Error("Process action requires a pinned definition revision");
+        const milestoneId =
+          action.milestoneSequence === undefined
+            ? createdMilestones.get(targetProject.id)
+            : (
+                await getDefaultDb()
+                  .db.select({ id: milestones.id })
+                  .from(milestones)
+                  .where(
+                    and(
+                      eq(milestones.organizationId, this.organizationId),
+                      eq(milestones.projectId, targetProject.id),
+                      eq(milestones.sequence, action.milestoneSequence),
+                    ),
+                  )
+                  .limit(1)
+              )[0]?.id;
+        if (!milestoneId)
+          throw new Error("Process action must reference a milestone created for the project");
+        await commands.execute({
+          type: "bind_process",
+          organizationId: this.organizationId,
+          actorId: input.managerAgentId,
+          idempotencyKey: `manager-action:${input.workItem.id}:bind:${actionIndex}`,
+          projectId: targetProject.id,
+          processDefinitionId: action.definition.id,
+          processRevision: action.definition.revision,
+          definition: action.definition,
+          ownerAgentId: input.managerAgentId,
+          loopId: action.loopId ?? null,
+          policy: action.policy ?? {},
+        });
+        await commands.execute({
+          type: "start_process_run",
+          organizationId: this.organizationId,
+          actorId: input.managerAgentId,
+          idempotencyKey: `manager-action:${input.workItem.id}:run:${actionIndex}`,
+          projectId: targetProject.id,
+          goalId: targetProject.goalId,
+          milestoneId,
+          repositoryId: input.workItem.repositoryId,
+          definitionRevisionId: input.workItem.definitionRevisionId,
+          operatorAgentId: input.managerAgentId,
+          sourceCommitSha: input.workItem.sourceCommitSha,
+          definition: action.definition,
+        });
+        continue;
+      }
       const definition = await this.writeHiredAgent(action, manager);
       await operations.registerServiceAgent({
         organizationId: this.organizationId,
@@ -1446,6 +1844,28 @@ export class WorkerDaemon {
           hiredBy: input.managerAgentId,
         },
       });
+      if (action.projectRole === "manager") {
+        if (!isCeo) throw new Error("Only the CEO may appoint a project manager");
+        await commands.execute({
+          type: "appoint_project_manager",
+          organizationId: this.organizationId,
+          actorId: input.managerAgentId,
+          idempotencyKey: `manager-action:${input.workItem.id}:${action.agentId}:assignment`,
+          projectId: targetProject.id,
+          agentId: action.agentId,
+        });
+      } else {
+        await commands.execute({
+          type: "assign_agent_to_project",
+          organizationId: this.organizationId,
+          actorId: input.managerAgentId,
+          idempotencyKey: `manager-action:${input.workItem.id}:${action.agentId}:assignment`,
+          projectId: targetProject.id,
+          agentId: action.agentId,
+          role: "member",
+          allocationPercent: 100,
+        });
+      }
       await control.setAuthorityEdge({
         organizationId: this.organizationId,
         fromAgentId: input.managerAgentId,
@@ -1460,9 +1880,17 @@ export class WorkerDaemon {
         dirty: true,
         contentHash: definition.contentHash,
       });
+      const delegatedWorkflow = await this.executionStore.createWorkflowRun({
+        organizationId: this.organizationId,
+        goalId: targetProject.goalId,
+        definitionRevisionId: definitionRevision.id,
+        sourceType: "manager_delegation",
+        sourceId: input.workItem.id,
+        idempotencyKey: `manager-action:${input.workItem.id}:${action.agentId}:workflow`,
+      });
       const delegation = await control.delegate({
         organizationId: this.organizationId,
-        idempotencyKey: `ceo-action:${input.workItem.id}:${action.agentId}`,
+        idempotencyKey: `manager-action:${input.workItem.id}:${action.agentId}`,
         requestedByAgentId: input.managerAgentId,
         targetAgentId: action.agentId,
         departmentId: null,
@@ -1472,10 +1900,13 @@ export class WorkerDaemon {
         priority: Math.min(100, input.workItem.priority + 1),
         title: action.workTitle,
         description: action.workDescription,
-        goalId: input.workItem.goalId,
-        projectId: input.workItem.projectId,
+        goalId: targetProject.goalId,
+        projectId: targetProject.id,
         repositoryId: input.workItem.repositoryId,
-        workflowRunId: input.workItem.workflowRunId,
+        workflowRunId: delegatedWorkflow.id,
+        milestoneId: input.workItem.milestoneId,
+        processBindingId: input.workItem.processBindingId,
+        parentWorkItemId: input.workItem.id,
         definitionRevisionId: definitionRevision.id,
         sourceCommitSha: input.workItem.sourceCommitSha,
         maxAttempts: input.workItem.maxAttempts,
@@ -1495,12 +1926,17 @@ export class WorkerDaemon {
             commercialClaimPaths: action.commercialClaimPaths ?? [],
             scanAllArtifacts: true,
           },
+          ...(action.projectRole === "manager"
+            ? {
+                requiredCompanyActions: ["create_milestone", "define_and_start_process"],
+              }
+            : {}),
         },
       });
       if (!delegation.workItemId) throw new Error(`Delegation ${delegation.id} has no work item`);
       const delegated = await this.executionStore.getWorkItem(delegation.workItemId);
       if (!delegated) throw new Error(`Delegated work ${delegation.workItemId} disappeared`);
-      await this.queueDelegatedWork(action, delegated, manager.adapter);
+      await this.queueDelegatedWork(action, delegated, manager.adapter, input.managerAgentId);
       await this.executionStore.recordGovernanceEvent({
         organizationId: this.organizationId,
         workItemId: input.workItem.id,
@@ -1565,7 +2001,7 @@ export class WorkerDaemon {
         requestedSkills.has(String(skill.key)),
     );
     if (skills.length !== requestedSkills.size) {
-      throw new Error("Hired agent requested a skill not approved for the CEO");
+      throw new Error("Hired agent requested a skill not approved for the manager");
     }
     await writeFile(
       join(directory, "skills.lock.json"),
@@ -1574,7 +2010,7 @@ export class WorkerDaemon {
     );
     await writeFile(
       join(directory, "relations.yaml"),
-      "reportsTo: agent/ceo\nmanages: []\npeers: []\n",
+      `reportsTo: ${manager.id}\nmanages: []\npeers: []\n`,
       "utf8",
     );
     const agentDefinition = join(directory, "AGENT.md");
@@ -1589,7 +2025,7 @@ description: ${JSON.stringify(action.description)}
 timestamp: ${new Date().toISOString()}
 adapter: ${manager.adapter}
 ${manager.model ? `model: ${JSON.stringify(manager.model)}\n` : ""}role: ${action.role}
-reportsTo: agent/ceo
+reportsTo: ${manager.id}
 manages: []
 peers: []
 tools:
@@ -1609,16 +2045,20 @@ runtime:
 ${action.description}
 
 Complete assigned work with concrete evidence. Report what you did, what remains uncertain, and the next action.
+
+When the company_action tool is available, use typed actions instead of merely describing company changes. Project managers establish measurable outcomes with create_milestone, hire only immediately needed specialists with hire_and_delegate, and create the smallest repeatable operating loop with define_and_start_process.
 `,
       "utf8",
     );
     await rename(pendingDefinition, agentDefinition);
 
-    const ceo = await this.agentSource.get("agent/ceo");
-    const manages = [...new Set([...ceo.manages, action.agentId])];
+    const manages = [...new Set([...manager.manages, action.agentId])];
+    const managerSlug = manager.id.slice("agent/".length);
     await writeFile(
-      join(root, "ceo", "relations.yaml"),
-      `reportsTo: null\nmanages:\n${manages.map((id) => `  - ${id}`).join("\n")}\npeers: []\n`,
+      join(root, managerSlug, "relations.yaml"),
+      `reportsTo: ${manager.reportsTo ?? "null"}\nmanages:\n${manages
+        .map((id) => `  - ${id}`)
+        .join("\n")}\npeers: []\n`,
       "utf8",
     );
     return {
@@ -1631,6 +2071,7 @@ Complete assigned work with concrete evidence. Report what you did, what remains
     action: HireAndDelegateAction,
     workItem: ExecutionWorkItem,
     adapter: string,
+    managerAgentId: string,
   ): Promise<void> {
     if (!workItem.workflowRunId) throw new Error("Delegated work has no workflow run");
     const suffix = createHash("sha256")
@@ -1648,8 +2089,8 @@ Complete assigned work with concrete evidence. Report what you did, what remains
           organizationId: this.organizationId,
           loopId: "manual",
           source: "agent",
-          triggerDetail: "ceo-delegation",
-          reason: `Delegated by agent/ceo to ${action.agentId}`,
+          triggerDetail: "manager-delegation",
+          reason: `Delegated by ${managerAgentId} to ${action.agentId}`,
           agentId: action.agentId,
           payloadJson: JSON.stringify({
             prompt,
@@ -1662,7 +2103,7 @@ Complete assigned work with concrete evidence. Report what you did, what remains
           status: "queued",
           idempotencyKey: `delegated-run:${workItem.id}`,
           requestedAt,
-          requestedByActorId: "agent/ceo",
+          requestedByActorId: managerAgentId,
           requestedByActorType: "agent",
         } as never)
         .onConflictDoNothing()
@@ -1682,6 +2123,30 @@ Complete assigned work with concrete evidence. Report what you did, what remains
         .onConflictDoNothing()
         .run();
     });
+  }
+
+  private async isAuthorizedManager(agentId: string, projectId: string | null) {
+    const [profile] = await getDefaultDb()
+      .db.select({ ceoAgentId: companyProfiles.ceoAgentId })
+      .from(companyProfiles)
+      .where(eq(companyProfiles.organizationId, this.organizationId))
+      .limit(1);
+    if (agentId === profile?.ceoAgentId) return true;
+    if (!projectId) return false;
+    const [assignment] = await getDefaultDb()
+      .db.select({ id: projectAssignments.id })
+      .from(projectAssignments)
+      .where(
+        and(
+          eq(projectAssignments.organizationId, this.organizationId),
+          eq(projectAssignments.projectId, projectId),
+          eq(projectAssignments.agentId, agentId),
+          eq(projectAssignments.role, "manager"),
+          eq(projectAssignments.status, "active"),
+        ),
+      )
+      .limit(1);
+    return Boolean(assignment);
   }
 
   private async persistAttemptOutput(input: {
@@ -1918,12 +2383,23 @@ Complete assigned work with concrete evidence. Report what you did, what remains
       await this.executionStore.createRepository({
         id: repositoryId,
         organizationId: this.organizationId,
-        projectId,
+        projectId: null,
         purpose: "blueprint",
         provider: "local",
         localPath: process.env.AASPAI_DEFINITIONS_DIR ?? ".",
         defaultBranch: "main",
       });
+    } else if (repository[0].projectId !== null) {
+      await handle.db
+        .update(repositories)
+        .set({ projectId: null, updatedAt: new Date().toISOString() })
+        .where(
+          and(
+            eq(repositories.organizationId, this.organizationId),
+            eq(repositories.id, repositoryId),
+          ),
+        )
+        .run();
     }
     const revision = await handle.db
       .select()
@@ -1960,12 +2436,20 @@ Complete assigned work with concrete evidence. Report what you did, what remains
     const handle = getDefaultDb();
     const staleMs = 5 * 60_000;
     const cutoff = new Date(Date.now() - staleMs).toISOString();
-    const lostAttempts = await new ExecutionStore(handle.db).reconcileLostAttempts(cutoff);
+    const lostAttempts = await new ExecutionStore(handle.db).reconcileLostAttempts(
+      cutoff,
+      this.organizationId,
+    );
     if (lostAttempts > 0) log.warn("reconciled lost execution attempts", { lostAttempts, staleMs });
     const stale = await handle.db
       .select()
       .from(wakeupsTable)
-      .where(eq(wakeupsTable.status, "claimed"));
+      .where(
+        and(
+          eq(wakeupsTable.organizationId, this.organizationId),
+          eq(wakeupsTable.status, "claimed"),
+        ),
+      );
 
     let recovered = 0;
     for (const row of stale) {

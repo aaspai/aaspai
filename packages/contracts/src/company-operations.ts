@@ -4,6 +4,7 @@ import {
   identifierSchema,
   isoTimestampSchema,
   jsonObjectSchema,
+  jsonValueSchema,
   nonNegativeIntegerSchema,
 } from "./primitives";
 
@@ -131,6 +132,82 @@ export const companyExportBundleSchema = z
   })
   .strict();
 export type CompanyExportBundle = z.infer<typeof companyExportBundleSchema>;
+
+const portableRecordSchema = z.record(z.string(), jsonValueSchema);
+
+/** Version 2 is a portable complete-company snapshot, excluding only transient leases. */
+export const companyFullExportBundleSchema = z
+  .object({
+    kind: z.literal("aaspai.company"),
+    protocolVersion: z.literal(2),
+    exportedAt: isoTimestampSchema,
+    profile: portableRecordSchema.nullable(),
+    operations: z.object({
+      departments: z.array(portableRecordSchema),
+      members: z.array(portableRecordSchema),
+      serviceAgents: z.array(portableRecordSchema),
+      authorityEdges: z.array(portableRecordSchema),
+      routingDecisions: z.array(portableRecordSchema),
+      delegations: z.array(portableRecordSchema),
+      escalations: z.array(portableRecordSchema),
+      autonomyProposals: z.array(portableRecordSchema),
+      autonomyChangeRequests: z.array(portableRecordSchema),
+    }),
+    strategy: z.object({
+      goals: z.array(portableRecordSchema),
+      projects: z.array(portableRecordSchema),
+      projectObjectives: z.array(portableRecordSchema),
+      measurements: z.array(portableRecordSchema),
+      assignments: z.array(portableRecordSchema),
+      milestones: z.array(portableRecordSchema),
+      processBindings: z.array(portableRecordSchema),
+      threads: z.array(portableRecordSchema),
+      threadMessages: z.array(portableRecordSchema),
+      controlEvents: z.array(portableRecordSchema),
+    }),
+    execution: z.object({
+      repositories: z.array(portableRecordSchema),
+      definitionRevisions: z.array(portableRecordSchema),
+      processDefinitions: z.array(portableRecordSchema),
+      workItems: z.array(portableRecordSchema),
+      dependencies: z.array(portableRecordSchema),
+      workflowRuns: z.array(portableRecordSchema),
+      operatorRuns: z.array(portableRecordSchema),
+      controlDecisions: z.array(portableRecordSchema),
+      escalations: z.array(portableRecordSchema),
+      loopOutputs: z.array(portableRecordSchema),
+      agentAttempts: z.array(portableRecordSchema),
+      workspaces: z.array(portableRecordSchema),
+      plans: z.array(portableRecordSchema),
+      artifacts: z.array(portableRecordSchema),
+      events: z.array(portableRecordSchema),
+      rawOutputs: z.array(portableRecordSchema),
+      verifications: z.array(portableRecordSchema),
+      approvals: z.array(portableRecordSchema),
+      budgetReservations: z.array(portableRecordSchema),
+      governanceEvents: z.array(portableRecordSchema),
+      externalActions: z.array(portableRecordSchema),
+      loops: z.array(portableRecordSchema),
+      loopControls: z.array(portableRecordSchema),
+      wakeups: z.array(portableRecordSchema),
+      sessions: z.array(portableRecordSchema),
+      sessionEvents: z.array(portableRecordSchema),
+    }),
+    knowledge: z.object({
+      memories: z.array(portableRecordSchema),
+      facts: z.array(portableRecordSchema),
+      proposals: z.array(portableRecordSchema),
+      changeRequests: z.array(portableRecordSchema),
+    }),
+  })
+  .strict();
+export type CompanyFullExportBundle = z.infer<typeof companyFullExportBundleSchema>;
+
+export const companyImportBundleSchema = z.union([
+  companyExportBundleSchema,
+  companyFullExportBundleSchema,
+]);
+export type CompanyImportBundle = z.infer<typeof companyImportBundleSchema>;
 
 export const companyOperationsOverviewSchema = z
   .object({

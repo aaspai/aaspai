@@ -26,8 +26,7 @@ export function OnboardingWizard({
   const [model, setModel] = useState(selectedProvider?.models[0]?.id ?? "");
   const [agenda, setAgenda] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [goalTitle, setGoalTitle] = useState("");
-  const [goalOutcome, setGoalOutcome] = useState("");
+  const [objectives, setObjectives] = useState([{ id: "initial", title: "", outcome: "" }]);
   const [firstPriority, setFirstPriority] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -45,8 +44,7 @@ export function OnboardingWizard({
           model,
           ceoAgenda: agenda,
           ceoInstructions: instructions,
-          goalTitle,
-          goalOutcome,
+          objectives: objectives.map(({ title, outcome }) => ({ title, outcome })),
           firstPriority,
         }),
       });
@@ -180,33 +178,82 @@ export function OnboardingWizard({
 
           <Card>
             <CardHeader>
-              <CardTitle>3. Set the first measurable objective</CardTitle>
+              <CardTitle>3. Set measurable company objectives</CardTitle>
               <CardDescription>
-                Give the outcome and immediate priority. The CEO decides how to achieve it.
+                Add up to four outcomes. The CEO proposes the smallest useful project portfolio.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="onboarding-goal">Goal</Label>
-                <Input
-                  id="onboarding-goal"
-                  value={goalTitle}
-                  onChange={(event) => setGoalTitle(event.target.value)}
-                  placeholder="Launch our first customer workflow"
-                  required
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="onboarding-outcome">What does success look like?</Label>
-                <Textarea
-                  id="onboarding-outcome"
-                  value={goalOutcome}
-                  onChange={(event) => setGoalOutcome(event.target.value)}
-                  placeholder="Serve the first ten customers with a repeatable process."
-                  required
-                  minLength={3}
-                />
-              </div>
+              {objectives.map((objective, index) => (
+                <div key={objective.id} className="space-y-3 rounded-lg border p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium">Objective {index + 1}</p>
+                    {objectives.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          setObjectives((current) =>
+                            current.filter((_, itemIndex) => itemIndex !== index),
+                          )
+                        }
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`onboarding-goal-${index}`}>Goal</Label>
+                    <Input
+                      id={`onboarding-goal-${index}`}
+                      value={objective.title}
+                      onChange={(event) =>
+                        setObjectives((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, title: event.target.value } : item,
+                          ),
+                        )
+                      }
+                      placeholder="Launch our first customer workflow"
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor={`onboarding-outcome-${index}`}>
+                      What does success look like?
+                    </Label>
+                    <Textarea
+                      id={`onboarding-outcome-${index}`}
+                      value={objective.outcome}
+                      onChange={(event) =>
+                        setObjectives((current) =>
+                          current.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, outcome: event.target.value } : item,
+                          ),
+                        )
+                      }
+                      placeholder="Serve the first ten customers with a repeatable process."
+                      required
+                      minLength={3}
+                    />
+                  </div>
+                </div>
+              ))}
+              {objectives.length < 4 && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    setObjectives((current) => [
+                      ...current,
+                      { id: crypto.randomUUID(), title: "", outcome: "" },
+                    ])
+                  }
+                >
+                  Add objective
+                </Button>
+              )}
               <div className="space-y-1.5">
                 <Label htmlFor="first-priority">CEO&apos;s first priority</Label>
                 <Input

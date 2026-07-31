@@ -36,6 +36,20 @@ describe("company actions", () => {
       }),
     ).toEqual([action]);
     expect(companyActionPayload({ actions: [action] })).toEqual([action]);
+    expect(
+      companyActionPayload({
+        actions: [
+          {
+            type: "create_milestone",
+            projectId: "project/growth",
+            title: "Qualified pipeline",
+            outcome: "Ten qualified opportunities",
+            sequence: 1,
+            acceptance: { qualified: 10 },
+          },
+        ],
+      }),
+    ).toHaveLength(1);
     expect(() =>
       companyActionPayload({ actions: [{ ...action, agentId: "../../escape" }] }),
     ).toThrow("invalid");

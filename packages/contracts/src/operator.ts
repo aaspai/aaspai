@@ -98,7 +98,7 @@ export const operatorRunSchema = z
     id: identifierSchema,
     organizationId: identifierSchema,
     operatorAgentId: identifierSchema,
-    scopeType: z.enum(["goal", "workflow", "organization"]),
+    scopeType: z.enum(["goal", "project", "workflow", "organization"]),
     scopeId: identifierSchema,
     workflowRunId: identifierSchema.nullable().default(null),
     status: operatorRunStatusSchema.default("idle"),

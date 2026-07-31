@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ExecutionRecovery } from "@/components/execution-recovery";
 import { RunReadyWork } from "@/components/run-ready-work";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,6 +28,17 @@ export default async function ExecutionPage() {
           Attempts, workspaces, events, and artifacts.
         </p>
       </header>
+      <Card>
+        <CardHeader>
+          <CardTitle>Recovery</CardTitle>
+          <CardDescription>
+            Requeue stale worker claims and reconcile interrupted attempts.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ExecutionRecovery />
+        </CardContent>
+      </Card>
       {goals.length > 0 && (
         <Card>
           <CardHeader>

@@ -82,7 +82,10 @@ import {
   isNull,
   loopOutputs,
   lte,
+  milestones,
   or,
+  processBindings,
+  projectAssignments,
   projects,
   repositories,
   resourceLocks,
@@ -138,6 +141,11 @@ export interface CreateWorkItemInput {
   workKind?: ExecutionWorkItem["workKind"];
   deliveryMode?: ExecutionWorkItem["deliveryMode"];
   workflowRunId?: string | null;
+  milestoneId?: string | null;
+  processBindingId?: string | null;
+  parentWorkItemId?: string | null;
+  assignedAgentId?: string | null;
+  alignmentRationale?: string;
   title: string;
   description?: string;
   definitionRevisionId?: string | null;
@@ -442,6 +450,84 @@ export class ExecutionStore {
       .limit(1);
     if (existing[0]) return existing[0];
 
+    const context = {
+      organizationId: input.organizationId,
+      actorId: "execution-store",
+      correlationId: input.idempotencyKey,
+    };
+    const [goal, project, repository, revision, workflow, milestone, binding, assignment, parent] =
+      await Promise.all([
+        this.getGoal(input.goalId, context),
+        this.getProject(input.projectId, context),
+        this.getRepository(input.repositoryId, context),
+        input.definitionRevisionId
+          ? this.getDefinitionRevision(input.definitionRevisionId, context)
+          : null,
+        input.workflowRunId ? this.getWorkflowRun(input.workflowRunId) : null,
+        input.milestoneId
+          ? this.db
+              .select({ id: milestones.id, projectId: milestones.projectId })
+              .from(milestones)
+              .where(
+                and(
+                  eq(milestones.organizationId, input.organizationId),
+                  eq(milestones.id, input.milestoneId),
+                ),
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : null,
+        input.processBindingId
+          ? this.db
+              .select({ id: processBindings.id, projectId: processBindings.projectId })
+              .from(processBindings)
+              .where(
+                and(
+                  eq(processBindings.organizationId, input.organizationId),
+                  eq(processBindings.id, input.processBindingId),
+                ),
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : null,
+        input.assignedAgentId && input.processBindingId
+          ? this.db
+              .select({ id: projectAssignments.id })
+              .from(projectAssignments)
+              .where(
+                and(
+                  eq(projectAssignments.organizationId, input.organizationId),
+                  eq(projectAssignments.projectId, input.projectId),
+                  eq(projectAssignments.agentId, input.assignedAgentId),
+                  eq(projectAssignments.status, "active"),
+                ),
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : null,
+        input.parentWorkItemId ? this.getWorkItem(input.parentWorkItemId, context) : null,
+      ]);
+    if (!goal) throw new Error("WorkItem goal not found in organization");
+    if (!project || project.goalId !== goal.id)
+      throw new Error("WorkItem project is not aligned to its goal");
+    if (!repository || (repository.projectId && repository.projectId !== project.id))
+      throw new Error("WorkItem repository is not aligned to its project");
+    if (input.definitionRevisionId && !revision)
+      throw new Error("WorkItem definition revision is not in its organization");
+    if (
+      input.workflowRunId &&
+      (!workflow || workflow.organizationId !== input.organizationId || workflow.goalId !== goal.id)
+    )
+      throw new Error("WorkItem workflow is not aligned to its goal");
+    if (input.milestoneId && (!milestone || milestone.projectId !== project.id))
+      throw new Error("WorkItem milestone is not aligned to its project");
+    if (input.processBindingId && (!binding || binding.projectId !== project.id))
+      throw new Error("WorkItem process binding is not aligned to its project");
+    if (input.assignedAgentId && input.processBindingId && !assignment)
+      throw new Error("WorkItem assigned agent is not active on its project");
+    if (input.parentWorkItemId && !parent)
+      throw new Error("WorkItem parent is not in its organization");
+
     const repositoryIds = [...new Set(input.repositoryIds ?? [input.repositoryId])];
     if (!repositoryIds.includes(input.repositoryId)) repositoryIds.unshift(input.repositoryId);
     if (repositoryIds.length > 32) {
@@ -463,6 +549,11 @@ export class ExecutionStore {
       deliveryClaimOwner: null,
       deliveryLeaseExpiresAt: null,
       workflowRunId: input.workflowRunId ?? null,
+      milestoneId: input.milestoneId ?? null,
+      processBindingId: input.processBindingId ?? null,
+      parentWorkItemId: input.parentWorkItemId ?? null,
+      assignedAgentId: input.assignedAgentId ?? null,
+      alignmentRationale: input.alignmentRationale ?? "",
       title: input.title,
       description: input.description ?? "",
       status: input.status ?? "proposed",
@@ -2533,11 +2624,18 @@ export class ExecutionStore {
     return rows[0] ? agentAttemptSchema.parse(rows[0]) : null;
   }
 
-  async reconcileLostAttempts(cutoff: string): Promise<number> {
+  async reconcileLostAttempts(cutoff: string, organizationId?: string): Promise<number> {
     const candidates = await this.db
       .select()
       .from(agentAttempts)
-      .where(inArray(agentAttempts.status, ["preparing", "running"]));
+      .where(
+        organizationId
+          ? and(
+              eq(agentAttempts.organizationId, organizationId),
+              inArray(agentAttempts.status, ["preparing", "running"]),
+            )
+          : inArray(agentAttempts.status, ["preparing", "running"]),
+      );
     const stale = candidates.filter(
       (attempt) => (attempt.startedAt ?? attempt.createdAt) <= cutoff,
     );
@@ -2641,11 +2739,17 @@ export class ExecutionStore {
     return rows[0] ? resourceLockSchema.parse(rows[0]) : null;
   }
 
-  async reconcileExpiredLocks(at = now()): Promise<number> {
+  async reconcileExpiredLocks(at = now(), organizationId?: string): Promise<number> {
     const expired = await this.db
       .select({ id: resourceLocks.id })
       .from(resourceLocks)
-      .where(and(lte(resourceLocks.leaseExpiresAt, at), isNull(resourceLocks.releasedAt)));
+      .where(
+        and(
+          ...(organizationId ? [eq(resourceLocks.organizationId, organizationId)] : []),
+          lte(resourceLocks.leaseExpiresAt, at),
+          isNull(resourceLocks.releasedAt),
+        ),
+      );
     for (const lock of expired) await this.releaseResourceLock(lock.id);
     return expired.length;
   }

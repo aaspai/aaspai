@@ -84,12 +84,31 @@ export async function ensureFrontendWorkspace(
   await mkdir(directory, { recursive: true });
   await writeFile(
     join(directory, "AGENT.md"),
-    `---\nid: agent/ceo\ntype: Agent\ntitle: "Chief Executive Officer"\ndescription: "Chief Executive Officer for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${onboarding.ceoProvider}\n${onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ceo\nreportsTo: null\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\nruntime:\n  default: ${onboarding.ceoProvider === "dry_run_local" ? "{ kind: local }" : "{ kind: sandbox, provider: daytona, remoteCwd: /workspace }"}\n---\n\n# Chief Executive Officer\n\n## Company mission\n${onboarding.ceoAgenda}\n\n## Operating principles and boundaries\n${onboarding.ceoInstructions}\n\nYou are the only initial employee. Turn founder direction into a measurable operating plan. Do useful work yourself until a specialist is justified. When a hire is needed, call the company_action tool with a hire_and_delegate action; never merely describe or invent an employee. Include the role, why it is needed now, scope, evidence requirements, and durable artifact paths. Never claim external actions happened. Ask for approval before spending money, contacting people, publishing, deploying, or changing company governance.\n\nEnd every run with decisions made, evidence produced, blockers, requested founder decisions, and the next action.\n`,
+    `---\nid: agent/ceo\ntype: Agent\ntitle: "Chief Executive Officer"\ndescription: "Chief Executive Officer for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${onboarding.ceoProvider}\n${onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ceo\nreportsTo: null\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\nruntime:\n  default: ${onboarding.ceoProvider === "dry_run_local" ? "{ kind: local }" : "{ kind: sandbox, provider: daytona, remoteCwd: /workspace }"}\n---\n\n# Chief Executive Officer\n\n## Company mission\n${onboarding.ceoAgenda}\n\n## Operating principles and boundaries\n${onboarding.ceoInstructions}\n\nYou are the only initial employee. Turn founder direction into a measurable operating plan. Do useful work yourself until a specialist is justified. When a hire is needed, call the company_action tool with a hire_and_delegate action; never merely describe or invent an employee. Include projectId and projectRole ("manager" or "member"), the role, why it is needed now, scope, evidence requirements, and durable artifact paths. A new project manager's first assignment must require create_milestone and define_and_start_process company actions. Never claim external actions happened. Ask for approval before spending money, contacting people, publishing, deploying, or changing company governance.\n\nEnd every run with decisions made, evidence produced, blockers, requested founder decisions, and the next action.\n`,
     "utf8",
   );
   await writeFile(join(directory, "config.yaml"), "adapterConfig: {}\nruntimeConfig: {}\n", "utf8");
   await writeFile(join(directory, "tools.yaml"), toolsYaml(onboarding.ceoProvider), "utf8");
   await writeFile(join(directory, "skills.lock.json"), "[]\n", "utf8");
+
+  const operatorDirectory = join(root, DEFAULT_AGENTS_DIR, "operator");
+  await mkdir(operatorDirectory, { recursive: true });
+  await writeFile(
+    join(operatorDirectory, "AGENT.md"),
+    `---\nid: agent/operator\ntype: Agent\ntitle: "Company Manager"\ndescription: "Bounded internal manager control-loop coordinator for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${onboarding.ceoProvider}\n${onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: operator\nreportsTo: agent/ceo\nmanages: []\npeers: []\nruntime:\n  default: { kind: local }\n---\n\n# Company Manager\n\nRun one bounded control decision at a time. Inspect durable state, schedule the next wakeup, and never execute tools or mutate strategic state outside typed company commands.\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(operatorDirectory, "config.yaml"),
+    "adapterConfig: {}\nruntimeConfig: {}\n",
+    "utf8",
+  );
+  await writeFile(
+    join(operatorDirectory, "tools.yaml"),
+    "allow: []\ndeny: []\nrequire_approval_for: []\n",
+    "utf8",
+  );
+  await writeFile(join(operatorDirectory, "skills.lock.json"), "[]\n", "utf8");
 }
 
 function toolsYaml(provider: string): string {

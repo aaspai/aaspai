@@ -9,3 +9,4 @@ export * from "./login-attempts";
 export * from "./memory";
 export * from "./organizations";
 export * from "./phase2";
+export * from "./strategic";

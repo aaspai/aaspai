@@ -18,6 +18,11 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
+  CompanyCommandService,
+  type HumanInboxItem,
+  OperationalGovernanceService,
+} from "@aaspai/company";
+import {
   type AutonomyChangeRequest,
   type AutonomyProposal,
   autonomyChangeRequestSchema,
@@ -117,6 +122,19 @@ export function isAaspaiWorkspace(): boolean {
     existsSync(join(root, DEFAULT_JSON_CONFIG_PATH)) ||
     existsSync(join(root, ".aaspai", "state.db"))
   );
+}
+
+export async function getStrategicSummary() {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) return null;
+  const handle = getDefaultDb();
+  runMigrations(handle);
+  const rows = await handle.db
+    .select({ organizationId: goals.organizationId })
+    .from(goals)
+    .limit(1);
+  const organizationId = rows[0]?.organizationId;
+  return organizationId ? new CompanyCommandService(handle.db).getSummary(organizationId) : null;
 }
 
 export async function listMemoryRecords(
@@ -941,6 +959,7 @@ export interface CompanyOverview {
   }>;
   workItems: CompanyWorkItemSummary[];
   approvals: CompanyApprovalSummary[];
+  inbox: HumanInboxItem[];
   runs: CompanyRunSummary[];
   attempts: ExecutionAttemptSummary[];
   evidence: CompanyEvidenceSummary[];
@@ -1040,6 +1059,9 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
   const health = organizationId
     ? await new ExecutionStore(db).getCompanyHealth(organizationId)
     : null;
+  const inbox = organizationId
+    ? await new OperationalGovernanceService(db).getHumanInbox(organizationId)
+    : [];
   const projectById = new Map(companyProjects.map((project) => [project.id, project]));
   const repositoryById = new Map(
     companyRepositories.map((repository) => [repository.id, repository]),
@@ -1181,6 +1203,7 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
       createdAt: revision.createdAt,
     })),
     workItems,
+    inbox,
     approvals: companyApprovals.map((approval) => ({
       id: approval.id,
       workItemId: approval.workItemId,
