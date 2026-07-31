@@ -21,7 +21,7 @@ const loopsDir = join(evidenceRoot, "definitions", "loops");
 const organizationId = `org_worker_daytona_${runId}`;
 const agentId = "agent/web-builder";
 const signature = "Built with the AASPAI Sunrise Standard";
-const snapshot = process.env.DAYTONA_SNAPSHOT?.trim() || "aaspai-opencode-1-18-5-v2";
+const snapshot = process.env.DAYTONA_SNAPSHOT?.trim() || "aaspai-opencode-1-18-5-v3";
 const controlToken = randomBytes(32).toString("hex");
 let gateway: Sandbox | undefined;
 let daemon: WorkerDaemon | undefined;
@@ -61,7 +61,7 @@ async function startGateway(): Promise<string> {
     },
     { timeout: 180 },
   );
-  const gatewayScript = fileURLToPath(new URL("./attempt-gateway.mjs", import.meta.url));
+  const gatewayScript = join(repoRoot, "scripts", "attempt-gateway.mjs");
   await gateway.fs.uploadFile(gatewayScript, "/tmp/aaspai-attempt-gateway.mjs");
   const launch = await gateway.process.executeCommand(
     [

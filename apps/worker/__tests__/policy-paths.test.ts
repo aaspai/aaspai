@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   changedPathsFromStatus,
+  gatewayAgentBaseUrl,
   gatewayControlUrl,
   parseCheckerVerdict,
   requiredCheckerCommit,
@@ -38,5 +39,15 @@ describe("gateway control URL", () => {
     expect(gatewayControlUrl("https://gateway.example.test/")).toBe("https://gateway.example.test");
     expect(gatewayControlUrl("http://127.0.0.1:3000/")).toBe("http://127.0.0.1:3000");
     expect(() => gatewayControlUrl("http://gateway.example.test")).toThrow(/HTTPS/);
+  });
+
+  it("requires HTTPS for the agent gateway except inside a local runtime", () => {
+    expect(gatewayAgentBaseUrl("https://gateway.example.test/v1/")).toBe(
+      "https://gateway.example.test/v1",
+    );
+    expect(gatewayAgentBaseUrl("http://host.docker.internal:8787/v1")).toBe(
+      "http://host.docker.internal:8787/v1",
+    );
+    expect(() => gatewayAgentBaseUrl("http://gateway.example.test/v1")).toThrow(/HTTPS/);
   });
 });

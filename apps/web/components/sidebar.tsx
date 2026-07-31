@@ -161,10 +161,9 @@ export function Sidebar({
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted font-semibold text-foreground">
               {founderName.slice(0, 1).toUpperCase()}
             </span>
-            <span>
-              <span className="font-medium text-foreground">{founderName}</span>
-              <br />
-              Founder
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate font-medium text-foreground">{founderName}</span>
+              <span>Founder</span>
             </span>
           </div>
           <LogoutButton />

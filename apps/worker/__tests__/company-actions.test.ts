@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { companyActionPayload, companyActions } from "../src/company-actions.js";
+import {
+  companyActionPayload,
+  companyActions,
+  missingRequiredCompanyActions,
+} from "../src/company-actions.js";
 
 describe("company actions", () => {
   it("accepts bounded structured hires and rejects untrusted provider output", () => {
@@ -67,5 +71,27 @@ describe("company actions", () => {
         ],
       }),
     ).toThrow("invalid");
+  });
+
+  it("matches every required action to one submitted project action", () => {
+    const first = {
+      type: "hire_and_delegate" as const,
+      agentId: "agent/first",
+      title: "First",
+      role: "researcher" as const,
+      description: "Researches the first project.",
+      workTitle: "Research project one",
+      workDescription: "Produce evidence.",
+      projectId: "project/one",
+    };
+    const second = { ...first, agentId: "agent/second", projectId: "project/two" };
+    const required = [
+      { type: "hire_and_delegate", projectId: "project/one" },
+      { type: "hire_and_delegate", projectId: "project/two" },
+    ];
+    expect(missingRequiredCompanyActions(required, [first, second])).toEqual([]);
+    expect(missingRequiredCompanyActions(required, [first])).toEqual([
+      { type: "hire_and_delegate", projectId: "project/two" },
+    ]);
   });
 });

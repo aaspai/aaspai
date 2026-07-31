@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
   AASPAI_DIR,
   DEFAULT_AGENTS_DIR,
@@ -14,6 +15,7 @@ export type FrontendWorkspaceOptions = {
   ceoModel?: string;
   ceoAgenda?: string;
   ceoInstructions?: string;
+  runtime?: ExecutionTarget;
 };
 
 export type FrontendOnboarding = {
@@ -21,6 +23,7 @@ export type FrontendOnboarding = {
   ceoModel?: string;
   ceoAgenda: string;
   ceoInstructions: string;
+  runtime: ExecutionTarget;
   completedAt: string;
 };
 
@@ -55,8 +58,16 @@ export async function ensureFrontendWorkspace(
     ceoAgenda: options.ceoAgenda?.trim() || stored?.ceoAgenda || defaultAgenda,
     ceoInstructions:
       options.ceoInstructions?.trim() || stored?.ceoInstructions || defaultInstructions,
+    runtime:
+      options.runtime ??
+      stored?.runtime ??
+      ({ kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" } as const),
     completedAt:
-      options.ceoProvider || options.ceoModel || options.ceoAgenda || options.ceoInstructions
+      options.ceoProvider ||
+      options.ceoModel ||
+      options.ceoAgenda ||
+      options.ceoInstructions ||
+      options.runtime
         ? new Date().toISOString()
         : (stored?.completedAt ?? ""),
   };
@@ -84,10 +95,21 @@ export async function ensureFrontendWorkspace(
   await mkdir(directory, { recursive: true });
   await writeFile(
     join(directory, "AGENT.md"),
-    `---\nid: agent/ceo\ntype: Agent\ntitle: "Chief Executive Officer"\ndescription: "Chief Executive Officer for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${onboarding.ceoProvider}\n${onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ceo\nreportsTo: null\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\nruntime:\n  default: ${onboarding.ceoProvider === "dry_run_local" ? "{ kind: local }" : "{ kind: sandbox, provider: daytona, remoteCwd: /workspace }"}\n---\n\n# Chief Executive Officer\n\n## Company mission\n${onboarding.ceoAgenda}\n\n## Operating principles and boundaries\n${onboarding.ceoInstructions}\n\nYou are the only initial employee. Turn founder direction into a measurable operating plan. Do useful work yourself until a specialist is justified. When a hire is needed, call the company_action tool with a hire_and_delegate action; never merely describe or invent an employee. Include projectId and projectRole ("manager" or "member"), the role, why it is needed now, scope, evidence requirements, and durable artifact paths. A new project manager's first assignment must require create_milestone and define_and_start_process company actions. Never claim external actions happened. Ask for approval before spending money, contacting people, publishing, deploying, or changing company governance.\n\nEnd every run with decisions made, evidence produced, blockers, requested founder decisions, and the next action.\n`,
+    `---\nid: agent/ceo\ntype: Agent\ntitle: "Chief Executive Officer"\ndescription: "Chief Executive Officer for ${companyName}"\ntimestamp: ${new Date().toISOString()}\nadapter: ${onboarding.ceoProvider}\n${onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ceo\nreportsTo: null\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\nruntime:\n  default: ${JSON.stringify(onboarding.runtime)}\n---\n\n# Chief Executive Officer\n\n## Company mission\n${onboarding.ceoAgenda}\n\n## Operating principles and boundaries\n${onboarding.ceoInstructions}\n\nYou are the only initial employee. Turn founder direction into a measurable operating plan. Use websearch and browser_snapshot for public research, cite sources in durable artifacts, and never treat an unsourced model statement as evidence. Do useful work yourself until a specialist is justified. When a hire is needed, call the company_action tool with a hire_and_delegate action; never merely describe or invent an employee. Include projectId and projectRole ("manager" or "member"), the role, why it is needed now, scope, evidence requirements, and durable artifact paths. A new project manager's first assignment must require create_milestone and define_and_start_process company actions. Never claim external actions happened. Ask for approval before spending money, contacting people, publishing, deploying, or changing company governance.\n\nEnd every run with decisions made, evidence produced, blockers, requested founder decisions, and the next action.\n`,
     "utf8",
   );
-  await writeFile(join(directory, "config.yaml"), "adapterConfig: {}\nruntimeConfig: {}\n", "utf8");
+  await writeFile(
+    join(directory, "config.yaml"),
+    `${JSON.stringify(
+      {
+        adapterConfig: adapterConfig(onboarding),
+        runtimeConfig: { default: onboarding.runtime },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
   await writeFile(join(directory, "tools.yaml"), toolsYaml(onboarding.ceoProvider), "utf8");
   await writeFile(join(directory, "skills.lock.json"), "[]\n", "utf8");
 
@@ -119,17 +141,43 @@ function toolsYaml(provider: string): string {
         ? ["Bash", "Edit", "Glob", "Grep", "Read", "WebFetch", "WebSearch", "Write"]
         : provider === "opencode_cli"
           ? [
-              "bash",
+              "browser_snapshot",
               "edit",
               "read",
               "write",
               "glob",
               "grep",
               "list",
-              "webfetch",
+              "websearch",
+              "todowrite",
               "skill",
               "company_action",
             ]
           : [];
   return `allow:${tools.map((tool) => `\n  - ${tool}`).join("")}\ndeny: []\nrequire_approval_for: []\n`;
+}
+
+function adapterConfig(onboarding: FrontendOnboarding): Record<string, unknown> {
+  if (onboarding.ceoProvider !== "opencode_cli" || !onboarding.ceoModel?.startsWith("aaspai/")) {
+    return {};
+  }
+  const upstreamModel = onboarding.ceoModel.slice("aaspai/".length);
+  return {
+    providers: {
+      aaspai: {
+        npm: "@ai-sdk/openai-compatible",
+        name: "AASPAI attempt gateway",
+        options: {
+          baseURL: "{env:AASPAI_GATEWAY_AGENT_BASE_URL}",
+          apiKey: "{env:AASPAI_ATTEMPT_TOKEN}",
+        },
+        models: {
+          [upstreamModel]: {
+            name: `${upstreamModel} through the governed gateway`,
+            limit: { context: 128_000, output: 8_192 },
+          },
+        },
+      },
+    },
+  };
 }

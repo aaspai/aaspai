@@ -88,7 +88,7 @@ const organizationId = `org_company_${targetName}_${runId}`;
 const controlToken = randomBytes(32).toString("hex");
 const upstreamModel = process.env.AASPAI_REAL_E2E_MODEL?.trim() || "poolside/laguna-s-2.1:free";
 const model = `aaspai/${upstreamModel}`;
-const snapshot = process.env.DAYTONA_SNAPSHOT?.trim() || "aaspai-opencode-1-18-5-v2";
+const snapshot = process.env.DAYTONA_SNAPSHOT?.trim() || "aaspai-opencode-1-18-5-v3";
 let daemon: WorkerDaemon | undefined;
 let gatewayProcess: ChildProcess | undefined;
 let gatewaySandbox: Sandbox | undefined;
@@ -132,7 +132,7 @@ async function waitForHealth(url: string): Promise<void> {
 
 async function startGateway(): Promise<{ controlUrl: string; agentUrl: string }> {
   const upstreamKey = await openRouterKey();
-  const script = fileURLToPath(new URL("./attempt-gateway.mjs", import.meta.url));
+  const script = join(repoRoot, "scripts", "attempt-gateway.mjs");
   if (targetName === "docker") {
     const port = 18_787;
     gatewayProcess = spawn(process.execPath, [script], {
@@ -450,6 +450,9 @@ async function main(): Promise<void> {
     idempotencyKey: `parent:${runId}`,
     workKind: "general",
     deliveryMode: "none",
+    metadata: {
+      requiredCompanyActions: [{ type: "hire_and_delegate" }],
+    },
   });
 
   daemon = new WorkerDaemon({

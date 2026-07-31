@@ -316,6 +316,86 @@ describe("StrategicReadModelService", () => {
     ).toEqual(expect.arrayContaining([expect.objectContaining({ agentId: "agent/growth" })]));
   });
 
+  it("persists the selected runtime and project-scoped staffing requirements", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aaspai-company-staffing-"));
+    const handle = createDbFor(root);
+    resources.push({ close: handle.close, root });
+    runMigrations(handle);
+    const commands = new CompanyCommandService(handle.db);
+    await commands.execute({
+      type: "setup_company",
+      organizationId: "org_staffing",
+      actorId: "founder",
+      idempotencyKey: "setup",
+      description: "A focused company",
+      ceoAgentId: "agent/ceo",
+      operatorAgentId: "agent/operator",
+      policy: {
+        provider: "opencode_cli",
+        runtime: {
+          kind: "docker",
+          image: "aaspai-opencode-test:latest",
+          network: "bridge",
+        },
+      },
+      objectives: [{ title: "Generate demand", successCriteria: ["10 qualified leads"] }],
+    });
+    await commands.execute({
+      type: "validate_company",
+      organizationId: "org_staffing",
+      actorId: "founder",
+      idempotencyKey: "validate",
+    });
+    await commands.execute({
+      type: "start_discovery",
+      organizationId: "org_staffing",
+      actorId: "founder",
+      idempotencyKey: "discovery",
+    });
+    const goalId = (await commands.getSummary("org_staffing")).objectives[0]!.id;
+    await commands.execute({
+      type: "submit_portfolio_proposal",
+      organizationId: "org_staffing",
+      actorId: "agent/ceo",
+      idempotencyKey: "proposal",
+      summary: "Start with one growth project.",
+      evidence: ["artifact/discovery"],
+      projects: [
+        {
+          goalId,
+          title: "Lead generation",
+          description: "Build a qualified pipeline.",
+          managerAgentId: null,
+        },
+      ],
+    });
+    await commands.execute({
+      type: "activate_company",
+      organizationId: "org_staffing",
+      actorId: "founder",
+      idempotencyKey: "activate",
+      approved: true,
+    });
+    const rows = await handle.db
+      .select()
+      .from(wakeups)
+      .where(eq(wakeups.organizationId, "org_staffing"));
+    const staffing = rows.find((row) => row.triggerDetail === "activate_company");
+    expect(JSON.parse(staffing!.payloadJson)).toMatchObject({
+      runtime: {
+        kind: "docker",
+        image: "aaspai-opencode-test:latest",
+        network: "bridge",
+      },
+      requiredCompanyActions: [
+        {
+          type: "hire_and_delegate",
+          projectId: expect.stringMatching(/^project\//),
+        },
+      ],
+    });
+  });
+
   it("binds a manager-owned process to assigned agents and durable work lineage", async () => {
     const root = await mkdtemp(join(tmpdir(), "aaspai-company-process-"));
     const handle = createDbFor(root);

@@ -4,6 +4,8 @@ import {
   type CompanyStrategicSummary,
   companyCommandSchema,
   companyProfileSchema,
+  type ExecutionTarget,
+  executionTargetSchema,
 } from "@aaspai/contracts";
 import {
   and,
@@ -255,6 +257,7 @@ export class CompanyCommandService {
     }));
     const provider =
       typeof profile.policy.provider === "string" ? profile.policy.provider : "dry_run_local";
+    const runtime = companyRuntime(profile.policy, provider);
     const staffingPrompt = [
       "The founder approved the company portfolio. Staff each unstaffed project with the smallest useful team.",
       "For every unstaffed project, call company_action with one hire_and_delegate action.",
@@ -304,14 +307,16 @@ export class CompanyCommandService {
           this.insertManager(tx, command, id, proposal.managerAgentId, timestamp);
       }
       this.audit(tx, command, "company_profile", command.organizationId, "activate_company");
-      if (activationProjects.some((project) => !project.managerAgentId)) {
+      const unstaffed = activationProjects.filter((project) => !project.managerAgentId);
+      if (unstaffed.length > 0) {
         this.wake(tx, command, profile.ceoAgentId, "CEO staffing session requested", {
           prompt: staffingPrompt,
           adapter: provider,
-          runtime:
-            provider === "dry_run_local"
-              ? { kind: "local" }
-              : { kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" },
+          runtime,
+          requiredCompanyActions: unstaffed.map((project) => ({
+            type: "hire_and_delegate",
+            projectId: project.id,
+          })),
         });
       }
     });
@@ -335,6 +340,7 @@ export class CompanyCommandService {
       .where(eq(goals.organizationId, command.organizationId));
     const provider =
       typeof profile.policy.provider === "string" ? profile.policy.provider : "dry_run_local";
+    const runtime = companyRuntime(profile.policy, provider);
     const prompt = [
       "Run the company's first bounded CEO discovery.",
       "Study the objectives, propose the smallest useful project portfolio, and do not execute the projects.",
@@ -367,10 +373,7 @@ export class CompanyCommandService {
         ),
         prompt,
         adapter: provider,
-        runtime:
-          provider === "dry_run_local"
-            ? { kind: "local" }
-            : { kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" },
+        runtime,
       });
     });
     return this.result(command, command.organizationId, "discovery");
@@ -1494,6 +1497,20 @@ function parseStringArrayValue(value: unknown): string[] {
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
+
+function companyRuntime(policy: Record<string, unknown>, provider: string): ExecutionTarget {
+  if (provider === "dry_run_local") return { kind: "local", envPassthrough: false };
+  if (policy.runtime !== undefined) {
+    const configured = executionTargetSchema.safeParse(policy.runtime);
+    if (!configured.success) throw new CompanyCommandError("company runtime policy is invalid");
+    if (configured.data.kind === "local") {
+      throw new CompanyCommandError("real company agents require an isolated runtime");
+    }
+    return configured.data;
+  }
+  return { kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" };
+}
+
 function portfolioProjects(value: string): Array<{
   goalId: string;
   title: string;

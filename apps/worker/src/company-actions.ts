@@ -83,6 +83,11 @@ export type CompanyAction =
   | CreateMilestoneAction
   | DefineAndStartProcessAction;
 
+export interface RequiredCompanyAction {
+  type: CompanyAction["type"];
+  projectId?: string;
+}
+
 export function companyActions(result: AdapterExecutionResult): CompanyAction[] {
   const payload = result.resultJson;
   if (!Array.isArray(payload?.companyActions)) return [];
@@ -90,6 +95,36 @@ export function companyActions(result: AdapterExecutionResult): CompanyAction[] 
     return payload.dryRun === true ? parseCompanyActions(payload.companyActions) : [];
   }
   return payload.companyActions.flatMap((action) => companyActionPayload(action));
+}
+
+export function missingRequiredCompanyActions(
+  value: unknown,
+  submitted: readonly CompanyAction[],
+): RequiredCompanyAction[] {
+  const required = Array.isArray(value)
+    ? value.flatMap((item): RequiredCompanyAction[] => {
+        if (typeof item === "string" && isCompanyActionType(item)) return [{ type: item }];
+        if (!isRecord(item) || !isCompanyActionType(item.type)) return [];
+        return [
+          {
+            type: item.type,
+            ...(typeof item.projectId === "string" ? { projectId: item.projectId } : {}),
+          },
+        ];
+      })
+    : [];
+  const available = [...submitted];
+  return required.filter((requirement) => {
+    const match = available.findIndex(
+      (action) =>
+        action.type === requirement.type &&
+        (requirement.projectId === undefined ||
+          ("projectId" in action && action.projectId === requirement.projectId)),
+    );
+    if (match < 0) return true;
+    available.splice(match, 1);
+    return false;
+  });
 }
 
 export function companyActionPayload(value: unknown): CompanyAction[] {
@@ -226,6 +261,14 @@ function isDefineAndStartProcessAction(value: unknown): value is DefineAndStartP
 
 function isIdentifier(value: unknown): value is string {
   return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,255}$/.test(value);
+}
+
+function isCompanyActionType(value: unknown): value is CompanyAction["type"] {
+  return (
+    value === "hire_and_delegate" ||
+    value === "create_milestone" ||
+    value === "define_and_start_process"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

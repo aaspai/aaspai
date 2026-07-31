@@ -1,6 +1,8 @@
 import { createHmac, randomUUID } from "node:crypto";
 import http from "node:http";
 
+// Development and acceptance gateway. Production should deploy the same HTTP contract
+// behind durable storage, rate limits, budget enforcement, and managed secrets.
 const controlToken = process.env.GATEWAY_CONTROL_TOKEN;
 const upstreamKey = process.env.OPENROUTER_API_KEY;
 const port = Number(process.env.GATEWAY_PORT || 8787);

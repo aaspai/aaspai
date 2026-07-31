@@ -92,11 +92,13 @@ import { Sessions } from "@aaspai/sessions";
 import { loadSkillDirectory, SkillRegistry } from "@aaspai/skills";
 import { createBuiltInRegistry } from "@aaspai/tools";
 import { and, eq } from "drizzle-orm";
+import { BROWSER_SNAPSHOT_TOOL_SOURCE } from "./browser-tool.js";
 import {
   COMPANY_ACTION_TOOL_SOURCE,
   type CompanyAction,
   companyActions,
   type HireAndDelegateAction,
+  missingRequiredCompanyActions,
 } from "./company-actions.js";
 import { validateEvidencePolicy } from "./output-policy.js";
 
@@ -117,7 +119,7 @@ function hiredAgentTools(tools: AgentConfig["tools"], role: HireAndDelegateActio
     "shell",
     "skill",
     "write",
-    ...(role === "cmo" || role === "researcher" ? ["webfetch", "websearch", "web_search"] : []),
+    ...(role === "cmo" || role === "researcher" ? ["browser_snapshot", "websearch"] : []),
     ...(role === "designer" ? ["view_image"] : []),
   ]);
   const allow = Array.isArray(source.allow)
@@ -352,6 +354,16 @@ export function gatewayControlUrl(value: string | undefined): string | undefined
   const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw new Error("AASPAI_GATEWAY_CONTROL_URL must use HTTPS except on loopback");
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+
+export function gatewayAgentBaseUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const url = new URL(value);
+  const local = ["localhost", "127.0.0.1", "::1", "host.docker.internal"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new Error("AASPAI_GATEWAY_AGENT_BASE_URL must use HTTPS except for local runtimes");
   }
   return url.toString().replace(/\/+$/, "");
 }
@@ -858,6 +870,7 @@ export class WorkerDaemon {
       sessionId?: string;
       workItemId?: string;
       workflowRunId?: string;
+      requiredCompanyActions?: unknown;
     };
     const agentId = wakeupRow.agentId ?? request.agentId;
     if (!agentId) throw new Error("wakeup has no agentId");
@@ -944,6 +957,9 @@ export class WorkerDaemon {
       branchName: "worker-wakeup",
       idempotencyKey: wakeupId,
       status: "ready",
+      metadata: Array.isArray(request.requiredCompanyActions)
+        ? { requiredCompanyActions: request.requiredCompanyActions }
+        : {},
     });
     const workflowRun = await this.executionStore.createWorkflowRun({
       id: `run:wakeup:${wakeupId}`,
@@ -1582,6 +1598,12 @@ export class WorkerDaemon {
     const mayManageCompany =
       input.attempt.role === "maker" &&
       (await this.isAuthorizedManager(input.agentId, input.workItem.projectId));
+    const mayUseBrowser =
+      input.adapter === "opencode_cli" &&
+      profile.tools.some(
+        (decision) =>
+          decision.name.toLowerCase() === "browser_snapshot" && decision.allowed && decision.ready,
+      );
     const adapterConfig = {
       ...profile.inputs.adapterConfig,
       ...(input.adapter === "opencode_cli" &&
@@ -1589,7 +1611,7 @@ export class WorkerDaemon {
       !Array.isArray(profile.inputs.adapterConfig.skillsPaths)
         ? { skillsPaths: [".opencode_cli/skills"] }
         : {}),
-      ...(input.adapter === "opencode_cli" && mayManageCompany
+      ...(input.adapter === "opencode_cli" && (mayManageCompany || mayUseBrowser)
         ? { xdgConfigHome: ".opencode_cli" }
         : {}),
     };
@@ -1604,6 +1626,18 @@ export class WorkerDaemon {
       await mkdir(dirname(companyActionTool), { recursive: true });
       await writeFile(companyActionTool, COMPANY_ACTION_TOOL_SOURCE, "utf8");
       materializedPaths.push(companyActionTool);
+    }
+    if (mayUseBrowser) {
+      const browserTool = join(
+        workspacePath,
+        ".opencode_cli",
+        "opencode",
+        "tools",
+        "browser_snapshot.ts",
+      );
+      await mkdir(dirname(browserTool), { recursive: true });
+      await writeFile(browserTool, BROWSER_SNAPSHOT_TOOL_SOURCE, "utf8");
+      materializedPaths.push(browserTool);
     }
     let credential: AttemptCredential | null = null;
     let credentialRevoked = false;
@@ -1637,13 +1671,21 @@ export class WorkerDaemon {
         }));
       assertGovernedRuntimeIsolation(plan.harness, plan.target, true);
       credential = await issueAttemptCredential(this.organizationId, input.attempt.id);
+      const agentBaseUrl = gatewayAgentBaseUrl(process.env.AASPAI_GATEWAY_AGENT_BASE_URL);
 
       const result = await new HarnessExecutionPlanRunner(this.executionStore).run({
         plan,
         workspace: { ...workspace, status: "ready" },
         profile,
         durableSessionId: input.durableSessionId,
-        ...(credential ? { ephemeralEnv: { AASPAI_ATTEMPT_TOKEN: credential.token } } : {}),
+        ...(credential
+          ? {
+              ephemeralEnv: {
+                AASPAI_ATTEMPT_TOKEN: credential.token,
+                ...(agentBaseUrl ? { AASPAI_GATEWAY_AGENT_BASE_URL: agentBaseUrl } : {}),
+              },
+            }
+          : {}),
         onExecuted: async (result) => {
           if (credential) {
             await revokeAttemptCredential(credential);
@@ -1663,16 +1705,17 @@ export class WorkerDaemon {
           });
           if (mayManageCompany && !result.timedOut && result.exitCode === 0) {
             const actions = companyActions(result);
-            const requiredActions = Array.isArray(input.workItem.metadata.requiredCompanyActions)
-              ? input.workItem.metadata.requiredCompanyActions.filter(
-                  (action): action is string => typeof action === "string",
-                )
-              : [];
-            const submitted = new Set<string>(actions.map((action) => action.type));
-            const missingActions = requiredActions.filter((action) => !submitted.has(action));
+            const missingActions = missingRequiredCompanyActions(
+              input.workItem.metadata.requiredCompanyActions,
+              actions,
+            );
             if (missingActions.length > 0)
               throw new Error(
-                `Manager run omitted required company actions: ${missingActions.join(", ")}`,
+                `Manager run omitted required company actions: ${missingActions
+                  .map(
+                    (action) => `${action.type}${action.projectId ? `:${action.projectId}` : ""}`,
+                  )
+                  .join(", ")}`,
               );
             await this.applyCompanyActions(actions, {
               attempt: input.attempt,
@@ -1928,7 +1971,10 @@ export class WorkerDaemon {
           },
           ...(action.projectRole === "manager"
             ? {
-                requiredCompanyActions: ["create_milestone", "define_and_start_process"],
+                requiredCompanyActions: [
+                  { type: "create_milestone", projectId: targetProject.id },
+                  { type: "define_and_start_process", projectId: targetProject.id },
+                ],
               }
             : {}),
         },

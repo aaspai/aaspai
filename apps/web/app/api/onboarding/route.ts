@@ -3,13 +3,17 @@ import { getDefaultDb, runMigrations } from "@aaspai/db";
 import { getAdapter } from "@aaspai/harness";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { workspaceRoot } from "@/lib/aaspai";
 import { currentUser } from "@/lib/local-auth";
-import { listFrontendProviderModels } from "@/lib/provider-status";
+import {
+  frontendRuntimeTypes,
+  listFrontendProviderModels,
+  listFrontendRuntimes,
+} from "@/lib/provider-status";
 import { ensureFrontendWorkspace } from "@/lib/workspace-bootstrap";
 
 const bodySchema = z.object({
   provider: z.literal("opencode_cli"),
+  runtime: z.enum(frontendRuntimeTypes),
   model: z.string().trim().min(1).max(256),
   ceoAgenda: z.string().trim().min(10).max(10_000),
   ceoInstructions: z.string().trim().min(10).max(10_000),
@@ -35,21 +39,23 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (
-    !process.env.DAYTONA_API_KEY ||
-    !process.env.AASPAI_GATEWAY_CONTROL_URL ||
-    !process.env.AASPAI_GATEWAY_CONTROL_TOKEN
-  ) {
+  const provider = getAdapter(parsed.data.provider);
+  const runtime = (await listFrontendRuntimes()).find(
+    (candidate) => candidate.type === parsed.data.runtime,
+  );
+  if (!runtime?.ready) {
     return NextResponse.json(
       {
-        error:
-          "Daytona and the attempt-credential gateway must be configured before launching a real company.",
+        error: `${runtime?.label ?? parsed.data.runtime} is not ready: ${
+          runtime?.checks
+            .filter((check) => !check.ready)
+            .map((check) => check.message)
+            .join("; ") ?? "runtime unavailable"
+        }.`,
       },
       { status: 503 },
     );
   }
-
-  const provider = getAdapter(parsed.data.provider);
   const models = await listFrontendProviderModels(parsed.data.provider);
   if (!models.some((model) => model.id === parsed.data.model)) {
     return NextResponse.json(
@@ -57,13 +63,9 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const environment = await provider.testEnvironment({
-    config: { model: parsed.data.model },
-    cwd: workspaceRoot(),
-  });
-  if (!environment.ok) {
+  if (provider.info.status !== "ready") {
     return NextResponse.json(
-      { error: `${parsed.data.provider} is not ready. Connect it on the setup page first.` },
+      { error: `${parsed.data.provider} is not available in this build.` },
       { status: 400 },
     );
   }
@@ -73,6 +75,7 @@ export async function POST(request: Request) {
     ceoModel: parsed.data.model,
     ceoAgenda: parsed.data.ceoAgenda,
     ceoInstructions: parsed.data.ceoInstructions,
+    runtime: runtime.target,
   });
   const db = getDefaultDb();
   runMigrations(db);
@@ -89,6 +92,7 @@ export async function POST(request: Request) {
     policy: {
       provider: parsed.data.provider,
       model: parsed.data.model,
+      runtime: runtime.target,
       firstPriority: parsed.data.firstPriority,
       founderApprovalRequiredForPortfolio: true,
       externalActions: "approval_required",

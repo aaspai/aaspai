@@ -69,12 +69,15 @@ resulting source changes. A normal release deletes the sandbox. A resumable
 release stops it; the next invocation reconnects to the same lease and starts it
 before resuming the provider session.
 
-Production runs can select the versioned `aaspai-opencode-1-18-5-v2` Daytona
+Production runs can select the versioned `aaspai-opencode-1-18-5-v3` Daytona
 snapshot through `DAYTONA_SNAPSHOT`. Bootstrap remains as an idempotent fallback
 for accounts that have not built the snapshot. The image includes CA
-certificates, Git, curl, wget, jq, ripgrep, Python, build tools, archive tools,
-and a lightweight web-search CLI so agents can use governed web tools without
-installing basic operating-system dependencies during each attempt.
+certificates, Git, Chromium, curl, wget, jq, ripgrep, Python, build tools,
+archive tools, and a lightweight web-search CLI so agents can use governed web
+tools without installing basic operating-system dependencies during each
+attempt. Company research agents receive OpenCode web search plus a bounded
+`browser_snapshot` tool that accepts only public HTTPS destinations, pins the
+resolved address, blocks private address ranges, and caps time and output.
 
 Real acceptance evidence currently covers:
 
@@ -122,8 +125,10 @@ yarn workspace @aaspai/worker test:real:daytona
 ```
 
 Production must configure a reachable gateway with
-`AASPAI_GATEWAY_CONTROL_URL` and `AASPAI_GATEWAY_CONTROL_TOKEN`; the test gateway
-is acceptance infrastructure, not the production gateway deployment. Host
-provider-auth files are never copied into Daytona. `AASPAI_HOST_AUTH_PATH` is
-rejected for sandbox execution; provider access must use the attempt-scoped
-gateway credential.
+`AASPAI_GATEWAY_CONTROL_URL`, `AASPAI_GATEWAY_CONTROL_TOKEN`, and
+`AASPAI_GATEWAY_AGENT_BASE_URL`; the test gateway is acceptance infrastructure,
+not the production gateway deployment. During local development,
+`OPENROUTER_API_KEY` starts a host gateway for Docker, or a public isolated
+gateway when `DAYTONA_API_KEY` is also configured. Host provider-auth files are
+never copied into Daytona. `AASPAI_HOST_AUTH_PATH` is rejected for sandbox
+execution; provider access must use the attempt-scoped gateway credential.

@@ -28,7 +28,7 @@ const DAYTONA_CAPABILITIES: ProviderCapabilities = {
 
 export const daytonaTarget: RuntimeTarget = createSdkSandboxTarget({
   driver: new DaytonaSandboxDriver({
-    snapshot: "aaspai-opencode-1-18-5-v2",
+    snapshot: "aaspai-opencode-1-18-5-v3",
     image: "node:22-bookworm-slim",
     timeoutMs: 120_000,
   }),

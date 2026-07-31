@@ -1,6 +1,6 @@
 import { Daytona, Image } from "@daytonaio/sdk";
 
-const name = process.env.DAYTONA_SNAPSHOT?.trim() || "aaspai-opencode-1-18-5-v2";
+const name = process.env.DAYTONA_SNAPSHOT?.trim() || "aaspai-opencode-1-18-5-v3";
 const client = new Daytona();
 const existing = (await client.snapshot.list(1, 100)).items.find((item) => item.name === name);
 
@@ -9,9 +9,9 @@ if (existing) {
 } else {
   const image = Image.base("node:22-bookworm-slim")
     .runCommands(
-      "apt-get update -qq && apt-get install -y -qq build-essential ca-certificates curl ddgr file git jq openssh-client openssl python3 python3-pip ripgrep rsync unzip wget zip && update-ca-certificates && rm -rf /var/lib/apt/lists/*",
+      "apt-get update -qq && apt-get install -y -qq build-essential ca-certificates chromium curl ddgr file git jq openssh-client openssl python3 python3-pip ripgrep rsync unzip wget zip && update-ca-certificates && rm -rf /var/lib/apt/lists/*",
       "npm install -g opencode-ai@1.18.5",
-      "git --version && curl --version && ddgr --version && python3 --version && rg --version && opencode --version",
+      "git --version && chromium --version && curl --version && ddgr --version && python3 --version && rg --version && opencode --version",
     )
     .env({
       HOME: "/root",

@@ -6,9 +6,67 @@ Baseline commit: `6f93aa0` (`feat: complete autonomous company orchestration bas
 
 ## Verdict
 
-The system has the durable primitives for company orchestration, but a first-time founder cannot launch a real company from the product, and a real CEO run can falsely complete without performing its required company action.
+The original validation found two P0 release blockers: onboarding could not select a runnable isolated runtime, and a CEO could falsely complete without performing required typed company actions.
 
-Current state: **not safe for autonomous company operation**.
+Remediation state on 2026-07-31: **the P0 code and runtime defects are fixed and the real Daytona tool boundary passes; a complete model-driven company rerun is still required before autonomous-company release**.
+
+## Remediation update
+
+### Fixed
+
+- Company-control work now carries machine-enforced, project-scoped typed-action requirements.
+- Requirements survive wakeup-to-work-item conversion and use one-to-one matching, so one action cannot satisfy several projects.
+- A successful CLI exit is rejected before completion when any required action is missing.
+- The real-company parent test now fails immediately if the CEO omits `hire_and_delegate`.
+- Onboarding now presents Daytona and Docker runtimes with separate readiness checks.
+- The selected runtime is persisted in company policy, CEO configuration, discovery wakes, and staffing wakes.
+- Generated OpenCode configuration points at the governed attempt gateway and uses only the short-lived attempt token.
+- Local Docker development can use a host gateway without Daytona; Daytona uses a publicly reachable isolated gateway.
+- Permanent host OpenCode authentication is never copied into an agent sandbox.
+- OpenCode agents have web search and a bounded `browser_snapshot` tool. Browser access is read-only, public-HTTPS-only, DNS-pinned, private-address-blocked, limited to 30 seconds, and capped at 100 KB.
+- The Daytona v3 snapshot is active with OpenCode 1.18.5, Chromium, curl, `ddgr`, Python, ripgrep, Git, and the normal build baseline.
+- The founder name and role layout defect is fixed.
+
+### Verified
+
+- Company tests: 16/16 passed.
+- Worker tests: 21/21 passed.
+- Web, worker, runtime, and harness type checks passed.
+- Changed-package lint passed.
+- Immutable dependency install passed.
+- Fresh Daytona sandbox:
+  - public HTTPS fetch passed;
+  - web search passed;
+  - headless Chromium rendering passed;
+  - workspace round trip, binary/deletion restore, streaming, cancellation, and timeout passed;
+  - all three sandbox leases were absent after cleanup.
+- Browser onboarding smoke:
+  - Daytona credential reported accepted;
+  - Docker image reported available;
+  - missing attempt gateway was shown explicitly;
+  - company launch was disabled rather than failing after submission.
+
+Real Daytona evidence: `workspace/layer-02-execution/daytona/2026-07-31T06-43-31-516Z/RESULT.md`.
+
+### Release gate still open
+
+The repository has no explicitly authorized model-provider credential for the development gateway. The existing host OpenCode credential was deliberately not exported to Daytona. Therefore the final real ZedBlock Docker and Daytona company runs have not yet been rerun after these fixes.
+
+Required final acceptance:
+
+1. Configure `OPENROUTER_API_KEY` explicitly, or authorize use of the existing host OpenCode provider credential.
+2. Run real ZedBlock in Docker through discovery, founder approval, project staffing, manager milestones/processes, employee work, verification, and report.
+3. Run the same scenario in Daytona.
+4. Interrupt one active manager/employee run, restart the worker, and verify recovery without duplicate actions.
+5. Confirm every project/employee transition is backed by typed actions or verified artifacts and every sandbox/credential is released.
+
+### Remaining post-release hardening
+
+- Replace the in-memory development/test gateway with a durable production gateway deployment and persistent revocation/audit storage.
+- Add provider budgets, rate limits, and per-company/model allowlists at that gateway.
+- Verify founder approval, connector idempotency, and audit behavior for each real external-action connector before granting it to agents.
+- Add interactive multi-page browser automation only when a company process requires it; the current research browser intentionally returns a bounded rendered DOM and cannot click or submit.
+- Validate Daytona account egress policy for the deployed account tier; tool installation alone cannot override provider-level network restrictions.
 
 ## Test 1: Founder onboarding through the web product
 
