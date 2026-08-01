@@ -16,7 +16,6 @@ builder) the adapters compose.
 | `claude_local`        | `local_subprocess` | ready   | Spawns `claude --output-format stream-json --verbose`, parses JSONL.                          |
 | `codex_local`         | `local_subprocess` | ready   | Spawns `codex exec --json`, parses JSONL.                                                     |
 | `opencode_cli`        | `local_subprocess` | ready   | Spawns `opencode run --format json`, parses JSONL. **Full control surface — see below.**       |
-| `opencode_local`      | `cloud_sdk`        | ready   | HTTPS `POST /v1/chat/completions` against the opencode service.                              |
 | `cursor_local`        | `local_subprocess` | stub    | Cursor CLI adapter — not implemented in this slice.                                           |
 | `cursor_cloud`        | `cloud_sdk`        | stub    | Cursor cloud adapter — not implemented.                                                       |
 | `openclaw_gateway`    | `gateway`          | stub    | OpenClaw WebSocket + Ed25519 device pairing.                                                  |
@@ -37,7 +36,6 @@ adapter's `info.status`. A non-`ready` adapter reports everything as `false`.
 import {
   // Adapter modules + metadata
   opencodeCli, opencodeCliInfo,
-  opencodeLocal, opencodeLocalInfo,
   claudeLocal, claudeLocalInfo, claudeLocalConfigSchema, DEFAULT_CLAUDE_LOCAL_CONFIG,
   codexLocal, codexLocalInfo, codexLocalConfigSchema, DEFAULT_CODEX_LOCAL_CONFIG,
   dryRunLocal, dryRunLocalInfo,
@@ -77,7 +75,6 @@ import {
 | `@aaspai/harness/shared/sandbox`       | `SandboxClient` type + transport stub                    |
 | `@aaspai/harness/drivers/claude-local` | `claudeLocal` + config + parser/formatter                |
 | `@aaspai/harness/drivers/codex-local`  | `codexLocal` + config + parser/formatter                 |
-| `@aaspai/harness/drivers/opencode-local` | `opencodeLocal` (HTTPS client)                        |
 | `@aaspai/harness/drivers/opencode-cli`  | `opencodeCli` + argv dumper                              |
 | `@aaspai/harness/registry`             | `getAdapter`, `listAdapters`, …                          |
 
@@ -242,12 +239,12 @@ Every `opencodeCli.execute(ctx)` call returns an `AdapterExecutionResult`:
 > for that project; the `aaspai/AGENTS.md` is authoritative for this one.
 
 The aaspai adapter is the smallest faithful subset of paperclip's
-`opencode_local` adapter, with a few opinionated changes. This table is the
+paperclip reference adapter, with a few opinionated changes. This table is the
 honest comparison — every column reflects what is actually in the code today.
 
 ### CLI args
 
-| CLI flag                  | aaspai `opencode_cli` | paperclip `opencode_local` (`execute.ts:574-583`) |
+| CLI flag                  | aaspai `opencode_cli` | paperclip reference (`execute.ts:574-583`) |
 | ------------------------- | :-------------------: | :-----------------------------------------------: |
 | `--format json`           | ✅                    | ✅                                                |
 | `--model <id>`            | ✅                    | ✅                                                |
@@ -318,7 +315,7 @@ honest comparison — every column reflects what is actually in the code today.
 
 ### Error handling
 
-| Failure mode                       | aaspai `opencode_cli`                                      | paperclip `opencode_local`                                  |
+| Failure mode                       | aaspai `opencode_cli`                                      | paperclip reference                                         |
 | ---------------------------------- | :--------------------------------------------------------: | :----------------------------------------------------------: |
 | `errorCode` taxonomy                | `timeout` / `killed_by_signal` / `opencode_cli_failed`      | `timeout` / `unknown_session` (forces a retry)               |
 | `errorFamily` taxonomy              | `transient_upstream` (timeout, signal) / `internal` (else) | `transient_upstream` (timeout) / `internal` (default)         |

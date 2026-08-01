@@ -78,8 +78,6 @@ import { getLogger } from "@aaspai/observability";
 const log = getLogger("harness.opencode-cli");
 const MAX_RESULT_TEXT_BYTES = 1024 * 1024;
 
-const CLI_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
-
 const opencodeCliConfigSchema = {
   model: "opencode-go/mimo-v2.5",
   title: "OpenCode Session",
@@ -750,7 +748,7 @@ async function runOpencodeCli(
     let inputTokens = 0;
     let outputTokens = 0;
     let cost = 0;
-    let timedOut = false;
+    const timedOut = false;
     let closed = false;
     let thinkingEventCount = 0;
     let toolEventCount = 0;
@@ -783,50 +781,6 @@ async function runOpencodeCli(
       }
     };
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      log.warn("opencode cli timeout, killing", { cli, timeoutMs: CLI_TIMEOUT_MS });
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* ignore */
-      }
-      setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* ignore */
-        }
-        // If even SIGKILL doesn't work, resolve with what we have so
-        // the session doesn't hang the worker.
-        setTimeout(
-          () =>
-            resolve({
-              sessionId,
-              text: textParts.join(""),
-              inputTokens,
-              outputTokens,
-              cost,
-              exitCode: null,
-              signal: "SIGKILL" as NodeJS.Signals,
-              timedOut: true,
-              errorMessage:
-                stderrBuf.trim().slice(0, 2_048) ||
-                "opencode killed by SIGKILL (hard-timeout fallback)",
-              resumedSession: Boolean(options.resumeSessionId),
-              continuedLast: config.continueLast,
-              attached: Boolean(config.attachServer),
-              cliSessionId: sessionId,
-              thinkingEventCount,
-              toolEventCount,
-              toolsInvoked: [...toolsInvoked],
-              companyActions: [...companyActions],
-            }),
-          1000,
-        );
-      }, 5_000);
-    }, CLI_TIMEOUT_MS);
-    timer.unref();
     if (signal?.aborted) abort();
     else signal?.addEventListener("abort", abort, { once: true });
 
@@ -1091,14 +1045,12 @@ async function runOpencodeCli(
     }
 
     child.on("error", (err) => {
-      clearTimeout(timer);
       cleanup();
       reject(err);
     });
 
     child.on("close", async (code, closeSignal) => {
       closed = true;
-      clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
       cleanup();
       // Unregister from the runningSessions map so cancel() won't find a dead child.
@@ -1295,7 +1247,6 @@ async function runOpencodeThroughRuntime(input: {
     cwd: input.cwd,
     env: input.env,
     signal: input.signal,
-    timeoutMs: CLI_TIMEOUT_MS,
     onLog: async (stream, chunk) => {
       if (stream === "stdout") parse(chunk);
       else if (!errorMessage) errorMessage = chunk.trim().split(/\r?\n/).find(Boolean);
@@ -2729,7 +2680,32 @@ export const opencodeCli: ServerAdapterModule = {
       });
       return { ok: false, checks };
     }
-    // 2. models list
+    // 2. native CLI authentication state
+    try {
+      const { readFile } = await import("node:fs/promises");
+      const { homedir } = await import("node:os");
+      const { join } = await import("node:path");
+      const dataHome = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
+      const auth = JSON.parse(
+        await readFile(
+          process.env.OPENCODE_AUTH_PATH ?? join(dataHome, "opencode", "auth.json"),
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      if (Object.keys(auth).length === 0) throw new Error("auth store is empty");
+      checks.push({
+        name: "opencode_cli.auth",
+        level: "info",
+        message: "OpenCode native authentication is configured",
+      });
+    } catch (err) {
+      checks.push({
+        name: "opencode_cli.auth",
+        level: "error",
+        message: `OpenCode is not authenticated: ${(err as Error).message}`,
+      });
+    }
+    // 3. models list
     try {
       const models = await listOpencodeModels({});
       if (models.length > 0) {

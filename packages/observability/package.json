@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./execution-observer": "./src/execution-observer.ts",
     "./logger": "./src/logger.ts",
     "./alerter": "./src/alerter.ts",
     "./tracing": "./src/tracing.ts",

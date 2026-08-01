@@ -134,6 +134,8 @@ export class OperatorService {
         definitionRevisionId: input.definitionRevisionId,
         sourceCommitSha: input.sourceCommitSha ?? null,
         maxAttempts: step.maxAttempts,
+        workKind: step.workKind ?? "repository",
+        deliveryMode: step.deliveryMode ?? (step.workKind === "general" ? "none" : "commit"),
         idempotencyKey: `${input.idempotencyKey}:${step.id}`,
         status: step.dependsOn.length === 0 ? "ready" : "proposed",
         governance: {
@@ -170,6 +172,8 @@ export class OperatorService {
           tools: step.tools,
           acceptanceCriteria: step.acceptanceCriteria,
           failureAction: step.failureAction,
+          workKind: step.workKind,
+          deliveryMode: step.deliveryMode,
           processBindingId: input.processBindingId ?? null,
         },
       });

@@ -93,6 +93,30 @@ describe("DependencyScheduler", () => {
     await expect(store.getWorkItem(dependent.id)).resolves.toMatchObject({ status: "completed" });
   });
 
+  it("keeps retry eligibility when the harness already persisted the terminal attempt", async () => {
+    const fixture = await createFixture(store);
+    const item = await createItem(store, fixture, "Harness terminal", "harness-terminal", {
+      maxAttempts: 2,
+    });
+    const dispatched = await store.dispatchWorkItem({
+      workflowRunId: fixture.run.id,
+      workItemId: item.id,
+      agentId: "agent_scheduler",
+      harness: "dry_run_local",
+    });
+    expect(dispatched).not.toBeNull();
+    const attempt = await store.startScheduledAttempt(dispatched!.attempt.id);
+    await store.transitionAttempt(attempt.id, "failed");
+
+    const settled = await store.completeScheduledAttempt({
+      attemptId: attempt.id,
+      status: "failed",
+      retryDelayMs: 0,
+    });
+
+    expect(settled.workItem.status).toBe("ready");
+  });
+
   it("blocks a dependent with an explanation after retry exhaustion", async () => {
     const fixture = await createFixture(store);
     const failed = await createItem(store, fixture, "Failed", "failed");

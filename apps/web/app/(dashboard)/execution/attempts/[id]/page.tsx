@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ExecutionLiveControls } from "@/components/execution-live-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,14 +55,17 @@ export default async function ExecutionAttemptPage({
             {detail.attempt.id}
           </p>
         </div>
-        <div className="text-right text-xs text-muted-foreground">
-          <Link
-            href={`/agents/${detail.attempt.agentId}`}
-            className="hover:text-foreground hover:underline"
-          >
-            {detail.attempt.agentId}
-          </Link>
-          <div>{detail.attempt.harness}</div>
+        <div className="space-y-2 text-right text-xs text-muted-foreground">
+          <div>
+            <Link
+              href={`/agents/${detail.attempt.agentId}`}
+              className="hover:text-foreground hover:underline"
+            >
+              {detail.attempt.agentId}
+            </Link>
+            <div>{detail.attempt.harness}</div>
+          </div>
+          <ExecutionLiveControls attemptId={detail.attempt.id} status={detail.attempt.status} />
         </div>
       </header>
       <div className="grid gap-4 md:grid-cols-3">
@@ -81,6 +85,30 @@ export default async function ExecutionAttemptPage({
           value={`${detail.attempt.startedAt ?? "not started"} → ${detail.attempt.finishedAt ?? "running"}`}
         />
       </div>
+      <Card className={detail.observer.stalled ? "border-destructive" : undefined}>
+        <CardHeader>
+          <CardTitle>Live observer</CardTitle>
+          <CardDescription>
+            Company controls change organizational state; work tools operate inside the assigned
+            task runtime.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-3">
+          <Field label="Current phase" value={detail.observer.phase} />
+          <Field
+            label="Last progress"
+            value={
+              detail.observer.lastProgressAgeMs === null
+                ? "—"
+                : `${formatDuration(detail.observer.lastProgressAgeMs)} ago${detail.observer.stalled ? " · stalled" : ""}`
+            }
+          />
+          <Field
+            label="Observed activity"
+            value={`${detail.observer.companyEvents} company · ${detail.observer.workEvents} work`}
+          />
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Execution lineage</CardTitle>
@@ -128,25 +156,39 @@ export default async function ExecutionAttemptPage({
             </span>
           </CardTitle>
           <CardDescription>
-            {detail.events.length} normalized events, ordered per attempt.
+            {detail.timeline.length} lifecycle and tool events, ordered across the system and CLI
+            session.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {detail.events.length === 0 ? (
+            {detail.timeline.length === 0 ? (
               <p className="text-sm text-muted-foreground">No events recorded.</p>
             ) : (
-              detail.events.map((event) => (
+              detail.timeline.map((event) => (
                 <div key={event.id} className="rounded-md border p-3">
                   <div className="flex flex-wrap justify-between gap-2">
-                    <span className="font-mono text-xs font-medium">
-                      #{event.seq} {event.type}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={event.lane === "company" ? "default" : "outline"}>
+                        {event.lane === "company"
+                          ? "Company control"
+                          : event.lane === "work"
+                            ? "Task work"
+                            : "System"}
+                      </Badge>
+                      <span className="font-mono text-xs font-medium">{event.name}</span>
+                      <span className="text-xs text-muted-foreground">{event.origin}</span>
+                    </div>
                     <span className="text-xs text-muted-foreground">{event.ts}</span>
                   </div>
-                  <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">
-                    {json(event.payload)}
-                  </pre>
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-xs text-muted-foreground">
+                      Structured input/output
+                    </summary>
+                    <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-muted p-3 text-xs">
+                      {json(event.payload)}
+                    </pre>
+                  </details>
                 </div>
               ))
             )}
@@ -197,6 +239,12 @@ export default async function ExecutionAttemptPage({
       ) : null}
     </div>
   );
+}
+
+function formatDuration(milliseconds: number): string {
+  if (milliseconds < 1_000) return `${milliseconds}ms`;
+  if (milliseconds < 60_000) return `${Math.floor(milliseconds / 1_000)}s`;
+  return `${Math.floor(milliseconds / 60_000)}m`;
 }
 
 function LineageCard({

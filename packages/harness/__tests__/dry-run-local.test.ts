@@ -77,4 +77,67 @@ describe("dry_run_local adapter", () => {
       ],
     });
   });
+
+  it("replays scripted company controls for deterministic simulations", async () => {
+    const actions = [
+      {
+        type: "create_milestone",
+        projectId: "project/sim",
+        title: "First outcome",
+        outcome: "Verified",
+        sequence: 1,
+        acceptance: { reports: 1 },
+      },
+    ];
+    const result = await dryRunLocal.execute({
+      protocolVersion: 1 as const,
+      runId: "run_simulation",
+      organizationId: "default",
+      agent: {
+        id: "agent/ceo",
+        organizationId: "default",
+        name: "CEO",
+        adapterType: "dry_run_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {
+        cwd: "/tmp",
+        role: "ceo",
+        prompt: `AASPAI_SIMULATION_COMPANY_ACTIONS=${JSON.stringify(actions)}`,
+      },
+      onLog: async () => {},
+      onMeta: async () => {},
+    });
+
+    expect(result.resultJson?.companyActions).toEqual(actions);
+  });
+
+  it("returns a structured verdict for deterministic checker runs", async () => {
+    const result = await dryRunLocal.execute({
+      protocolVersion: 1 as const,
+      runId: "run_checker",
+      organizationId: "default",
+      agent: {
+        id: "agent/manager",
+        organizationId: "default",
+        name: "Manager",
+        adapterType: "dry_run_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: {
+        cwd: "/tmp",
+        role: "ceo",
+        prompt:
+          'Independently verify this work. End with AASPAI_CHECK_RESULT={"verdict":"passed|failed|concerns","summary":"brief"}',
+      },
+      onLog: async () => {},
+      onMeta: async () => {},
+    });
+
+    expect(result.summary).toContain('"verdict":"passed"');
+  });
 });

@@ -33,6 +33,8 @@ export const processStepSchema = z
     prompt: boundedString(131_072).default(""),
     skills: z.array(identifierSchema).max(64).default([]),
     tools: z.array(identifierSchema).max(64).default([]),
+    workKind: z.enum(["repository", "general"]).optional(),
+    deliveryMode: z.enum(["commit", "pull_request", "artifact", "none"]).optional(),
     timeoutMs: positiveIntegerSchema.max(86_400_000),
     maxAttempts: positiveIntegerSchema.max(100),
     acceptanceCriteria: boundedString(16_384).min(1),
@@ -42,7 +44,16 @@ export const processStepSchema = z
   .strict()
   .refine((step) => step.agent !== null || step.routingRule !== null, {
     message: "step requires agent or routingRule",
-  });
+  })
+  .refine(
+    (step) =>
+      (step.workKind ?? "repository") === "repository"
+        ? ["commit", "pull_request"].includes(step.deliveryMode ?? "commit")
+        : ["artifact", "none"].includes(step.deliveryMode ?? "none"),
+    {
+      message: "process step work kind and delivery mode are incompatible",
+    },
+  );
 export type ProcessStep = z.infer<typeof processStepSchema>;
 
 export const DEFAULT_DELEGATION_POLICY = {

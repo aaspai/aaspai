@@ -365,9 +365,9 @@ if (phase === "all" || phase === "providers") {
       { command: "codex", sandbox: "workspace-write", approvalMode: "never" },
     ),
   );
-  await record("opencode-local-success", { kind: "local", envPassthrough: false }, () =>
+  await record("opencode-cli-success", { kind: "local", envPassthrough: false }, () =>
     runHarnessCase(
-      "opencode-local-success",
+      "opencode-cli-success",
       "opencode_cli",
       { kind: "local", envPassthrough: false },
       {
@@ -385,9 +385,9 @@ if (phase === "all" || phase === "providers") {
       "failure",
     ),
   );
-  await record("opencode-local-failure", { kind: "local", envPassthrough: false }, () =>
+  await record("opencode-cli-failure", { kind: "local", envPassthrough: false }, () =>
     runHarnessCase(
-      "opencode-local-failure",
+      "opencode-cli-failure",
       "opencode_cli",
       { kind: "local", envPassthrough: false },
       { commandArgs: ["--definitely-invalid-layer-two-flag"] },
@@ -403,9 +403,9 @@ if (phase === "all" || phase === "providers") {
       "cancel",
     ),
   );
-  await record("opencode-local-cancel", { kind: "local", envPassthrough: false }, () =>
+  await record("opencode-cli-cancel", { kind: "local", envPassthrough: false }, () =>
     runHarnessCase(
-      "opencode-local-cancel",
+      "opencode-cli-cancel",
       "opencode_cli",
       { kind: "local", envPassthrough: false },
       { model: process.env.AASPAI_OPENCODE_MODEL ?? "opencode-go/mimo-v2.5" },

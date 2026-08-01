@@ -13,6 +13,43 @@ export const OBSERVABILITY_PROTOCOL_VERSION = 1 as const;
 
 const boundedIdentifierSchema = identifierSchema.max(256);
 
+export const executionLaneSchema = z.enum(["system", "company", "work"]);
+export type ExecutionLane = z.infer<typeof executionLaneSchema>;
+export const telemetryOriginSchema = z.enum(["aaspai", "agent_native", "mcp", "runtime"]);
+export type TelemetryOrigin = z.infer<typeof telemetryOriginSchema>;
+export const telemetryEventKindSchema = z.enum([
+  "lifecycle",
+  "progress",
+  "tool_call",
+  "tool_result",
+  "artifact",
+  "alert",
+]);
+
+/** Shared runtime-to-observer envelope. Content must be redacted before validation. */
+export const telemetryEventSchema = z
+  .object({
+    protocolVersion: z.literal(OBSERVABILITY_PROTOCOL_VERSION),
+    id: boundedIdentifierSchema,
+    t: isoTimestampSchema,
+    kind: telemetryEventKindSchema,
+    lane: executionLaneSchema,
+    origin: telemetryOriginSchema,
+    name: z.string().trim().min(1).max(512),
+    status: z.string().trim().min(1).max(64).optional(),
+    organizationId: boundedIdentifierSchema,
+    attemptId: boundedIdentifierSchema,
+    workItemId: boundedIdentifierSchema,
+    harnessSessionId: boundedIdentifierSchema,
+    agentId: boundedIdentifierSchema,
+    runtimeId: boundedIdentifierSchema,
+    traceId: boundedIdentifierSchema,
+    spanId: boundedIdentifierSchema,
+    payload: jsonObjectSchema.default({}),
+  })
+  .strict();
+export type TelemetryEvent = z.infer<typeof telemetryEventSchema>;
+
 /* ------------------------------------------------------------------ */
 /* Structured logging                                                  */
 /* ------------------------------------------------------------------ */
@@ -220,6 +257,10 @@ export const alertKindSchema = z.enum([
   "retention_failure",
   "worker_unhealthy",
   "lease_recovery",
+  "attempt_stalled",
+  "repeated_attempt_failure",
+  "telemetry_ingest_failed",
+  "queue_backlog",
 ]);
 export type AlertKind = z.infer<typeof alertKindSchema>;
 

@@ -87,8 +87,8 @@ export function OnboardingWizard({
             <CardHeader>
               <CardTitle>1. Choose the CEO's execution engine and model</CardTitle>
               <CardDescription>
-                OpenCode runs in the isolated runtime you select and receives only a short-lived
-                model credential for each attempt.
+                Every run is an authenticated Codex or OpenCode CLI session. The control plane never
+                calls a model-provider API directly.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -325,7 +325,10 @@ export function OnboardingWizard({
               {error}
             </p>
           )}
-          <Button className="w-full" disabled={busy || !selectedRuntime?.ready}>
+          <Button
+            className="w-full"
+            disabled={busy || !selectedProvider?.ready || !selectedRuntime?.ready}
+          >
             {busy ? "Launching company..." : "Launch company"}
           </Button>
         </form>

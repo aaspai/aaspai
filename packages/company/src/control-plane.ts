@@ -203,6 +203,9 @@ export class CompanyControlPlaneService {
       repositoryId: _repositoryId,
       definitionRevisionId: _definitionRevisionId,
       workflowRunId: _workflowRunId,
+      milestoneId: _milestoneId,
+      processBindingId: _processBindingId,
+      parentWorkItemId: _parentWorkItemId,
       branchName: _branchName,
       sourceCommitSha: _sourceCommitSha,
       maxAttempts: _maxAttempts,
@@ -239,7 +242,7 @@ export class CompanyControlPlaneService {
         branchName: input.branchName,
         sourceCommitSha: input.sourceCommitSha,
         priority: request.priority,
-        maxAttempts: input.maxAttempts ?? 1,
+        maxAttempts: input.maxAttempts ?? 3,
         idempotencyKey: request.idempotencyKey,
         metadata: {
           ...input.metadata,

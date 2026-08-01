@@ -5,14 +5,15 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/local-auth";
 import {
+  frontendProviderTypes,
   frontendRuntimeTypes,
-  listFrontendProviderModels,
+  listFrontendProviders,
   listFrontendRuntimes,
 } from "@/lib/provider-status";
 import { ensureFrontendWorkspace } from "@/lib/workspace-bootstrap";
 
 const bodySchema = z.object({
-  provider: z.literal("opencode_cli"),
+  provider: z.enum(frontendProviderTypes),
   runtime: z.enum(frontendRuntimeTypes),
   model: z.string().trim().min(1).max(256),
   ceoAgenda: z.string().trim().min(10).max(10_000),
@@ -56,17 +57,24 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
-  const models = await listFrontendProviderModels(parsed.data.provider);
-  if (!models.some((model) => model.id === parsed.data.model)) {
+  const selectedProvider = (await listFrontendProviders()).find(
+    (candidate) => candidate.type === parsed.data.provider,
+  );
+  if (!selectedProvider?.models.some((model) => model.id === parsed.data.model)) {
     return NextResponse.json(
       { error: `${parsed.data.model} is not supported by ${provider.info.label}.` },
       { status: 400 },
     );
   }
-  if (provider.info.status !== "ready") {
+  if (provider.info.status !== "ready" || !selectedProvider.ready) {
     return NextResponse.json(
-      { error: `${parsed.data.provider} is not available in this build.` },
-      { status: 400 },
+      {
+        error: `${provider.info.label} is not ready: ${selectedProvider?.environment.checks
+          .filter((check) => check.level !== "info")
+          .map((check) => check.message)
+          .join("; ")}`,
+      },
+      { status: 503 },
     );
   }
 

@@ -34,32 +34,31 @@ Multiple agents receive separate attempts, workspaces, runtime leases, and
 harness sessions. A provider session ID is resumable only with compatible
 runtime and workspace identity.
 
-Governed maker and checker CLIs fail closed on the plain host runtime. Starter
-definitions use isolated Daytona workspaces; configure `DAYTONA_API_KEY` and
-optionally `DAYTONA_SNAPSHOT` before autonomous runs.
+Governed maker and checker CLIs may run locally only through the managed
+environment and their native sandbox/permission controls. The control plane
+persists the CLI session ID so later work can resume the same agentic session.
 
 Independent checkers must end with the structured
 `AASPAI_CHECK_RESULT={"verdict":"passed|failed|concerns","summary":"..."}`
 line. A zero exit code without this verdict is not verification evidence.
 
-## Credential direction
+## CLI authentication boundary
 
-Runtime images should contain CLIs and development tools, but no credentials.
-The production direction is:
+The control plane never calls an LLM provider API. Every reasoning run is a
+real agentic CLI subprocess:
 
 ```text
-CLI in runtime
-  -> short-lived aaspai attempt token
-  -> aaspai LLM gateway
-  -> configured model provider
+aaspai worker
+  -> codex exec / opencode run
+  -> CLI-native authenticated session
+  -> CLI-selected model
 ```
 
-The worker requests one expiring credential from the configured gateway before
-execution, injects it only into the runtime process environment, and revokes it
-before the attempt becomes terminal. Neither the immutable plan nor the
-harness-session config contains the token. The gateway keeps permanent provider
-credentials outside execution environments and remains the enforcement point
-for provider budgets, usage accounting, revocation, and audit.
+Codex uses its existing `codex login` state. OpenCode uses its existing
+`~/.local/share/opencode/auth.json` state. The managed attempt environment
+passes the CLI home/path values needed to locate that native state, but it does
+not persist credentials in execution plans, workspaces, sessions, or database
+records.
 
 ## Current Daytona status
 
@@ -79,22 +78,13 @@ attempt. Company research agents receive OpenCode web search plus a bounded
 `browser_snapshot` tool that accepts only public HTTPS destinations, pins the
 resolved address, blocks private address ranges, and caps time and output.
 
-Real acceptance evidence currently covers:
+Real Daytona runtime evidence currently covers:
 
 - host input, stdin, and streamed output inside Daytona;
 - added, modified, deleted, and binary files restored to the assigned local
   workspace;
 - bounded cancellation and timeout of the remote process group;
-- an authenticated OpenCode tool edit inside Daytona;
-- persisted execution-plan, harness-session, raw-output, and normalized event
-  records outside the sandbox;
-- a real `WorkerDaemon` claim that built and verified a small webpage;
-- selected-skill discovery and an observed OpenCode `skill` tool call;
-- a durable attempt branch, binary patch, and declared artifact records with
-  verified SHA-256 hashes;
-- attempt-token issuance, model proxy use, revocation, and a durable-state leak
-  check;
-- same-lease and same-OpenCode-session resume across two invocations;
+- public HTTPS fetch, web search, and headless Chromium rendering;
 - runtime identity and cleanup of every test lease.
 
 Daytona now advertises resume. Declared artifact collection is worker-owned,
@@ -115,20 +105,14 @@ The persisted execution and harness acceptance uses the same environment:
 yarn workspace @aaspai/execution test:real:daytona
 ```
 
-The complete worker acceptance uses the prebuilt snapshot and an isolated
-temporary gateway. The permanent provider credential is installed only in the
-gateway sandbox; the agent sandbox receives an expiring attempt token:
+The complete autonomous-company acceptance uses the authenticated local
+OpenCode CLI:
 
 ```sh
-yarn workspace @aaspai/runtime snapshot:daytona
-yarn workspace @aaspai/worker test:real:daytona
+yarn workspace @aaspai/worker test:real:company:local
+yarn workspace @aaspai/worker test:real:zedblock:local
 ```
 
-Production must configure a reachable gateway with
-`AASPAI_GATEWAY_CONTROL_URL`, `AASPAI_GATEWAY_CONTROL_TOKEN`, and
-`AASPAI_GATEWAY_AGENT_BASE_URL`; the test gateway is acceptance infrastructure,
-not the production gateway deployment. During local development,
-`OPENROUTER_API_KEY` starts a host gateway for Docker, or a public isolated
-gateway when `DAYTONA_API_KEY` is also configured. Host provider-auth files are
-never copied into Daytona. `AASPAI_HOST_AUTH_PATH` is rejected for sandbox
-execution; provider access must use the attempt-scoped gateway credential.
+Remote CLI execution remains disabled for autonomous-company reasoning until
+the selected CLI is authenticated natively inside that remote runtime. Host
+authentication files are not copied into Daytona.

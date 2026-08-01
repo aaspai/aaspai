@@ -1109,6 +1109,19 @@ export class ExecutionStore {
           if (!advanced) throw new Error("Successful WorkItem disappeared");
           return { attempt: current, workItem: advanced };
         }
+        if (
+          ["failed", "timed_out"].includes(current.status) &&
+          current.attemptNumber < existingWorkItem.maxAttempts
+        ) {
+          const retryAfter = new Date(
+            Date.now() + Math.max(0, input.retryDelayMs ?? 1_000),
+          ).toISOString();
+          const ready = await this.updateWorkItemStatus(existingWorkItem.id, "ready", {
+            retryAfter,
+            blockedReason: null,
+          });
+          return { attempt: current, workItem: ready };
+        }
         const workItemStatus = current.status === "cancelled" ? "cancelled" : "failed";
         const settled = await this.updateWorkItemStatus(current.workItemId, workItemStatus, {
           blockedReason: input.error ?? `${current.status} without retry eligibility`,
@@ -2928,6 +2941,17 @@ export class ExecutionStore {
       throw new Error(`Execution event ${input.attemptId}/${input.seq} was not persisted`);
     const { payloadJson, ...event } = created;
     return executionEventSchema.parse({ ...event, payload: JSON.parse(payloadJson) });
+  }
+
+  async appendNextEvent(input: Omit<AppendEventInput, "seq">): Promise<ExecutionEvent> {
+    const previous = await this.db
+      .select({ seq: executionEvents.seq })
+      .from(executionEvents)
+      .where(eq(executionEvents.attemptId, input.attemptId))
+      .orderBy(desc(executionEvents.seq))
+      .limit(1);
+    // ponytail: attempts have one active runner; use DB-assigned sequencing if that invariant changes.
+    return this.appendEvent({ ...input, seq: (previous[0]?.seq ?? 0) + 1 });
   }
 
   async listEvents(attemptId: string): Promise<ExecutionEvent[]> {

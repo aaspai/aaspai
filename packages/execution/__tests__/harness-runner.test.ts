@@ -158,6 +158,38 @@ describe("HarnessExecutionPlanRunner", () => {
     await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "failed" });
   });
 
+  it("interrupts a silent CLI session for a resumable retry", async () => {
+    const attemptId = "attempt_stalled_opencode";
+    const workspace = await makeAttemptAndWorkspace(attemptId, "opencode_cli");
+    const result = await new HarnessExecutionPlanRunner(store).run({
+      plan: planFor(attemptId, "opencode_cli"),
+      workspace,
+      agent: {
+        id: "agent_opencode",
+        name: "OpenCode fixture",
+        adapterType: "opencode_cli",
+        adapterConfig: {
+          model: "fixture/model",
+          command: process.execPath,
+          commandArgs: [
+            "-e",
+            "console.log(JSON.stringify({type:'session.created',sessionID:'oc_stalled'}));setInterval(()=>{},1000)",
+          ],
+          stuckAfterMs: 1_000,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ timedOut: true, errorCode: "session_stalled" });
+    await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "timed_out" });
+    const attempt = await store.getAttempt(attemptId);
+    await expect(
+      store.getHarnessSession(attempt?.harnessSessionId ?? "missing"),
+    ).resolves.toMatchObject({
+      sessionId: "oc_stalled",
+    });
+  });
+
   async function makeAttemptAndWorkspace(
     attemptId: string,
     harness: string,
@@ -188,21 +220,17 @@ describe("HarnessExecutionPlanRunner", () => {
 });
 
 describe("assertRuntimeIdentity", () => {
-  it("rejects governed CLI agents on the host runtime", () => {
+  it("allows governed local CLI sessions only with a managed environment", () => {
     expect(() =>
       assertGovernedRuntimeIsolation(
         "opencode_cli",
         { kind: "local", envPassthrough: false },
         true,
       ),
-    ).toThrow(/isolated execution runtime/);
-    expect(() =>
-      assertGovernedRuntimeIsolation(
-        "opencode_cli",
-        { kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" },
-        true,
-      ),
     ).not.toThrow();
+    expect(() =>
+      assertGovernedRuntimeIsolation("codex_local", { kind: "local", envPassthrough: true }, true),
+    ).toThrow(/managed environment/);
   });
 
   it("accepts the selected local workspace", () => {

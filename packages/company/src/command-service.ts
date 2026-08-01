@@ -260,7 +260,8 @@ export class CompanyCommandService {
     const runtime = companyRuntime(profile.policy, provider);
     const staffingPrompt = [
       "The founder approved the company portfolio. Staff each unstaffed project with the smallest useful team.",
-      "For every unstaffed project, call company_action with one hire_and_delegate action.",
+      "For every unstaffed project, submit one typed hire_and_delegate action.",
+      'In OpenCode call company_action. In Codex return one final AASPAI_COMPANY_ACTIONS={"actions":[...]} line.',
       'Set projectId to the exact project ID and projectRole to "manager".',
       "The delegated manager assignment must require the manager to create measurable milestones, define one minimal repeatable process, and start it with assigned specialists.",
       "Do not hire roles without immediate project work.",
@@ -1503,12 +1504,9 @@ function companyRuntime(policy: Record<string, unknown>, provider: string): Exec
   if (policy.runtime !== undefined) {
     const configured = executionTargetSchema.safeParse(policy.runtime);
     if (!configured.success) throw new CompanyCommandError("company runtime policy is invalid");
-    if (configured.data.kind === "local") {
-      throw new CompanyCommandError("real company agents require an isolated runtime");
-    }
     return configured.data;
   }
-  return { kind: "sandbox", provider: "daytona", remoteCwd: "/workspace" };
+  return { kind: "local", envPassthrough: false };
 }
 
 function portfolioProjects(value: string): Array<{

@@ -12,7 +12,6 @@ import { dryRunLocal } from "./drivers/dry-run-local/index.js";
 import { hermesGateway } from "./drivers/hermes-gateway/index.js";
 import { openclawGateway } from "./drivers/openclaw-gateway/index.js";
 import { opencodeCli } from "./drivers/opencode-cli/index.js";
-import { opencodeLocal } from "./drivers/opencode-local/index.js";
 
 /**
  * The full adapter registry. Maps every known `AdapterType` to its
@@ -31,7 +30,6 @@ const ADAPTERS: Readonly<Record<AdapterType, ServerAdapterModule>> = Object.free
   openclaw_gateway: openclawGateway,
   hermes_gateway: hermesGateway,
   dry_run_local: dryRunLocal,
-  opencode_local: opencodeLocal,
   opencode_cli: opencodeCli,
 });
 

@@ -6,9 +6,11 @@ Baseline commit: `6f93aa0` (`feat: complete autonomous company orchestration bas
 
 ## Verdict
 
-The original validation found two P0 release blockers: onboarding could not select a runnable isolated runtime, and a CEO could falsely complete without performing required typed company actions.
+The original validation found two P0 release blockers: onboarding could not select a runnable agentic runtime, and a CEO could falsely complete without performing required typed company actions.
 
-Remediation state on 2026-07-31: **the P0 code and runtime defects are fixed and the real Daytona tool boundary passes; a complete model-driven company rerun is still required before autonomous-company release**.
+Remediation state on 2026-07-31: **the local agentic-CLI company loop now runs from CEO to hired employee with durable evidence. The broader multi-project autonomous-company release gate is still open.**
+
+The runtime contract is now explicit: AaspAI never calls an LLM provider API directly. Every reasoning session is executed by an authenticated local `codex` or `opencode` CLI process. Provider credentials remain owned by those CLIs.
 
 ## Remediation update
 
@@ -17,56 +19,62 @@ Remediation state on 2026-07-31: **the P0 code and runtime defects are fixed and
 - Company-control work now carries machine-enforced, project-scoped typed-action requirements.
 - Requirements survive wakeup-to-work-item conversion and use one-to-one matching, so one action cannot satisfy several projects.
 - A successful CLI exit is rejected before completion when any required action is missing.
-- The real-company parent test now fails immediately if the CEO omits `hire_and_delegate`.
-- Onboarding now presents Daytona and Docker runtimes with separate readiness checks.
-- The selected runtime is persisted in company policy, CEO configuration, discovery wakes, and staffing wakes.
-- Generated OpenCode configuration points at the governed attempt gateway and uses only the short-lived attempt token.
-- Local Docker development can use a host gateway without Daytona; Daytona uses a publicly reachable isolated gateway.
-- Permanent host OpenCode authentication is never copied into an agent sandbox.
-- OpenCode agents have web search and a bounded `browser_snapshot` tool. Browser access is read-only, public-HTTPS-only, DNS-pinned, private-address-blocked, limited to 30 seconds, and capped at 100 KB.
-- The Daytona v3 snapshot is active with OpenCode 1.18.5, Chromium, curl, `ddgr`, Python, ripgrep, Git, and the normal build baseline.
+- OpenCode managers submit actions through the native `company_action` CLI tool.
+- Codex managers submit the same strictly validated action envelope through the final `AASPAI_COMPANY_ACTIONS=...` line.
+- Onboarding offers only authenticated local Codex and OpenCode CLI sessions and blocks launch until the selected CLI reports ready.
+- The selected CLI and managed local runtime are persisted in company policy, generated agent definitions, discovery wakes, and staffing wakes.
+- Managed local execution disables environment passthrough and retains the existing workspace, tool, governance, artifact, and audit controls.
+- All direct provider-gateway, OpenRouter, and attempt-token execution paths added during the earlier remediation were removed.
+- OpenCode agents have native web search plus a bounded `browser_snapshot` tool. Browser access is read-only, public-HTTPS-only, DNS-pinned, private-address-blocked, limited to 30 seconds, and capped at 100 KB.
+- Codex agents receive the native `web_search` tool together with governed shell, patch, and image-view tools.
+- CLI-owned `.opencode_cli` and `.codex` files are excluded from work-product evidence accounting.
+- Delegation now preserves milestone, process-binding, and parent-work lineage without sending those fields through the strict routing-request parser.
+- The real-company fixture registers its CEO authorization and follows delegated work across its child workflow.
 - The founder name and role layout defect is fixed.
 
 ### Verified
 
 - Company tests: 16/16 passed.
-- Worker tests: 21/21 passed.
-- Web, worker, runtime, and harness type checks passed.
-- Changed-package lint passed.
+- Worker tests: 20/20 passed.
+- Execution tests: 48/48 passed.
+- Harness tests: 137 passed, 1 skipped.
+- Web, worker, company, execution, and harness type checks passed.
 - Immutable dependency install passed.
-- Fresh Daytona sandbox:
-  - public HTTPS fetch passed;
-  - web search passed;
-  - headless Chromium rendering passed;
-  - workspace round trip, binary/deletion restore, streaming, cancellation, and timeout passed;
-  - all three sandbox leases were absent after cleanup.
-- Browser onboarding smoke:
-  - Daytona credential reported accepted;
-  - Docker image reported available;
-  - missing attempt gateway was shown explicitly;
-  - company launch was disabled rather than failing after submission.
+- The real local OpenCode CLI run proved:
+  - the CEO loaded its pinned company skill;
+  - `company_action(hire_and_delegate)` was invoked;
+  - the employee definition, project assignment, authority edge, delegation, child workflow, child work item, and wakeup were persisted;
+  - the employee loaded its pinned skill;
+  - native CLI tools created, hashed, and read back the required artifact;
+  - CEO and employee attempts both completed with local runtime identities;
+  - reports, tool events, raw output, usage, artifacts, and state transitions were durable.
 
-Real Daytona evidence: `workspace/layer-02-execution/daytona/2026-07-31T06-43-31-516Z/RESULT.md`.
+Passing evidence:
+
+- [Result](../workspace/company-real/acceptance/local/2026-07-31T07-59-34-213Z-63fd8926/RESULT.md)
+- [Summary](../workspace/company-real/acceptance/local/2026-07-31T07-59-34-213Z-63fd8926/SUMMARY.json)
+- `workspace/company-real/acceptance/local/2026-07-31T07-59-34-213Z-63fd8926/state.db`
 
 ### Release gate still open
 
-The repository has no explicitly authorized model-provider credential for the development gateway. The existing host OpenCode credential was deliberately not exported to Daytona. Therefore the final real ZedBlock Docker and Daytona company runs have not yet been rerun after these fixes.
-
 Required final acceptance:
 
-1. Configure `OPENROUTER_API_KEY` explicitly, or authorize use of the existing host OpenCode provider credential.
-2. Run real ZedBlock in Docker through discovery, founder approval, project staffing, manager milestones/processes, employee work, verification, and report.
-3. Run the same scenario in Daytona.
-4. Interrupt one active manager/employee run, restart the worker, and verify recovery without duplicate actions.
-5. Confirm every project/employee transition is backed by typed actions or verified artifacts and every sandbox/credential is released.
+1. Run the real ZedBlock scenario through public-web research and verify its lead list, campaign, sales playbook, and operating report.
+2. Run discovery, founder approval, minimum project creation, project-manager appointment, milestone/process creation, employee work, verification, scheduling, and reporting in one uninterrupted multi-project acceptance.
+3. Interrupt an active manager/employee CLI session, restart the worker, and verify recovery without duplicate actions.
+4. Exercise the Codex CLI path end to end, including its strict typed-action result line.
+5. Exercise Daytona only after Codex or OpenCode is natively installed and authenticated inside the remote runtime. The Daytona key may provision the runtime; it must not become a substitute direct-LLM credential.
 
 ### Remaining post-release hardening
 
-- Replace the in-memory development/test gateway with a durable production gateway deployment and persistent revocation/audit storage.
-- Add provider budgets, rate limits, and per-company/model allowlists at that gateway.
+- Add CLI-session budgets, rate limits, and per-company/model allowlists.
 - Verify founder approval, connector idempotency, and audit behavior for each real external-action connector before granting it to agents.
 - Add interactive multi-page browser automation only when a company process requires it; the current research browser intentionally returns a bounded rendered DOM and cannot click or submit.
-- Validate Daytona account egress policy for the deployed account tier; tool installation alone cannot override provider-level network restrictions.
+- Validate Daytona account egress and native CLI authentication for the deployed account tier.
+
+## Historical validation below
+
+The remaining sections preserve the failures observed before remediation. They are retained as regression context and do not describe the current runtime contract.
 
 ## Test 1: Founder onboarding through the web product
 
@@ -298,3 +306,13 @@ After the P0 gates pass, verify:
 7. Restart/recovery test while CEO or employee work is in progress.
 
 The release gate is the real ZedBlock run completing with durable evidence for every state transition and no state transition based solely on agent prose.
+
+## 2026-08-01 remediation status
+
+The deterministic orchestration gate now passes through the real scheduler, worker, workspace, company commands, delegation, process, independent verification, and manager roll-up paths:
+
+- Evidence: [simulation result](../workspace/company-simulation/acceptance/simulation/2026-08-01T05-54-41-882Z-50177640/RESULT.md)
+- Timeline: [classified timeline](../workspace/company-simulation/acceptance/simulation/2026-08-01T05-54-41-882Z-50177640/TIMELINE.json)
+- Current observability/control study: [AASPAI central observability and control](AASPAI-CENTRAL-OBSERVABILITY-AND-CONTROL-2026-08-01.md)
+
+This clears the deterministic system gate. It does not replace the required fresh real OpenCode ZedBlock run or the pending central PostgreSQL/OTLP telemetry service.

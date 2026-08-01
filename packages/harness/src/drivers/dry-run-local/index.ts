@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { ServerAdapterModule } from "@aaspai/contracts/harness";
 import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
+import type { JsonObject } from "@aaspai/contracts/primitives";
 
 const SHORT_ID_LEN = 8;
 
@@ -62,6 +63,10 @@ function synthesizeResponse(prompt: string, systemPrompt: string, role: string):
 
   const lower = userMessage.toLowerCase();
 
+  if (userMessage.includes("AASPAI_CHECK_RESULT=")) {
+    return 'AASPAI_CHECK_RESULT={"verdict":"passed","summary":"deterministic checker accepted the simulated result artifact"}';
+  }
+
   if (role === "ceo") {
     return synthesizeCeoResponse(userMessage, lower);
   }
@@ -101,8 +106,17 @@ function synthesizeResponse(prompt: string, systemPrompt: string, role: string):
   ].join("\n");
 }
 
-function synthesizeCompanyActions(prompt: string, role: string): Array<Record<string, string>> {
+function synthesizeCompanyActions(prompt: string, role: string): JsonObject[] {
   const lower = prompt.toLowerCase();
+  const scripted = /^AASPAI_SIMULATION_COMPANY_ACTIONS=(.+)$/m.exec(prompt)?.[1];
+  if (scripted && ["ceo", "operator", "pm"].includes(role)) {
+    const parsed = JSON.parse(scripted) as unknown;
+    if (!Array.isArray(parsed)) throw new Error("Simulation company actions must be an array");
+    return parsed.filter(
+      (action): action is JsonObject =>
+        action !== null && typeof action === "object" && !Array.isArray(action),
+    );
+  }
   if (
     role !== "ceo" ||
     lower.includes("do not hire") ||

@@ -6,6 +6,28 @@ import {
 } from "../src/company-actions.js";
 
 describe("company actions", () => {
+  it("accepts a typed final-line action from a CLI without custom tools", () => {
+    const payload = {
+      actions: [
+        {
+          type: "create_milestone",
+          projectId: "project/growth",
+          title: "Qualified pipeline",
+          outcome: "Ten qualified opportunities",
+          sequence: 1,
+          acceptance: { qualified: 10 },
+        },
+      ],
+    };
+    expect(
+      companyActions({
+        exitCode: 0,
+        timedOut: false,
+        summary: `Done\nAASPAI_COMPANY_ACTIONS=${JSON.stringify(payload)}`,
+      }),
+    ).toEqual(payload.actions);
+  });
+
   it("accepts bounded structured hires and rejects untrusted provider output", () => {
     const action = {
       type: "hire_and_delegate",

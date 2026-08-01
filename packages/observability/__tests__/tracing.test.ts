@@ -6,6 +6,7 @@ import {
   generateTraceId,
   getCorrelationContext,
   setCorrelationContext,
+  withCorrelationContext,
 } from "../src/tracing";
 
 describe("generateTraceId", () => {
@@ -62,5 +63,21 @@ describe("set/get correlation context", () => {
     const prev = setCorrelationContext(ctx2);
     expect(prev).toBeNull();
     setCorrelationContext(null);
+  });
+
+  it("isolates correlation IDs across parallel jobs", async () => {
+    const one = createCorrelationContext({ correlationId: "one" });
+    const two = createCorrelationContext({ correlationId: "two" });
+    const [first, second] = await Promise.all([
+      withCorrelationContext(one, async () => {
+        await Promise.resolve();
+        return getCorrelationContext()?.correlationId;
+      }),
+      withCorrelationContext(two, async () => {
+        await Promise.resolve();
+        return getCorrelationContext()?.correlationId;
+      }),
+    ]);
+    expect([first, second]).toEqual(["one", "two"]);
   });
 });

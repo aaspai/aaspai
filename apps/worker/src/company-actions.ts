@@ -90,11 +90,16 @@ export interface RequiredCompanyAction {
 
 export function companyActions(result: AdapterExecutionResult): CompanyAction[] {
   const payload = result.resultJson;
-  if (!Array.isArray(payload?.companyActions)) return [];
-  if (payload.dryRun !== undefined) {
-    return payload.dryRun === true ? parseCompanyActions(payload.companyActions) : [];
+  if (Array.isArray(payload?.companyActions)) {
+    if (payload.dryRun !== undefined) {
+      return payload.dryRun === true ? parseCompanyActions(payload.companyActions) : [];
+    }
+    return payload.companyActions.flatMap((action) => companyActionPayload(action));
   }
-  return payload.companyActions.flatMap((action) => companyActionPayload(action));
+  const finalLine = result.summary?.trim().split(/\r?\n/).at(-1);
+  const prefix = "AASPAI_COMPANY_ACTIONS=";
+  if (!finalLine?.startsWith(prefix)) return [];
+  return companyActionPayload(JSON.parse(finalLine.slice(prefix.length)));
 }
 
 export function missingRequiredCompanyActions(

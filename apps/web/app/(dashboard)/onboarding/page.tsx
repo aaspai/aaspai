@@ -14,11 +14,10 @@ export default async function OnboardingPage() {
     listFrontendProviders(),
     listFrontendRuntimes(),
   ]);
-  const providers = allProviders.filter((provider) => provider.type === "opencode_cli");
   return (
     <OnboardingWizard
       companyName={user?.companyName ?? "your company"}
-      providers={providers}
+      providers={allProviders}
       runtimes={runtimes}
     />
   );

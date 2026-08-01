@@ -1,4 +1,5 @@
 export const BROWSER_SNAPSHOT_TOOL_SOURCE = `import { lookup } from "node:dns/promises";
+import { existsSync } from "node:fs";
 import { isIP } from "node:net";
 import { tool } from "@opencode-ai/plugin";
 
@@ -20,9 +21,16 @@ export default tool({
     if (addresses.length === 0 || addresses.some(({ address }) => !publicAddress(address))) {
       throw new Error("browser_snapshot refuses private or unresolved hosts");
     }
-    const process = Bun.spawn(
+    const browser = Bun.which("chromium") ?? Bun.which("chrome") ?? Bun.which("msedge") ?? [
+      "/usr/bin/chromium",
+      process.env.PROGRAMFILES ? process.env.PROGRAMFILES + "\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe" : "",
+      process.env["PROGRAMFILES(X86)"] ? process.env["PROGRAMFILES(X86)"] + "\\\\Microsoft\\\\Edge\\\\Application\\\\msedge.exe" : "",
+      process.env.LOCALAPPDATA ? process.env.LOCALAPPDATA + "\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe" : "",
+    ].find((candidate) => candidate && existsSync(candidate));
+    if (!browser) throw new Error("browser_snapshot requires Chromium, Chrome, or Edge");
+    const browserProcess = Bun.spawn(
       [
-        "chromium",
+        browser,
         "--headless",
         "--no-sandbox",
         "--disable-gpu",
@@ -33,11 +41,11 @@ export default tool({
       ],
       { stdout: "pipe", stderr: "pipe" },
     );
-    const timeout = setTimeout(() => process.kill(), 30_000);
+    const timeout = setTimeout(() => browserProcess.kill(), 30_000);
     const [exitCode, stdout, stderr] = await Promise.all([
-      process.exited,
-      new Response(process.stdout).text(),
-      new Response(process.stderr).text(),
+      browserProcess.exited,
+      new Response(browserProcess.stdout).text(),
+      new Response(browserProcess.stderr).text(),
     ]).finally(() => clearTimeout(timeout));
     if (exitCode !== 0) throw new Error(stderr.slice(0, 4096) || "Chromium render failed");
     return stdout.slice(0, 100_000);

@@ -15,6 +15,8 @@ import { resolveTarget } from "@aaspai/runtime";
 import { assertHarnessExecutable, assertRuntimeReady } from "./capabilities.js";
 import type { ExecutionStore } from "./store.js";
 
+const DEFAULT_STUCK_AFTER_MS = 15 * 60_000;
+
 export interface HarnessAgentInput {
   id: string;
   name: string;
@@ -32,6 +34,8 @@ export interface ExecuteHarnessPlanInput {
   agent?: HarnessAgentInput;
   profile?: ResolvedAgentProfile;
   durableSessionId?: string;
+  /** Provider-native session ID to continue after a stalled CLI attempt. */
+  resumeSessionId?: string;
   signal?: AbortSignal;
   /** Runtime-only credentials. Never persisted in the plan or session config. */
   ephemeralEnv?: Record<string, string>;
@@ -88,6 +92,7 @@ export class HarnessExecutionPlanRunner {
           tools: agent.tools,
         };
     const adapterConfig = policy.adapterConfig;
+    const stuckAfterMs = resolveStuckAfterMs(adapterConfig);
     const session = await this.store.createHarnessSession({
       id: input.durableSessionId,
       organizationId: input.plan.organizationId,
@@ -105,9 +110,23 @@ export class HarnessExecutionPlanRunner {
 
     let sessionEventSeq = 0;
     let rawOutputSeq = 0;
-    let executionEventSeq = 1;
     let persistenceFailure: Error | undefined;
     let actualRuntimeIdentity: AdapterExecutionResult["runtimeIdentity"];
+    let lastProgressAt = Date.now();
+    let stalled = false;
+    const runController = new AbortController();
+    const abortForCancellation = () => runController.abort();
+    if (input.signal?.aborted) abortForCancellation();
+    else input.signal?.addEventListener("abort", abortForCancellation, { once: true });
+    const watchdog = setInterval(
+      () => {
+        if (Date.now() - lastProgressAt < stuckAfterMs) return;
+        stalled = true;
+        runController.abort();
+      },
+      Math.min(stuckAfterMs, 60_000),
+    );
+    watchdog.unref();
     const recordSessionEvent = async (
       kind: TranscriptEntry["kind"],
       payload: Record<string, unknown>,
@@ -127,7 +146,7 @@ export class HarnessExecutionPlanRunner {
     if (preparedAttempt?.status === "preparing") {
       await this.store.transitionAttempt(input.plan.attemptId, "running");
     }
-    await this.store.appendEvent({
+    await this.store.appendNextEvent({
       organizationId: input.plan.organizationId,
       attemptId: input.plan.attemptId,
       type: "harness.session.started",
@@ -137,7 +156,6 @@ export class HarnessExecutionPlanRunner {
         cwd: input.workspace.path,
         requestedRuntime: input.plan.target,
       },
-      seq: executionEventSeq++,
     });
 
     let result: AdapterExecutionResult;
@@ -154,9 +172,9 @@ export class HarnessExecutionPlanRunner {
           adapterConfig,
         },
         runtime: {
-          sessionId: agent.resumeSessionId,
+          sessionId: input.resumeSessionId ?? agent.resumeSessionId,
           sessionParams: {
-            resume: Boolean(agent.resumeSessionId),
+            resume: Boolean(input.resumeSessionId ?? agent.resumeSessionId),
             fork: agent.forkSession === true,
           },
           runtimeIdentity: {
@@ -188,11 +206,11 @@ export class HarnessExecutionPlanRunner {
                 ...input.ephemeralEnv,
               },
               inheritEnv: false,
-              timeoutMs:
-                options.timeoutMs === undefined || input.plan.timeoutMs === null
-                  ? (options.timeoutMs ?? undefined)
-                  : Math.min(options.timeoutMs, input.plan.timeoutMs),
+              timeoutMs: requiresRuntimeExecution(adapterType)
+                ? undefined
+                : (input.plan.timeoutMs ?? options.timeoutMs),
               onLog: async (stream, chunk) => {
+                lastProgressAt = Date.now();
                 try {
                   await this.store.appendRawOutput({
                     organizationId: input.plan.organizationId,
@@ -213,8 +231,9 @@ export class HarnessExecutionPlanRunner {
             return result;
           },
         },
-        signal: input.signal,
+        signal: runController.signal,
         onLog: async (stream, chunk) => {
+          lastProgressAt = Date.now();
           for (const line of chunk.split(/\r?\n/)) {
             if (!line) continue;
             if (stream === "stdout") {
@@ -257,6 +276,21 @@ export class HarnessExecutionPlanRunner {
         usageBasis: "per_run",
         clearSession: false,
       };
+    } finally {
+      clearInterval(watchdog);
+      input.signal?.removeEventListener("abort", abortForCancellation);
+    }
+
+    if (stalled) {
+      result = {
+        ...result,
+        exitCode: 1,
+        timedOut: true,
+        errorCode: "session_stalled",
+        errorFamily: "transient_upstream",
+        errorMessage: `No CLI progress for ${Math.round(stuckAfterMs / 60_000)} minutes; interrupted for resume`,
+        summary: "CLI session stalled and was interrupted for resume",
+      };
     }
 
     if (
@@ -295,7 +329,7 @@ export class HarnessExecutionPlanRunner {
 
     const status = terminalStatus(result, input.signal);
     await this.store.completeHarnessSession(session.id, result, status);
-    await this.store.appendEvent({
+    await this.store.appendNextEvent({
       organizationId: input.plan.organizationId,
       attemptId: input.plan.attemptId,
       type: "harness.session.completed",
@@ -306,7 +340,6 @@ export class HarnessExecutionPlanRunner {
         exitCode: result.exitCode,
         runtimeIdentity: result.runtimeIdentity ?? null,
       },
-      seq: executionEventSeq,
     });
     await this.completeAttempt(input.plan.attemptId, status, input.signal);
     return result;
@@ -414,13 +447,28 @@ function requiresRuntimeExecution(adapter: AdapterType): boolean {
   return ["claude_local", "codex_local", "opencode_cli"].includes(adapter);
 }
 
+function resolveStuckAfterMs(config: JsonObject): number {
+  const value = config.stuckAfterMs;
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1_000 &&
+    value <= 86_400_000
+    ? value
+    : DEFAULT_STUCK_AFTER_MS;
+}
+
 export function assertGovernedRuntimeIsolation(
   adapter: string,
   target: ExecutionTarget,
   governed: boolean,
 ): void {
-  if (governed && target.kind === "local" && requiresRuntimeExecution(adapter as AdapterType)) {
-    throw new Error("Governed maker and checker agents require an isolated execution runtime");
+  if (
+    governed &&
+    target.kind === "local" &&
+    target.envPassthrough === true &&
+    requiresRuntimeExecution(adapter as AdapterType)
+  ) {
+    throw new Error("Governed local CLI agents require a managed environment");
   }
 }
 
@@ -546,9 +594,23 @@ export function enforceRuntimeToolPolicy(
     : undefined;
 
   if (adapter === "codex_local") {
-    throw new Error(
-      "codex_local cannot enforce the resolved native tool allowlist; refusing execution",
-    );
+    const nativeBundle = ["apply_patch", "shell", "web_search", "view_image"];
+    if (nativeBundle.some((name) => !boundedNativeAllowed.includes(name))) {
+      throw new Error("codex_local requires its complete sandboxed native tool bundle");
+    }
+    assertNoPolicyOverrides(adapterConfig.extraArgs, [
+      "--sandbox",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--ask-for-approval",
+    ]);
+    return {
+      adapterConfig: {
+        ...adapterConfig,
+        sandbox: "workspace-write",
+        approvalMode: "never",
+      },
+      tools: guardedTools,
+    };
   }
   if (adapter === "claude_local") {
     assertNoPolicyOverrides(adapterConfig.extraArgs, [

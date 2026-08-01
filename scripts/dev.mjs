@@ -1,17 +1,9 @@
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
-import { loadEnvFile } from "node:process";
-import { startDevelopmentGateway } from "./development-gateway.mjs";
+import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
-try {
-  loadEnvFile(join(root, ".env.local"));
-} catch (error) {
-  if (error?.code !== "ENOENT") throw error;
-}
 const yarn = process.platform === "win32" ? "yarn.cmd" : "yarn";
-const gateway = await startDevelopmentGateway(root, process.env);
-const env = { ...gateway.env, AASPAI_CWD: gateway.env.AASPAI_CWD || root };
+const env = { ...process.env, AASPAI_CWD: process.env.AASPAI_CWD || root };
 const workspace = env.AASPAI_CWD;
 const commands = [
   ["workspace", "@aaspai/api", "start", "start", "--cwd", workspace],
@@ -29,14 +21,13 @@ const children = commands.map((args) =>
 );
 
 let stopping = false;
-const stop = async (code = 0) => {
+const stop = (code = 0) => {
   if (stopping) return;
   stopping = true;
   for (const child of children) child.kill();
-  await gateway.stop();
   process.exit(code);
 };
 
-for (const child of children) child.once("exit", (code) => void stop(code ?? 1));
-process.once("SIGINT", () => void stop());
-process.once("SIGTERM", () => void stop());
+for (const child of children) child.once("exit", (code) => stop(code ?? 1));
+process.once("SIGINT", () => stop());
+process.once("SIGTERM", () => stop());

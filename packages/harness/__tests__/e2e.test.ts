@@ -516,15 +516,13 @@ describe("e2e: opencode_cli driver", () => {
     void existsSync(directPath);
   });
 
-  it("returns quickly when aborted via the signal parameter (abort path, not the 5-min timeout path)", async () => {
+  it("returns quickly when aborted via the signal parameter", async () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const cwd = makeScratchDir("hang-");
-    // The adapter's CLI_TIMEOUT_MS is a hard 5-minute wall. Exercising
-    // the timeout branch end-to-end would take 5 minutes per test run;
-    // we instead exercise the SHORTER abort path and verify the adapter
+    // Exercise the shorter abort path and verify the adapter
     // returns promptly and reports `timedOut: false` (the timeout path
     // is structurally identical — same close handler, same result
-    // shape — just triggered by the 5-min timer instead of an external
+    // shape — just triggered by the configured timer instead of an external
     // signal). The adapter does NOT expose the signal name back in the
     // result (cliResult.signal is never set in runOpencodeCli's
     // resolve — only `timedOut: boolean` and `exitCode` are returned).

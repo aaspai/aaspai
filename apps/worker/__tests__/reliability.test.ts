@@ -178,6 +178,36 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
     );
     await teardownDb(tmpDir);
   });
+
+  it("acknowledges company command notifications without creating agent work", async () => {
+    const { tmpDir, wakeupsTable, handle } = await setupDb();
+    const wakeupId = `wup_${randomUUID()}`;
+    await (handle.db.insert(wakeupsTable) as { values: (v: unknown) => Promise<unknown> }).values({
+      id: wakeupId,
+      organizationId: "org_test",
+      loopId: "loop/company-control/org-test",
+      source: "on_demand",
+      agentId: "agent/ceo",
+      payloadJson: JSON.stringify({ command: "create_milestone" }),
+      status: "queued",
+      requestedAt: new Date().toISOString(),
+      idempotencyKey: randomUUID(),
+    });
+
+    const { WorkerDaemon } = await import("../src/daemon.js");
+    const daemon = new WorkerDaemon({ organizationId: "org_test" });
+    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+
+    expect(sessionExecute).not.toHaveBeenCalled();
+    const { wakeups } = await import("@aaspai/db");
+    const rows = await (
+      (await import("@aaspai/db")).getDefaultDb().db.select().from(wakeups) as {
+        all: () => Promise<Array<{ id: string; status: string }>>;
+      }
+    ).all();
+    expect(rows.find((row) => row.id === wakeupId)?.status).toBe("completed");
+    await teardownDb(tmpDir);
+  });
 });
 
 describe("WorkerDaemon in-flight guard (issue #4)", () => {
