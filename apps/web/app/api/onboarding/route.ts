@@ -1,19 +1,32 @@
+import { CompanyCommandService } from "@aaspai/company";
+import { getDefaultDb, runMigrations } from "@aaspai/db";
 import { getAdapter } from "@aaspai/harness";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { workspaceRoot } from "@/lib/aaspai";
-import { createFrontendGoal } from "@/lib/company-goals";
 import { currentUser } from "@/lib/local-auth";
-import { listFrontendProviderModels } from "@/lib/provider-status";
+import {
+  frontendProviderTypes,
+  frontendRuntimeTypes,
+  listFrontendProviders,
+  listFrontendRuntimes,
+} from "@/lib/provider-status";
 import { ensureFrontendWorkspace } from "@/lib/workspace-bootstrap";
 
 const bodySchema = z.object({
-  provider: z.literal("opencode_cli"),
+  provider: z.enum(frontendProviderTypes),
+  runtime: z.enum(frontendRuntimeTypes),
   model: z.string().trim().min(1).max(256),
   ceoAgenda: z.string().trim().min(10).max(10_000),
   ceoInstructions: z.string().trim().min(10).max(10_000),
-  goalTitle: z.string().trim().min(3).max(300),
-  goalOutcome: z.string().trim().min(3).max(10_000),
+  objectives: z
+    .array(
+      z.object({
+        title: z.string().trim().min(3).max(300),
+        outcome: z.string().trim().min(3).max(10_000),
+      }),
+    )
+    .min(1)
+    .max(4),
   firstPriority: z.string().trim().min(3).max(500),
 });
 
@@ -27,36 +40,41 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (
-    !process.env.DAYTONA_API_KEY ||
-    !process.env.AASPAI_GATEWAY_CONTROL_URL ||
-    !process.env.AASPAI_GATEWAY_CONTROL_TOKEN
-  ) {
+  const provider = getAdapter(parsed.data.provider);
+  const runtime = (await listFrontendRuntimes()).find(
+    (candidate) => candidate.type === parsed.data.runtime,
+  );
+  if (!runtime?.ready) {
     return NextResponse.json(
       {
-        error:
-          "Daytona and the attempt-credential gateway must be configured before launching a real company.",
+        error: `${runtime?.label ?? parsed.data.runtime} is not ready: ${
+          runtime?.checks
+            .filter((check) => !check.ready)
+            .map((check) => check.message)
+            .join("; ") ?? "runtime unavailable"
+        }.`,
       },
       { status: 503 },
     );
   }
-
-  const provider = getAdapter(parsed.data.provider);
-  const models = await listFrontendProviderModels(parsed.data.provider);
-  if (!models.some((model) => model.id === parsed.data.model)) {
+  const selectedProvider = (await listFrontendProviders()).find(
+    (candidate) => candidate.type === parsed.data.provider,
+  );
+  if (!selectedProvider?.models.some((model) => model.id === parsed.data.model)) {
     return NextResponse.json(
       { error: `${parsed.data.model} is not supported by ${provider.info.label}.` },
       { status: 400 },
     );
   }
-  const environment = await provider.testEnvironment({
-    config: { model: parsed.data.model },
-    cwd: workspaceRoot(),
-  });
-  if (!environment.ok) {
+  if (provider.info.status !== "ready" || !selectedProvider.ready) {
     return NextResponse.json(
-      { error: `${parsed.data.provider} is not ready. Connect it on the setup page first.` },
-      { status: 400 },
+      {
+        error: `${provider.info.label} is not ready: ${selectedProvider?.environment.checks
+          .filter((check) => check.level !== "info")
+          .map((check) => check.message)
+          .join("; ")}`,
+      },
+      { status: 503 },
     );
   }
 
@@ -65,15 +83,49 @@ export async function POST(request: Request) {
     ceoModel: parsed.data.model,
     ceoAgenda: parsed.data.ceoAgenda,
     ceoInstructions: parsed.data.ceoInstructions,
+    runtime: runtime.target,
   });
-  const result = await createFrontendGoal({
+  const db = getDefaultDb();
+  runMigrations(db);
+  const commands = new CompanyCommandService(db.db);
+  const setup = await commands.execute({
+    type: "setup_company",
     organizationId: user.organizationId,
-    companyName: user.companyName,
-    title: parsed.data.goalTitle,
-    description: parsed.data.goalOutcome,
-    projectTitle: `${parsed.data.goalTitle} delivery`,
-    mandate: parsed.data.firstPriority,
-    requestedByActorId: user.id,
+    actorId: user.id,
+    idempotencyKey: `onboarding:${user.organizationId}`,
+    description: parsed.data.ceoAgenda,
+    timezone: "UTC",
+    ceoAgentId: "agent/ceo",
+    operatorAgentId: "agent/operator",
+    policy: {
+      provider: parsed.data.provider,
+      model: parsed.data.model,
+      runtime: runtime.target,
+      firstPriority: parsed.data.firstPriority,
+      founderApprovalRequiredForPortfolio: true,
+      externalActions: "approval_required",
+    },
+    objectives: parsed.data.objectives.map((objective, index) => ({
+      title: objective.title,
+      description: objective.outcome,
+      successCriteria: [objective.outcome],
+      priority: 100 - index * 10,
+    })),
   });
-  return NextResponse.json({ data: result }, { status: 201 });
+  await commands.execute({
+    type: "validate_company",
+    organizationId: user.organizationId,
+    actorId: user.id,
+    idempotencyKey: `onboarding-validate:${user.organizationId}`,
+  });
+  await commands.execute({
+    type: "start_discovery",
+    organizationId: user.organizationId,
+    actorId: user.id,
+    idempotencyKey: `onboarding-discovery:${user.organizationId}`,
+  });
+  return NextResponse.json(
+    { data: { ...setup, status: "discovery", firstPriority: parsed.data.firstPriority } },
+    { status: 201 },
+  );
 }

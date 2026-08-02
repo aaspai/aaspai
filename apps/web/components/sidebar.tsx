@@ -3,11 +3,20 @@
 import {
   Activity,
   Bot,
+  Brain,
   BriefcaseBusiness,
   ClipboardCheck,
+  FileText,
+  FolderKanban,
+  Inbox,
+  LayoutDashboard,
   Menu,
+  Network,
+  PlaySquare,
+  PlugZap,
+  Search,
   Settings,
-  Users,
+  Target,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -23,11 +32,22 @@ import {
 import { cn } from "@/lib/utils";
 
 const nav = [
-  { href: "/company", label: "Company", icon: BriefcaseBusiness },
-  { href: "/governance", label: "Decisions", icon: ClipboardCheck },
+  { href: "/", label: "Command center", icon: LayoutDashboard },
+  { href: "/inbox", label: "Inbox", icon: Inbox },
+  { href: "/projects", label: "Projects", icon: FolderKanban },
+  { href: "/goals", label: "Goals", icon: Target },
+  { href: "/issues", label: "Issues", icon: ClipboardCheck },
   { href: "/execution", label: "Work", icon: Activity },
-  { href: "/agents", label: "Team", icon: Users },
+  { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
+  { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/org", label: "Organization", icon: Network },
+  { href: "/automations", label: "Automations", icon: PlaySquare },
+  { href: "/files", label: "Files & artifacts", icon: FileText },
+  { href: "/integrations", label: "Integrations", icon: PlugZap },
+  { href: "/memory", label: "Memory", icon: Brain },
   { href: "/sessions", label: "Activity", icon: Activity },
+  { href: "/search", label: "Search", icon: Search },
+  { href: "/company", label: "Company", icon: BriefcaseBusiness },
 ];
 
 export function Sidebar({
@@ -59,7 +79,7 @@ export function Sidebar({
             <SheetHeader className="border-b pb-4 text-left">
               <SheetTitle>{companyName}</SheetTitle>
             </SheetHeader>
-            <nav className="flex-1 py-3">
+            <nav className="flex-1 overflow-y-auto py-3">
               <ul className="space-y-1">
                 {nav.map((item) => (
                   <li key={item.href}>
@@ -82,7 +102,10 @@ export function Sidebar({
               </ul>
             </nav>
             <SheetClose asChild>
-              <Link href="/setup" className="flex items-center gap-3 rounded-md px-3 py-3 text-sm">
+              <Link
+                href="/settings"
+                className="flex items-center gap-3 rounded-md px-3 py-3 text-sm"
+              >
                 <Settings className="h-4 w-4" />
                 Settings
               </Link>
@@ -128,7 +151,7 @@ export function Sidebar({
         </nav>
         <div className="border-t p-3 text-[11px] text-muted-foreground">
           <Link
-            href="/setup"
+            href="/settings"
             className="mb-4 flex items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-accent"
           >
             <Settings className="h-4 w-4" /> Settings
@@ -138,10 +161,9 @@ export function Sidebar({
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted font-semibold text-foreground">
               {founderName.slice(0, 1).toUpperCase()}
             </span>
-            <span>
-              <span className="font-medium text-foreground">{founderName}</span>
-              <br />
-              Founder
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate font-medium text-foreground">{founderName}</span>
+              <span>Founder</span>
             </span>
           </div>
           <LogoutButton />

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ExecutionRecovery } from "@/components/execution-recovery";
 import { RunReadyWork } from "@/components/run-ready-work";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +20,12 @@ export default async function ExecutionPage() {
   }
   const attempts = await listExecutionAttempts();
   const goals = await listExecutionGoalProgress();
+  const activeAttempts = attempts.filter((attempt) =>
+    ["queued", "preparing", "running", "cancelling"].includes(attempt.status),
+  ).length;
+  const attentionAttempts = attempts.filter((attempt) =>
+    ["failed", "timed_out", "lost"].includes(attempt.status),
+  ).length;
   return (
     <div className="space-y-6">
       <header>
@@ -27,6 +34,37 @@ export default async function ExecutionPage() {
           Attempts, workspaces, events, and artifacts.
         </p>
       </header>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Active attempts</CardDescription>
+            <CardTitle>{activeAttempts}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Needs attention</CardDescription>
+            <CardTitle>{attentionAttempts}</CardTitle>
+          </CardHeader>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription>Execution model</CardDescription>
+            <CardTitle className="text-base">Company control + task work</CardTitle>
+          </CardHeader>
+        </Card>
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Recovery</CardTitle>
+          <CardDescription>
+            Requeue stale worker claims and reconcile interrupted attempts.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ExecutionRecovery />
+        </CardContent>
+      </Card>
       {goals.length > 0 && (
         <Card>
           <CardHeader>

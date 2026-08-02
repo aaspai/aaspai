@@ -73,7 +73,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const collectedText: string[] = [];
   const collectedErrors: string[] = [];
   const collectedUsage: UsageSummary = {};
-  let sessionId: string | undefined = ctx.runtime.sessionId;
+  let sessionId: string | undefined;
   const model: string | undefined = config.model;
   let _stopReason: string | undefined;
   let timedOut = false;

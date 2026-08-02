@@ -88,6 +88,29 @@ describe("LocalExecutionWorkspaceManager", () => {
     expect(git.removeWorktree).not.toHaveBeenCalled();
   });
 
+  it("maps durable IDs to one portable filesystem segment", async () => {
+    const createWorktree = vi.fn(async () => undefined);
+    const manager = new LocalExecutionWorkspaceManager(
+      { createWorktree } as unknown as GitRepository,
+      store,
+      () => "unused",
+    );
+    const workspaceRoot = path.join(testDirectory, "workspace-root");
+    const workspace = await manager.prepare({
+      organizationId: "org_test",
+      attemptId: "attempt:wakeup:wakeup/process-run",
+      repositoryId: "repo_app",
+      repositoryPath: "repo",
+      baseCommitSha: "abcdef1",
+      workspaceRoot,
+      branchName: "worker-wakeup",
+    });
+
+    expect(path.relative(path.join(workspaceRoot, "execution"), workspace.path)).not.toContain(
+      path.sep,
+    );
+  });
+
   it("does not allow a worktree to escape the workspace root", async () => {
     const git = {} as GitRepository;
     const manager = new LocalExecutionWorkspaceManager(git, store, () => "unused");

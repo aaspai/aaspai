@@ -14,10 +14,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run --passWithNoTests",
-    "test:real:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-daytona-webpage.ts",
-    "test:real:company:docker": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts docker",
-    "test:real:company:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts daytona",
-    "test:real:zedblock:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts daytona zedblock",
+    "test:real:company:local": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts local",
+    "test:real:zedblock:local": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts local zedblock",
+    "test:simulate:company": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts simulation",
     "clean": "rimraf dist"
   },
   "dependencies": {
@@ -37,7 +36,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.1.1",
-    "@daytonaio/sdk": "^0.171.0",
     "@types/node": "^24.0.0",
     "rimraf": "^6.1.3",
     "tsx": "^4.16.2",

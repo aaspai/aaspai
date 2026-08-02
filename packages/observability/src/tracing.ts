@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 
 /**
@@ -29,16 +30,14 @@ export interface CorrelationContext {
   actorId?: string;
 }
 
-const CONTEXT_SYMBOL = Symbol.for("aaspai:correlationContext");
-
-type GlobalWithSymbol = typeof globalThis & Record<symbol, unknown>;
+const correlationStorage = new AsyncLocalStorage<CorrelationContext | null>();
 
 /**
  * Get the current correlation context from async storage.
  * Returns null if no context has been set.
  */
 export function getCorrelationContext(): CorrelationContext | null {
-  return (globalThis as GlobalWithSymbol)[CONTEXT_SYMBOL] as CorrelationContext | null;
+  return correlationStorage.getStore() ?? null;
 }
 
 /**
@@ -50,8 +49,13 @@ export function setCorrelationContext(
   context: CorrelationContext | null,
 ): CorrelationContext | null {
   const prev = getCorrelationContext();
-  (globalThis as GlobalWithSymbol)[CONTEXT_SYMBOL] = context;
+  correlationStorage.enterWith(context);
   return prev;
+}
+
+/** Run one async job with isolated correlation fields. */
+export function withCorrelationContext<T>(context: CorrelationContext, operation: () => T): T {
+  return correlationStorage.run(context, operation);
 }
 
 /**

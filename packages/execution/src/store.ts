@@ -75,6 +75,7 @@ import {
   executionWorkItems,
   executionWorkspaces,
   goals,
+  gt,
   gte,
   sessionEvents as harnessSessionEvents,
   sessions as harnessSessions,
@@ -82,13 +83,27 @@ import {
   isNull,
   loopOutputs,
   lte,
+  milestones,
+  notExists,
   or,
+  processBindings,
+  projectAssignments,
   projects,
   repositories,
   resourceLocks,
   type SqliteDb,
+  wakeups,
   workflowRuns,
 } from "@aaspai/db";
+
+const ATTEMPT_LEASE_MS = 60 * 60_000;
+const SCHEDULER_LOCK_TYPES: ResourceLock["resourceType"][] = [
+  "organization_slot",
+  "project_slot",
+  "repository_slot",
+  "agent_slot",
+  "branch",
+];
 
 export interface CreateGoalInput {
   id?: string;
@@ -138,6 +153,11 @@ export interface CreateWorkItemInput {
   workKind?: ExecutionWorkItem["workKind"];
   deliveryMode?: ExecutionWorkItem["deliveryMode"];
   workflowRunId?: string | null;
+  milestoneId?: string | null;
+  processBindingId?: string | null;
+  parentWorkItemId?: string | null;
+  assignedAgentId?: string | null;
+  alignmentRationale?: string;
   title: string;
   description?: string;
   definitionRevisionId?: string | null;
@@ -221,6 +241,15 @@ export interface CreateHarnessSessionInput {
   prompt: string;
   runtime?: Record<string, unknown>;
   config?: Record<string, unknown>;
+  wakeupId?: string;
+  parentSessionId?: string;
+}
+
+export interface HarnessSessionStart {
+  durableSessionId?: string;
+  wakeupId?: string;
+  parentSessionId?: string;
+  resumeSessionId?: string;
 }
 
 export interface CreateWorkspaceInput {
@@ -442,6 +471,84 @@ export class ExecutionStore {
       .limit(1);
     if (existing[0]) return existing[0];
 
+    const context = {
+      organizationId: input.organizationId,
+      actorId: "execution-store",
+      correlationId: input.idempotencyKey,
+    };
+    const [goal, project, repository, revision, workflow, milestone, binding, assignment, parent] =
+      await Promise.all([
+        this.getGoal(input.goalId, context),
+        this.getProject(input.projectId, context),
+        this.getRepository(input.repositoryId, context),
+        input.definitionRevisionId
+          ? this.getDefinitionRevision(input.definitionRevisionId, context)
+          : null,
+        input.workflowRunId ? this.getWorkflowRun(input.workflowRunId) : null,
+        input.milestoneId
+          ? this.db
+              .select({ id: milestones.id, projectId: milestones.projectId })
+              .from(milestones)
+              .where(
+                and(
+                  eq(milestones.organizationId, input.organizationId),
+                  eq(milestones.id, input.milestoneId),
+                ),
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : null,
+        input.processBindingId
+          ? this.db
+              .select({ id: processBindings.id, projectId: processBindings.projectId })
+              .from(processBindings)
+              .where(
+                and(
+                  eq(processBindings.organizationId, input.organizationId),
+                  eq(processBindings.id, input.processBindingId),
+                ),
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : null,
+        input.assignedAgentId && input.processBindingId
+          ? this.db
+              .select({ id: projectAssignments.id })
+              .from(projectAssignments)
+              .where(
+                and(
+                  eq(projectAssignments.organizationId, input.organizationId),
+                  eq(projectAssignments.projectId, input.projectId),
+                  eq(projectAssignments.agentId, input.assignedAgentId),
+                  eq(projectAssignments.status, "active"),
+                ),
+              )
+              .limit(1)
+              .then((rows) => rows[0] ?? null)
+          : null,
+        input.parentWorkItemId ? this.getWorkItem(input.parentWorkItemId, context) : null,
+      ]);
+    if (!goal) throw new Error("WorkItem goal not found in organization");
+    if (!project || project.goalId !== goal.id)
+      throw new Error("WorkItem project is not aligned to its goal");
+    if (!repository || (repository.projectId && repository.projectId !== project.id))
+      throw new Error("WorkItem repository is not aligned to its project");
+    if (input.definitionRevisionId && !revision)
+      throw new Error("WorkItem definition revision is not in its organization");
+    if (
+      input.workflowRunId &&
+      (!workflow || workflow.organizationId !== input.organizationId || workflow.goalId !== goal.id)
+    )
+      throw new Error("WorkItem workflow is not aligned to its goal");
+    if (input.milestoneId && (!milestone || milestone.projectId !== project.id))
+      throw new Error("WorkItem milestone is not aligned to its project");
+    if (input.processBindingId && (!binding || binding.projectId !== project.id))
+      throw new Error("WorkItem process binding is not aligned to its project");
+    if (input.assignedAgentId && input.processBindingId && !assignment)
+      throw new Error("WorkItem assigned agent is not active on its project");
+    if (input.parentWorkItemId && !parent)
+      throw new Error("WorkItem parent is not in its organization");
+
     const repositoryIds = [...new Set(input.repositoryIds ?? [input.repositoryId])];
     if (!repositoryIds.includes(input.repositoryId)) repositoryIds.unshift(input.repositoryId);
     if (repositoryIds.length > 32) {
@@ -463,6 +570,11 @@ export class ExecutionStore {
       deliveryClaimOwner: null,
       deliveryLeaseExpiresAt: null,
       workflowRunId: input.workflowRunId ?? null,
+      milestoneId: input.milestoneId ?? null,
+      processBindingId: input.processBindingId ?? null,
+      parentWorkItemId: input.parentWorkItemId ?? null,
+      assignedAgentId: input.assignedAgentId ?? null,
+      alignmentRationale: input.alignmentRationale ?? "",
       title: input.title,
       description: input.description ?? "",
       status: input.status ?? "proposed",
@@ -787,19 +899,20 @@ export class ExecutionStore {
     runId: string,
     status: WorkflowRun["status"],
   ): Promise<WorkflowRun> {
-    const finishedAt = ["succeeded", "failed", "cancelled", "timed_out"].includes(status)
-      ? now()
-      : null;
+    const current = await this.getWorkflowRun(runId);
+    if (!current) throw new Error(`Workflow run ${runId} not found`);
+    const timestamp = now();
+    const terminal = ["succeeded", "failed", "cancelled", "timed_out"].includes(status);
     await this.db
       .update(workflowRuns)
       .set({
         status,
-        startedAt: status === "running" ? now() : undefined,
-        finishedAt,
+        startedAt: status === "running" || terminal ? (current.startedAt ?? timestamp) : undefined,
+        finishedAt: terminal ? timestamp : null,
       })
       .where(eq(workflowRuns.id, runId));
     const updated = await this.getWorkflowRun(runId);
-    if (!updated) throw new Error(`Workflow run ${runId} not found`);
+    if (!updated) throw new Error(`Workflow run ${runId} disappeared`);
     return updated;
   }
 
@@ -831,6 +944,12 @@ export class ExecutionStore {
   }
 
   async createAttempt(input: CreateAttemptInput) {
+    if (input.parentAttemptId) {
+      const parent = await this.getAttempt(input.parentAttemptId);
+      if (!parent || parent.organizationId !== input.organizationId) {
+        throw new Error("Parent attempt is not in the attempt organization");
+      }
+    }
     const row = {
       id: input.id ?? makeId("attempt"),
       organizationId: input.organizationId,
@@ -846,6 +965,7 @@ export class ExecutionStore {
       attemptNumber: input.attemptNumber ?? 1,
       timeoutMs: input.timeoutMs ?? null,
       cancelRequestedAt: null,
+      heartbeatAt: null,
       startedAt: null,
       finishedAt: null,
       error: null,
@@ -885,6 +1005,22 @@ export class ExecutionStore {
   } | null> {
     const workItem = await this.getWorkItem(input.workItemId);
     if (!workItem || !["proposed", "ready"].includes(workItem.status)) return null;
+    const matchesDispatch = (attempt: AgentAttempt) =>
+      attempt.organizationId === workItem.organizationId &&
+      attempt.agentId === input.agentId &&
+      attempt.harness === input.harness &&
+      attempt.workflowRunId === input.workflowRunId &&
+      attempt.parentAttemptId === (input.parentAttemptId ?? null);
+    const workflowRun = await this.getWorkflowRun(input.workflowRunId);
+    if (
+      !workflowRun ||
+      workflowRun.organizationId !== workItem.organizationId ||
+      workflowRun.goalId !== workItem.goalId ||
+      (workItem.workflowRunId !== null && workItem.workflowRunId !== workflowRun.id)
+    ) {
+      return null;
+    }
+    if (workItem.assignedAgentId && workItem.assignedAgentId !== input.agentId) return null;
     if (workItem.retryAfter && workItem.retryAfter > now()) return null;
 
     const policyDecision = evaluateExecutionPolicy(workItem.governance, workItem.metadata);
@@ -904,7 +1040,7 @@ export class ExecutionStore {
 
     const attempts = await this.listAttemptsForWorkItem(input.workItemId);
     const active = attempts.find((attempt) => isActiveAttemptStatus(attempt.status));
-    if (active) return { attempt: active, created: false };
+    if (active) return matchesDispatch(active) ? { attempt: active, created: false } : null;
     const attemptNumber = (attempts.at(-1)?.attemptNumber ?? 0) + 1;
     let created: AgentAttempt;
     try {
@@ -925,8 +1061,7 @@ export class ExecutionStore {
       const winner = (await this.listAttemptsForWorkItem(input.workItemId)).find((attempt) =>
         isActiveAttemptStatus(attempt.status),
       );
-      if (!winner) return null;
-      return { attempt: winner, created: false };
+      return winner && matchesDispatch(winner) ? { attempt: winner, created: false } : null;
     }
 
     const slots = await this.acquireSchedulerSlots({
@@ -962,7 +1097,7 @@ export class ExecutionStore {
       const winner = (await this.listAttemptsForWorkItem(input.workItemId)).find((attempt) =>
         isActiveAttemptStatus(attempt.status),
       );
-      return winner ? { attempt: winner, created: false } : null;
+      return winner && matchesDispatch(winner) ? { attempt: winner, created: false } : null;
     }
     return { attempt: created, created: true };
   }
@@ -985,6 +1120,27 @@ export class ExecutionStore {
     const started = await this.getAttempt(attemptId);
     if (!started) throw new Error(`Agent attempt ${attemptId} disappeared`);
     return started;
+  }
+
+  /** Settle the crash window where session evidence is terminal but its attempt is still active. */
+  async reconcileTerminalHarnessAttempt(
+    workItemId: string,
+  ): Promise<{ attempt: AgentAttempt; workItem: ExecutionWorkItem } | null> {
+    const active = (await this.listAttemptsForWorkItem(workItemId)).find(
+      (attempt) =>
+        ["preparing", "running", "cancelling"].includes(attempt.status) && attempt.harnessSessionId,
+    );
+    if (!active?.harnessSessionId) return null;
+    const session = await this.getHarnessSession(active.harnessSessionId);
+    if (!session || !["succeeded", "failed", "cancelled", "timed_out"].includes(session.status)) {
+      return null;
+    }
+    return await this.completeScheduledAttempt({
+      attemptId: active.id,
+      status: session.status as "succeeded" | "failed" | "cancelled" | "timed_out",
+      error: session.errorMessage,
+      retryDelayMs: 0,
+    });
   }
 
   async completeScheduledAttempt(input: {
@@ -1017,6 +1173,19 @@ export class ExecutionStore {
           const advanced = await this.getWorkItem(existingWorkItem.id);
           if (!advanced) throw new Error("Successful WorkItem disappeared");
           return { attempt: current, workItem: advanced };
+        }
+        if (
+          ["failed", "timed_out"].includes(current.status) &&
+          current.attemptNumber < existingWorkItem.maxAttempts
+        ) {
+          const retryAfter = new Date(
+            Date.now() + Math.max(0, input.retryDelayMs ?? 1_000),
+          ).toISOString();
+          const ready = await this.updateWorkItemStatus(existingWorkItem.id, "ready", {
+            retryAfter,
+            blockedReason: null,
+          });
+          return { attempt: current, workItem: ready };
         }
         const workItemStatus = current.status === "cancelled" ? "cancelled" : "failed";
         const settled = await this.updateWorkItemStatus(current.workItemId, workItemStatus, {
@@ -2015,7 +2184,7 @@ export class ExecutionStore {
     repositoryConcurrency: number;
     agentConcurrency: number;
   }): Promise<ResourceLock[] | null> {
-    const leaseExpiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    const leaseExpiresAt = new Date(Date.now() + ATTEMPT_LEASE_MS).toISOString();
     const acquired: ResourceLock[] = [];
     const acquire = async (
       resourceType: ResourceLock["resourceType"],
@@ -2088,13 +2257,7 @@ export class ExecutionStore {
       .where(
         and(
           eq(resourceLocks.ownerAttemptId, ownerAttemptId),
-          inArray(resourceLocks.resourceType, [
-            "organization_slot",
-            "project_slot",
-            "repository_slot",
-            "agent_slot",
-            "branch",
-          ]),
+          inArray(resourceLocks.resourceType, SCHEDULER_LOCK_TYPES),
           isNull(resourceLocks.releasedAt),
         ),
       );
@@ -2340,12 +2503,70 @@ export class ExecutionStore {
     });
   }
 
+  async resolveHarnessSessionStart(
+    input: Pick<CreateHarnessSessionInput, "id" | "organizationId" | "agentId" | "adapter"> &
+      Pick<HarnessSessionStart, "wakeupId" | "parentSessionId">,
+  ): Promise<HarnessSessionStart> {
+    if (!input.id) {
+      return { wakeupId: input.wakeupId, parentSessionId: input.parentSessionId };
+    }
+    const existing = await this.getHarnessSession(input.id);
+    if (!existing) {
+      return {
+        durableSessionId: input.id,
+        wakeupId: input.wakeupId,
+        parentSessionId: input.parentSessionId,
+      };
+    }
+    if (
+      existing.organizationId !== input.organizationId ||
+      existing.agentId !== input.agentId ||
+      existing.adapter !== input.adapter
+    ) {
+      throw new Error(`Harness session ${input.id} belongs to another execution identity`);
+    }
+    const [event] = await this.db
+      .select({ id: harnessSessionEvents.id })
+      .from(harnessSessionEvents)
+      .where(eq(harnessSessionEvents.sessionId, existing.id))
+      .limit(1);
+    const pristine =
+      existing.status === "queued" &&
+      existing.startedAt === null &&
+      existing.finishedAt === null &&
+      existing.sessionId === null &&
+      existing.sessionParamsJson === null &&
+      existing.sessionDisplayId === null &&
+      existing.resultJson === null &&
+      existing.usageJson === null &&
+      existing.costUsd === null &&
+      existing.durationMs === null &&
+      existing.errorFamily === null &&
+      existing.errorCode === null &&
+      existing.errorMessage === null &&
+      existing.pendingQuestionJson === null &&
+      !event;
+    if (pristine) {
+      return {
+        durableSessionId: existing.id,
+        wakeupId: existing.wakeupId,
+        parentSessionId: existing.parentSessionId ?? undefined,
+      };
+    }
+    return {
+      wakeupId: existing.wakeupId,
+      parentSessionId: existing.id,
+      resumeSessionId: existing.sessionId ?? undefined,
+    };
+  }
+
   async createHarnessSession(input: CreateHarnessSessionInput) {
-    const id = input.id ?? makeId("sess");
+    const start = await this.resolveHarnessSessionStart(input);
+    const id = start.durableSessionId ?? makeId("sess");
     const row = {
       id,
       organizationId: input.organizationId,
-      wakeupId: "manual",
+      wakeupId: start.wakeupId ?? "manual",
       agentId: input.agentId,
       adapter: input.adapter,
       runtimeJson: JSON.stringify(input.runtime ?? {}),
@@ -2365,14 +2586,11 @@ export class ExecutionStore {
       startedAt: now(),
       finishedAt: null,
       durationMs: null,
-      parentSessionId: null,
+      parentSessionId: start.parentSessionId ?? null,
     } satisfies typeof harnessSessions.$inferInsert;
-    const existing = await this.getHarnessSession(id);
+    const existing = start.durableSessionId ? await this.getHarnessSession(id) : null;
     if (existing) {
-      if (existing.organizationId !== input.organizationId) {
-        throw new Error(`Harness session ${id} belongs to another organization`);
-      }
-      await this.db
+      const updated = await this.db
         .update(harnessSessions)
         .set({
           agentId: input.agentId,
@@ -2381,26 +2599,87 @@ export class ExecutionStore {
           prompt: input.prompt,
           configJson: row.configJson,
           status: "running",
+          sessionId: null,
+          sessionParamsJson: null,
+          sessionDisplayId: row.sessionDisplayId,
+          resultJson: null,
+          usageJson: null,
+          costUsd: null,
           startedAt: row.startedAt,
           finishedAt: null,
+          durationMs: null,
           errorFamily: null,
           errorCode: null,
           errorMessage: null,
+          pendingQuestionJson: null,
         })
-        .where(eq(harnessSessions.id, id));
+        .where(
+          and(
+            eq(harnessSessions.id, id),
+            eq(harnessSessions.status, "queued"),
+            isNull(harnessSessions.startedAt),
+            isNull(harnessSessions.finishedAt),
+            isNull(harnessSessions.sessionId),
+            isNull(harnessSessions.sessionParamsJson),
+            isNull(harnessSessions.sessionDisplayId),
+            isNull(harnessSessions.resultJson),
+            isNull(harnessSessions.usageJson),
+            isNull(harnessSessions.costUsd),
+            isNull(harnessSessions.durationMs),
+            isNull(harnessSessions.errorFamily),
+            isNull(harnessSessions.errorCode),
+            isNull(harnessSessions.errorMessage),
+            isNull(harnessSessions.pendingQuestionJson),
+          ),
+        )
+        .returning({ id: harnessSessions.id });
+      if (updated.length !== 1) {
+        throw new Error(`Harness session ${id} changed before it could be activated`);
+      }
     } else {
       await this.db.insert(harnessSessions).values(row as never);
     }
-    return row;
+    return { ...row, inheritedProviderSessionId: start.resumeSessionId ?? null };
   }
 
   async linkHarnessSession(attemptId: string, harnessSessionId: string): Promise<AgentAttempt> {
-    await this.db
-      .update(agentAttempts)
-      .set({ harnessSessionId })
-      .where(eq(agentAttempts.id, attemptId));
+    this.db.transaction((tx) => {
+      const attempt = tx.select().from(agentAttempts).where(eq(agentAttempts.id, attemptId)).get();
+      if (!attempt) throw new Error(`Agent attempt ${attemptId} not found`);
+      const session = tx
+        .select()
+        .from(harnessSessions)
+        .where(eq(harnessSessions.id, harnessSessionId))
+        .get();
+      if (!session) throw new Error(`Harness session ${harnessSessionId} not found`);
+      if (
+        session.organizationId !== attempt.organizationId ||
+        session.agentId !== attempt.agentId ||
+        session.adapter !== attempt.harness
+      ) {
+        throw new Error("Harness session execution identity does not match the attempt");
+      }
+      const owner = tx
+        .select({ id: agentAttempts.id })
+        .from(agentAttempts)
+        .where(eq(agentAttempts.harnessSessionId, harnessSessionId))
+        .limit(1)
+        .get();
+      if (owner && owner.id !== attemptId) {
+        throw new Error(`Harness session ${harnessSessionId} is already linked to another attempt`);
+      }
+      if (attempt.harnessSessionId && attempt.harnessSessionId !== harnessSessionId) {
+        throw new Error(`Agent attempt ${attemptId} is already linked to another harness session`);
+      }
+      if (!attempt.harnessSessionId) {
+        tx.update(agentAttempts)
+          .set({ harnessSessionId })
+          .where(and(eq(agentAttempts.id, attemptId), isNull(agentAttempts.harnessSessionId)))
+          .run();
+      }
+    });
     const attempt = await this.getAttempt(attemptId);
-    if (!attempt) throw new Error(`Agent attempt ${attemptId} not found`);
+    if (!attempt) throw new Error(`Agent attempt ${attemptId} disappeared`);
     return attempt;
   }
 
@@ -2411,6 +2690,24 @@ export class ExecutionStore {
       .where(eq(harnessSessions.id, harnessSessionId))
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  async setHarnessSessionProviderIdentity(
+    harnessSessionId: string,
+    providerSessionId: string,
+  ): Promise<void> {
+    await this.db
+      .update(harnessSessions)
+      .set({
+        sessionId: providerSessionId,
+        sessionDisplayId: providerSessionId.slice(0, 12),
+      })
+      .where(
+        and(
+          eq(harnessSessions.id, harnessSessionId),
+          or(isNull(harnessSessions.sessionId), eq(harnessSessions.sessionId, providerSessionId)),
+        ),
+      );
   }
 
   async appendHarnessSessionEvent(input: {
@@ -2445,10 +2742,16 @@ export class ExecutionStore {
     const finishedAt = now();
     const current = await this.getHarnessSession(sessionId);
     const startedAtMs = current?.startedAt ? Date.parse(current.startedAt) : Date.now();
+    const providerSessionId = result.sessionId ?? current?.sessionId ?? null;
+    const sessionDisplayId =
+      result.sessionDisplayId ??
+      current?.sessionDisplayId ??
+      providerSessionId?.slice(0, 12) ??
+      null;
     const normalized = {
-      sessionId: result.sessionId ?? sessionId,
+      sessionId: providerSessionId ?? sessionId,
       sessionParams: result.sessionParams,
-      sessionDisplayId: result.sessionDisplayId,
+      sessionDisplayId,
       status,
       exitCode: result.exitCode,
       usage: result.usage,
@@ -2456,6 +2759,8 @@ export class ExecutionStore {
       errorFamily: result.errorFamily,
       errorCode: result.errorCode,
       summary: result.summary,
+      toolsInvoked: result.resultJson?.toolsInvoked ?? [],
+      toolEventCount: result.resultJson?.toolEventCount ?? 0,
       logRef: sessionId,
     };
     await this.db
@@ -2464,9 +2769,9 @@ export class ExecutionStore {
         status,
         finishedAt,
         durationMs: Math.max(0, Date.parse(finishedAt) - startedAtMs),
-        sessionId: result.sessionId ?? null,
+        sessionId: providerSessionId,
         sessionParamsJson: result.sessionParams ? JSON.stringify(result.sessionParams) : null,
-        sessionDisplayId: result.sessionDisplayId ?? null,
+        sessionDisplayId,
         resultJson: JSON.stringify(normalized),
         usageJson: result.usage ? JSON.stringify(result.usage) : null,
         costUsd: result.costUsd ?? null,
@@ -2479,17 +2784,64 @@ export class ExecutionStore {
   }
 
   async claimWorkItem(workItemId: string, attemptId: string): Promise<boolean> {
-    const changed = await this.db
-      .update(executionWorkItems)
-      .set({ status: "claimed", claimedByAttemptId: attemptId, claimedAt: now(), updatedAt: now() })
-      .where(
-        and(
-          eq(executionWorkItems.id, workItemId),
-          inArray(executionWorkItems.status, ["proposed", "ready"]),
-        ),
-      )
-      .returning({ id: executionWorkItems.id });
-    return changed.length === 1;
+    const claimedAt = now();
+    return this.db.transaction((tx) => {
+      const workItem = tx
+        .select()
+        .from(executionWorkItems)
+        .where(eq(executionWorkItems.id, workItemId))
+        .get();
+      const attempt = tx.select().from(agentAttempts).where(eq(agentAttempts.id, attemptId)).get();
+      const workflowRun = attempt
+        ? tx.select().from(workflowRuns).where(eq(workflowRuns.id, attempt.workflowRunId)).get()
+        : null;
+      if (
+        !workItem ||
+        !attempt ||
+        !workflowRun ||
+        attempt.status !== "queued" ||
+        attempt.workItemId !== workItem.id ||
+        attempt.organizationId !== workItem.organizationId ||
+        workflowRun.organizationId !== attempt.organizationId ||
+        workflowRun.goalId !== workItem.goalId ||
+        (workItem.workflowRunId !== null && workItem.workflowRunId !== attempt.workflowRunId) ||
+        (workItem.assignedAgentId !== null && workItem.assignedAgentId !== attempt.agentId)
+      ) {
+        return false;
+      }
+      const changed = tx
+        .update(executionWorkItems)
+        .set({
+          status: "claimed",
+          workflowRunId: attempt.workflowRunId,
+          assignedAgentId: workItem.assignedAgentId ?? attempt.agentId,
+          claimedByAttemptId: attemptId,
+          claimedAt,
+          updatedAt: claimedAt,
+        })
+        .where(
+          and(
+            eq(executionWorkItems.id, workItemId),
+            inArray(executionWorkItems.status, ["proposed", "ready"]),
+            or(
+              isNull(executionWorkItems.assignedAgentId),
+              eq(executionWorkItems.assignedAgentId, attempt.agentId),
+            ),
+            or(
+              isNull(executionWorkItems.workflowRunId),
+              eq(executionWorkItems.workflowRunId, attempt.workflowRunId),
+            ),
+          ),
+        )
+        .returning({ id: executionWorkItems.id })
+        .all();
+      if (changed.length !== 1) return false;
+      tx.update(workflowRuns)
+        .set({ status: "running", startedAt: claimedAt })
+        .where(and(eq(workflowRuns.id, attempt.workflowRunId), eq(workflowRuns.status, "queued")))
+        .run();
+      return true;
+    });
   }
 
   async transitionAttempt(attemptId: string, nextStatus: AttemptStatus) {
@@ -2504,7 +2856,10 @@ export class ExecutionStore {
 
     const timestamp = now();
     const update: Partial<typeof agentAttempts.$inferInsert> = { status: nextStatus };
-    if (nextStatus === "running") update.startedAt = timestamp;
+    if (nextStatus === "running") {
+      update.startedAt = timestamp;
+      update.heartbeatAt = timestamp;
+    }
     if (["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(nextStatus)) {
       update.finishedAt = timestamp;
     }
@@ -2515,6 +2870,37 @@ export class ExecutionStore {
       .returning({ id: agentAttempts.id });
     if (changed.length !== 1) throw new Error("stale agent attempt transition");
     return { ...current, ...update };
+  }
+
+  /** Record executor liveness and extend the active resource leases owned by this attempt. */
+  async heartbeatAttempt(attemptId: string, leaseMs = ATTEMPT_LEASE_MS): Promise<boolean> {
+    const heartbeatAt = now();
+    const leaseExpiresAt = new Date(Date.now() + Math.max(1_000, leaseMs)).toISOString();
+    return this.db.transaction((tx) => {
+      const changed = tx
+        .update(agentAttempts)
+        .set({ heartbeatAt })
+        .where(
+          and(
+            eq(agentAttempts.id, attemptId),
+            inArray(agentAttempts.status, ["preparing", "running", "cancelling"]),
+          ),
+        )
+        .returning({ id: agentAttempts.id })
+        .all();
+      if (changed.length !== 1) return false;
+      tx.update(resourceLocks)
+        .set({ leaseExpiresAt })
+        .where(
+          and(
+            eq(resourceLocks.ownerAttemptId, attemptId),
+            lte(resourceLocks.leaseExpiresAt, leaseExpiresAt),
+            isNull(resourceLocks.releasedAt),
+          ),
+        )
+        .run();
+      return true;
+    });
   }
 
   async getAttempt(attemptId: string, context?: ExecutionContext): Promise<AgentAttempt | null> {
@@ -2533,21 +2919,134 @@ export class ExecutionStore {
     return rows[0] ? agentAttemptSchema.parse(rows[0]) : null;
   }
 
-  async reconcileLostAttempts(cutoff: string): Promise<number> {
+  private async getAttemptLastActivity(attempt: {
+    heartbeatAt: string | null;
+    startedAt: string | null;
+    createdAt: string;
+    harnessSessionId: string | null;
+  }): Promise<string> {
+    let lastActivity = attempt.heartbeatAt ?? attempt.startedAt ?? attempt.createdAt;
+    if (attempt.harnessSessionId) {
+      // ponytail: active attempts are few; replace the per-attempt lookup with
+      // a grouped query if worker concurrency makes recovery measurable.
+      const [latest] = await this.db
+        .select({ ts: harnessSessionEvents.ts })
+        .from(harnessSessionEvents)
+        .where(eq(harnessSessionEvents.sessionId, attempt.harnessSessionId))
+        .orderBy(desc(harnessSessionEvents.ts))
+        .limit(1);
+      if (latest?.ts && latest.ts > lastActivity) lastActivity = latest.ts;
+    }
+    return lastActivity;
+  }
+
+  private async findStaleAttempts(cutoff: string, organizationId?: string) {
     const candidates = await this.db
       .select()
       .from(agentAttempts)
-      .where(inArray(agentAttempts.status, ["preparing", "running"]));
-    const stale = candidates.filter(
-      (attempt) => (attempt.startedAt ?? attempt.createdAt) <= cutoff,
-    );
-    for (const attempt of stale) {
-      await this.db
+      .where(
+        organizationId
+          ? and(
+              eq(agentAttempts.organizationId, organizationId),
+              inArray(agentAttempts.status, ["preparing", "running", "cancelling"]),
+            )
+          : inArray(agentAttempts.status, ["preparing", "running", "cancelling"]),
+      );
+    const stale: typeof candidates = [];
+    for (const attempt of candidates) {
+      const lastActivity = await this.getAttemptLastActivity(attempt);
+      if (lastActivity <= cutoff) stale.push(attempt);
+    }
+    return stale;
+  }
+
+  async countStaleAttempts(cutoff: string, organizationId?: string): Promise<number> {
+    return (await this.findStaleAttempts(cutoff, organizationId)).length;
+  }
+
+  async countStaleClaimedWakeups(cutoff: string, organizationId: string): Promise<number> {
+    const candidates = await this.db
+      .select()
+      .from(wakeups)
+      .where(and(eq(wakeups.organizationId, organizationId), eq(wakeups.status, "claimed")));
+    let stale = 0;
+    for (const wakeup of candidates) {
+      if ((wakeup.heartbeatAt ?? wakeup.claimedAt ?? wakeup.requestedAt) > cutoff) continue;
+      const workItemId = safeRecord(wakeup.payloadJson).workItemId;
+      if (typeof workItemId === "string") {
+        const [claim] = await this.db
+          .select({ attemptId: executionWorkItems.claimedByAttemptId })
+          .from(executionWorkItems)
+          .where(
+            and(
+              eq(executionWorkItems.id, workItemId),
+              eq(executionWorkItems.organizationId, organizationId),
+            ),
+          )
+          .limit(1);
+        if (claim?.attemptId) {
+          const [attempt] = await this.db
+            .select()
+            .from(agentAttempts)
+            .where(
+              and(
+                eq(agentAttempts.id, claim.attemptId),
+                eq(agentAttempts.organizationId, organizationId),
+              ),
+            )
+            .limit(1);
+          if (
+            attempt &&
+            ["preparing", "running", "cancelling"].includes(attempt.status) &&
+            (await this.getAttemptLastActivity(attempt)) > cutoff
+          ) {
+            continue;
+          }
+        }
+      }
+      stale++;
+    }
+    return stale;
+  }
+
+  async reconcileLostAttempts(cutoff: string, organizationId?: string): Promise<number> {
+    const candidates = await this.findStaleAttempts(cutoff, organizationId);
+    let reconciled = 0;
+    for (const attempt of candidates) {
+      const changed = await this.db
         .update(agentAttempts)
         .set({ status: "lost", finishedAt: now() })
-        .where(eq(agentAttempts.id, attempt.id));
+        .where(
+          and(
+            eq(agentAttempts.id, attempt.id),
+            inArray(agentAttempts.status, ["preparing", "running", "cancelling"]),
+            attempt.heartbeatAt
+              ? eq(agentAttempts.heartbeatAt, attempt.heartbeatAt)
+              : isNull(agentAttempts.heartbeatAt),
+            attempt.harnessSessionId
+              ? notExists(
+                  this.db
+                    .select({ id: harnessSessionEvents.id })
+                    .from(harnessSessionEvents)
+                    .where(
+                      and(
+                        eq(harnessSessionEvents.sessionId, attempt.harnessSessionId),
+                        gt(harnessSessionEvents.ts, cutoff),
+                      ),
+                    ),
+                )
+              : undefined,
+          ),
+        )
+        .returning({ id: agentAttempts.id });
+      if (changed.length !== 1) continue;
+      await this.db
+        .update(resourceLocks)
+        .set({ releasedAt: now() })
+        .where(and(eq(resourceLocks.ownerAttemptId, attempt.id), isNull(resourceLocks.releasedAt)));
+      reconciled++;
     }
-    return stale.length;
+    return reconciled;
   }
 
   async cancelAttempt(attemptId: string): Promise<AgentAttempt> {
@@ -2641,11 +3140,17 @@ export class ExecutionStore {
     return rows[0] ? resourceLockSchema.parse(rows[0]) : null;
   }
 
-  async reconcileExpiredLocks(at = now()): Promise<number> {
+  async reconcileExpiredLocks(at = now(), organizationId?: string): Promise<number> {
     const expired = await this.db
       .select({ id: resourceLocks.id })
       .from(resourceLocks)
-      .where(and(lte(resourceLocks.leaseExpiresAt, at), isNull(resourceLocks.releasedAt)));
+      .where(
+        and(
+          ...(organizationId ? [eq(resourceLocks.organizationId, organizationId)] : []),
+          lte(resourceLocks.leaseExpiresAt, at),
+          isNull(resourceLocks.releasedAt),
+        ),
+      );
     for (const lock of expired) await this.releaseResourceLock(lock.id);
     return expired.length;
   }
@@ -2826,6 +3331,17 @@ export class ExecutionStore {
     return executionEventSchema.parse({ ...event, payload: JSON.parse(payloadJson) });
   }
 
+  async appendNextEvent(input: Omit<AppendEventInput, "seq">): Promise<ExecutionEvent> {
+    const previous = await this.db
+      .select({ seq: executionEvents.seq })
+      .from(executionEvents)
+      .where(eq(executionEvents.attemptId, input.attemptId))
+      .orderBy(desc(executionEvents.seq))
+      .limit(1);
+    // ponytail: attempts have one active runner; use DB-assigned sequencing if that invariant changes.
+    return this.appendEvent({ ...input, seq: (previous[0]?.seq ?? 0) + 1 });
+  }
+
   async listEvents(attemptId: string): Promise<ExecutionEvent[]> {
     const rows = await this.db
       .select()
@@ -2920,14 +3436,7 @@ class BudgetExhaustedError extends Error {}
 export class ExternalActionConflictError extends Error {}
 
 function parseWorkItem(row: typeof executionWorkItems.$inferSelect): ExecutionWorkItem {
-  const {
-    claimedByAttemptId: _claimedByAttemptId,
-    claimedAt: _claimedAt,
-    metadataJson,
-    governanceJson,
-    repositoryIdsJson,
-    ...workItem
-  } = row;
+  const { metadataJson, governanceJson, repositoryIdsJson, ...workItem } = row;
   const parsedRepositoryIds = JSON.parse(repositoryIdsJson) as unknown;
   const repositoryIds =
     Array.isArray(parsedRepositoryIds) && parsedRepositoryIds.length > 0

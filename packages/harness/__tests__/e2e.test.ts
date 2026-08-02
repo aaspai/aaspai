@@ -516,15 +516,13 @@ describe("e2e: opencode_cli driver", () => {
     void existsSync(directPath);
   });
 
-  it("returns quickly when aborted via the signal parameter (abort path, not the 5-min timeout path)", async () => {
+  it("returns quickly when aborted via the signal parameter", async () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const cwd = makeScratchDir("hang-");
-    // The adapter's CLI_TIMEOUT_MS is a hard 5-minute wall. Exercising
-    // the timeout branch end-to-end would take 5 minutes per test run;
-    // we instead exercise the SHORTER abort path and verify the adapter
+    // Exercise the shorter abort path and verify the adapter
     // returns promptly and reports `timedOut: false` (the timeout path
     // is structurally identical — same close handler, same result
-    // shape — just triggered by the 5-min timer instead of an external
+    // shape — just triggered by the configured timer instead of an external
     // signal). The adapter does NOT expose the signal name back in the
     // result (cliResult.signal is never set in runOpencodeCli's
     // resolve — only `timedOut: boolean` and `exitCode` are returned).
@@ -625,9 +623,21 @@ describe("e2e: opencode_cli driver", () => {
         fork: false,
       });
       // The fake's argv dump proves the adapter forwarded --session.
-      const argvDump = readFileSync(dumpFile, "utf8");
-      expect(argvDump).toContain("--session");
-      expect(argvDump).toContain(sessionId);
+      const argv = JSON.parse(readFileSync(dumpFile, "utf8")) as string[];
+      expect(argv).toContain("--session");
+      expect(argv).toContain(sessionId);
+      expect(argv).toContain("--dir");
+      expect(argv).toContain(cwd);
+
+      const noEventIdentity = await opencodeCli.execute({
+        ...buildAdapterContext({
+          prompt: "z <e2e:response:no-id> <e2e:no_session>",
+          cwd,
+          runId: `run_resume_no_id_${Date.now()}`,
+        }),
+        runtime: { sessionId, sessionParams: { resume: true } },
+      } as never);
+      expect(noEventIdentity.sessionId).not.toBe(sessionId);
     } finally {
       delete process.env.AASPAI_FAKE_OPENCODE_DUMP_ARGV;
       rmRf(cwd);
@@ -861,27 +871,22 @@ describe("e2e: opencode_cli driver", () => {
 
   it("testEnvironment reports a pass for the fake CLI and surfaces the resolved path", async () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
-    // The fake CLI's `--version` returns Node's version (since we
-    // invoke it as `node fake-opencode.cjs --version`). The test
-    // Environment check just needs to confirm the binary spawned
-    // successfully and reported something. The check message format
-    // is `${cli} ${stdout}` so we assert on the binary path itself
-    // (which is whatever config.command points at) and the
-    // presence of a non-empty version string.
-    const result = await opencodeCli.testEnvironment({
-      config: {
-        command: process.execPath,
-        commandArgs: [FAKE_OPENCODE_CJS],
-        model: "opencode-go/mimo-v2.5",
-      },
-    });
+    const authPath = join(scratchDir, "environment-auth.json");
+    writeFileSync(authPath, JSON.stringify({ fake: { type: "api", key: "test" } }), "utf8");
+    const result = await withEnv({ OPENCODE_AUTH_PATH: authPath }, () =>
+      opencodeCli.testEnvironment({
+        config: {
+          command: process.execPath,
+          commandArgs: [FAKE_OPENCODE_CJS],
+          model: "opencode-go/mimo-v2.5",
+        },
+      }),
+    );
     expect(result.ok).toBe(true);
     expect(result.checks.length).toBeGreaterThan(0);
     const first = result.checks[0]!;
     expect(first.level).toBe("info");
-    // The message contains the resolved binary path and the fake
-    // CLI's --version output (which is the Node version since the
-    // fake delegates to its own argv).
+    expect(first.message).toContain(process.execPath);
     expect(first.message).toMatch(/v\d+\.\d+\.\d+|version/i);
   });
 
@@ -1071,6 +1076,41 @@ describe("e2e: opencode_cli driver", () => {
     expect(tools.length).toBe(1);
     expect(tools[0]!.name).toBe("bash");
     expect((result.resultJson as { toolEventCount: number }).toolEventCount).toBe(1);
+    rmRf(cwd);
+  });
+
+  it("carries the provider session onto canonical tool events that omit it", async () => {
+    const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
+    const cwd = makeScratchDir("tool-session-");
+    const updates: unknown[] = [];
+    const logs: string[] = [];
+    const ctx = buildAdapterContext({
+      prompt: "hi <e2e:session:ses_tool_sticky> <e2e:tool-no-session> <e2e:response:OK>",
+      cwd,
+      runId: `run_tool_session_${Date.now()}`,
+      onLog: (stream, chunk) => {
+        if (stream === "stdout") logs.push(...chunk.split(/\r?\n/).filter(Boolean));
+      },
+      onRuntimeProgress: (update: unknown) => {
+        updates.push(update);
+      },
+    });
+
+    await opencodeCli.execute(ctx);
+
+    expect(
+      updates.find(
+        (update) =>
+          typeof update === "object" &&
+          update !== null &&
+          (update as { kind?: string }).kind === "tool_event",
+      ),
+    ).toMatchObject({ sessionId: "ses_tool_sticky", name: "bash" });
+    expect(
+      logs
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((line) => ["tool_call", "tool_result"].includes(String(line.kind))),
+    ).toMatchObject({ sessionID: "ses_tool_sticky", name: "bash" });
     rmRf(cwd);
   });
 
@@ -1586,7 +1626,7 @@ describe("e2e: opencode_cli driver", () => {
     // The dispatcher was called with the right tool name + some input.
     expect(invoked.length).toBe(1);
     expect(invoked[0]!.name).toBe("bash");
-    // resultJson tracks which tools we asked the dispatcher to invoke.
+    // resultJson tracks native tool use whether or not AASPAI dispatches it.
     const rj = result.resultJson as { toolsInvoked: string[]; toolEventCount: number };
     expect(rj.toolsInvoked).toEqual(["bash"]);
     expect(rj.toolEventCount).toBe(1);
@@ -1626,7 +1666,7 @@ describe("e2e: opencode_cli driver", () => {
     rmRf(cwd);
   });
 
-  it("does not call the dispatcher when ctx.tools is not provided", async () => {
+  it("records native tool use when ctx.tools is not provided", async () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const cwd = makeScratchDir("no-dispatch-");
     const ctx = buildAdapterContext({
@@ -1637,7 +1677,7 @@ describe("e2e: opencode_cli driver", () => {
     // No ctx.tools set.
     const result = await opencodeCli.execute(ctx);
     const rj = result.resultJson as { toolsInvoked: string[] };
-    expect(rj.toolsInvoked).toEqual([]);
+    expect(rj.toolsInvoked).toEqual(["bash"]);
     rmRf(cwd);
   });
 

@@ -297,11 +297,18 @@ describe("execution API authorization", () => {
       goalId: goal.id,
       title: "API health project",
     });
+    const repository = await store.createRepository({
+      organizationId,
+      projectId: project.id,
+      purpose: "project",
+      provider: "local",
+      localPath: "workspace/m1/api-health",
+    });
     await store.createWorkItem({
       organizationId,
       goalId: goal.id,
       projectId: project.id,
-      repositoryId: "repo_health_api",
+      repositoryId: repository.id,
       title: "Blocked API work",
       status: "blocked",
       idempotencyKey: "api-health-blocked",

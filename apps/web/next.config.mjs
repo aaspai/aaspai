@@ -33,6 +33,7 @@ if (devTsconfig) {
 
 const nextConfig = {
   reactStrictMode: true,
+  outputFileTracingRoot: process.cwd(),
   distDir,
   typescript: {
     ignoreBuildErrors: false,

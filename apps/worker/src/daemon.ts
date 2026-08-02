@@ -16,6 +16,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import {
   copyFile,
   mkdir,
@@ -29,21 +30,34 @@ import {
 } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+  CompanyCommandService,
   CompanyControlPlaneService,
   CompanyOperationsService,
   OperationalGovernanceService,
 } from "@aaspai/company";
 import type { AgentConfig } from "@aaspai/contracts";
-import type { AgentAttempt, ExecutionWorkItem } from "@aaspai/contracts/execution";
+import {
+  type AgentAttempt,
+  type ExecutionWorkItem,
+  executionWorkspaceSchema,
+} from "@aaspai/contracts/execution";
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
 import { resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
 import { executionTargetSchema } from "@aaspai/contracts/runtime";
 import {
   closeDefaultDb,
+  companyProfiles,
   definitionRevisions,
+  delegations,
+  executionOperatorRuns,
+  executionWorkItems,
   getDefaultDb,
+  loops,
+  milestones,
+  projectAssignments,
   projects,
   repositories,
+  resourceLocks,
   runMigrations,
   sessions as sessionsTable,
   wakeups as wakeupsTable,
@@ -57,6 +71,7 @@ import {
   evaluateExecutionPolicy,
   HarnessExecutionPlanRunner,
   LocalExecutionWorkspaceManager,
+  OperatorService,
 } from "@aaspai/execution";
 import {
   DEFAULT_AGENTS_DIR,
@@ -80,15 +95,24 @@ import {
   StateStore,
 } from "@aaspai/loops";
 import { createLocalMemoryProvider } from "@aaspai/memory";
-import { getLogger } from "@aaspai/observability";
+import { COMPANY_TOOL_CATALOG, getLogger } from "@aaspai/observability";
 import { Sessions } from "@aaspai/sessions";
 import { loadSkillDirectory, SkillRegistry } from "@aaspai/skills";
 import { createBuiltInRegistry } from "@aaspai/tools";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
+import { BROWSER_SNAPSHOT_TOOL_SOURCE } from "./browser-tool.js";
 import {
+  type AppliedCompanyAction,
+  type CompanyActionBroker,
+  startCompanyActionBroker,
+} from "./company-action-broker.js";
+import {
+  CODEX_COMPANY_ACTION_CLIENT_SOURCE,
   COMPANY_ACTION_TOOL_SOURCE,
+  type CompanyAction,
   companyActions,
   type HireAndDelegateAction,
+  missingRequiredCompanyActions,
 } from "./company-actions.js";
 import { validateEvidencePolicy } from "./output-policy.js";
 
@@ -96,11 +120,24 @@ const log = getLogger("worker.daemon");
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_WAKEUP_POLL_INTERVAL_MS = 5_000;
+const STALE_CLAIM_MS = 5 * 60_000;
+const WAKEUP_HEARTBEAT_INTERVAL_MS = 30_000;
+const TERMINAL_WORK_ITEM_STATUSES = new Set<ExecutionWorkItem["status"]>([
+  "blocked",
+  "cancelled",
+  "completed",
+  "failed",
+]);
 
-function hiredAgentTools(tools: AgentConfig["tools"], role: HireAndDelegateAction["role"]) {
+export function hiredAgentTools(
+  tools: AgentConfig["tools"],
+  action: Pick<HireAndDelegateAction, "projectRole">,
+) {
   const source = tools && typeof tools === "object" ? (tools as Record<string, unknown>) : {};
   const allowedForRole = new Set([
+    "apply_patch",
     "bash",
+    "browser_snapshot",
     "edit",
     "glob",
     "grep",
@@ -108,9 +145,12 @@ function hiredAgentTools(tools: AgentConfig["tools"], role: HireAndDelegateActio
     "read",
     "shell",
     "skill",
+    "view_image",
+    "webfetch",
+    "web_search",
+    "websearch",
     "write",
-    ...(role === "cmo" || role === "researcher" ? ["webfetch", "websearch", "web_search"] : []),
-    ...(role === "designer" ? ["view_image"] : []),
+    ...(action.projectRole === "manager" ? ["company_action"] : []),
   ]);
   const allow = Array.isArray(source.allow)
     ? source.allow.filter(
@@ -130,6 +170,80 @@ function hiredAgentTools(tools: AgentConfig["tools"], role: HireAndDelegateActio
         )
       : [],
   };
+}
+
+export function repeatsCompletedDelegation(
+  action: HireAndDelegateAction,
+  completed: Pick<
+    ExecutionWorkItem,
+    "assignedAgentId" | "description" | "metadata" | "projectId" | "status" | "title"
+  >,
+  projectId = completed.projectId,
+): boolean {
+  return (
+    completed.status === "completed" &&
+    completed.assignedAgentId === action.agentId &&
+    completed.title.trim() === action.workTitle.trim() &&
+    completed.description.trim() === action.workDescription.trim() &&
+    completed.metadata.delegationActionFingerprint === hireAndDelegateFingerprint(action, projectId)
+  );
+}
+
+export function hireAndDelegateFingerprint(
+  action: HireAndDelegateAction,
+  projectId: string,
+): string {
+  const sorted = (values: string[] | undefined) => [...new Set(values ?? [])].sort();
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        agentId: action.agentId,
+        artifactPaths: sorted(action.artifactPaths),
+        citationPaths: sorted(action.citationPaths),
+        commercialClaimPaths: sorted(action.commercialClaimPaths),
+        description: action.description.trim(),
+        projectId,
+        projectRole: action.projectRole ?? "member",
+        role: action.role,
+        skillKeys: sorted(action.skillKeys),
+        title: action.title.trim(),
+        workDescription: action.workDescription.trim(),
+        workTitle: action.workTitle.trim(),
+      }),
+    )
+    .digest("hex");
+}
+
+export function companyActionFingerprint(action: CompanyAction, projectId: string): string {
+  if (action.type === "hire_and_delegate") return hireAndDelegateFingerprint(action, projectId);
+  const canonicalize = (value: unknown): unknown =>
+    Array.isArray(value)
+      ? value.map(canonicalize)
+      : value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.entries(value as Record<string, unknown>)
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([key, entry]) => [key, canonicalize(entry)]),
+          )
+        : value;
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalize({ ...action, projectId })))
+    .digest("hex");
+}
+
+function parsePortfolioProposal(
+  summary: string | undefined,
+): { summary: string; projects: unknown[] } | null {
+  const json = summary?.match(/^AASPAI_PORTFOLIO_PROPOSAL=(\{.*\})$/m)?.[1];
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    return typeof parsed.summary === "string" && Array.isArray(parsed.projects)
+      ? { summary: parsed.summary, projects: parsed.projects }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 async function hashAgentDefinition(directory: string): Promise<string> {
@@ -158,6 +272,44 @@ export function changedPathsFromStatus(entries: readonly string[]): string[] {
   ];
 }
 
+function redactKnownSecrets(value: string, secrets: readonly string[]): string {
+  return secrets.reduce((safe, secret) => {
+    if (secret.length < 8) return safe;
+    const encoded = JSON.stringify(secret).slice(1, -1);
+    return safe.replaceAll(secret, "[REDACTED]").replaceAll(encoded, "[REDACTED]");
+  }, value);
+}
+
+function assertSecretFreeValue(value: unknown, secrets: readonly string[]): void {
+  const serialized = JSON.stringify(value) ?? "";
+  if (
+    secrets.some(
+      (secret) =>
+        secret.length >= 8 &&
+        (serialized.includes(secret) || serialized.includes(JSON.stringify(secret).slice(1, -1))),
+    )
+  ) {
+    throw new Error("Attempt output contains an ephemeral secret");
+  }
+}
+
+async function assertSecretFreeFile(path: string, secrets: readonly string[]): Promise<void> {
+  const needles = secrets
+    .filter((secret) => secret.length >= 8)
+    .map((secret) => Buffer.from(secret));
+  if (needles.length === 0) return;
+  const overlap = Math.max(...needles.map((needle) => needle.length)) - 1;
+  let tail = Buffer.alloc(0);
+  for await (const chunk of createReadStream(path)) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    const candidate = tail.length > 0 ? Buffer.concat([tail, bytes]) : bytes;
+    if (needles.some((needle) => candidate.includes(needle))) {
+      throw new Error("Attempt output contains an ephemeral secret");
+    }
+    tail = overlap > 0 ? candidate.subarray(Math.max(0, candidate.length - overlap)) : tail;
+  }
+}
+
 export interface DaemonOptions {
   tickIntervalMs?: number;
   wakeupPollIntervalMs?: number;
@@ -171,6 +323,17 @@ function safeJsonParse(s: string | null): unknown {
   } catch {
     return null;
   }
+}
+
+function retryPrompt(prompt: string | undefined, failure: string | undefined): string | undefined {
+  if (!failure) return prompt;
+  return `${prompt ?? "Continue the assigned work."}\n\nThe previous attempt did not pass execution verification: ${failure}. Correct that issue in the current workspace, preserve supported work, and do not repeat unsupported claims.`;
+}
+
+function companyActionRunInstruction(adapter: string): string {
+  return adapter === "codex_local"
+    ? "Company mutations are live in this session. Submit exactly one action per request by passing JSON through stdin to `node .aaspai/company_action.mjs` (never put JSON in a quoted command argument); use the returned durable IDs in later work. Use the AASPAI_COMPANY_ACTIONS final-line format only if that command is unavailable."
+    : "The company_action tool applies exactly one change per call. Use the durable IDs returned by the tool in later work; do not merely describe the action.";
 }
 
 const ARTIFACT_KINDS = new Set([
@@ -206,12 +369,6 @@ interface DeclaredArtifact {
   path: string;
   kind: "diff" | "patch" | "log" | "transcript" | "test_result" | "result" | "other";
   mediaType: string;
-}
-
-interface AttemptCredential {
-  id: string;
-  token: string;
-  expiresAt: string;
 }
 
 function declaredArtifacts(metadata: unknown): DeclaredArtifact[] {
@@ -261,6 +418,13 @@ async function listWorkspaceFiles(
   paths: string[] = [],
 ): Promise<string[]> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (
+      directory === root &&
+      entry.isDirectory() &&
+      [".codex", ".opencode_cli"].includes(entry.name)
+    ) {
+      continue;
+    }
     if (paths.length >= 1_024) {
       throw new Error("Checker workspace file limit exceeded");
     }
@@ -271,66 +435,26 @@ async function listWorkspaceFiles(
   return paths.sort();
 }
 
-async function issueAttemptCredential(
-  organizationId: string,
-  attemptId: string,
-): Promise<AttemptCredential | null> {
-  const baseUrl = gatewayControlUrl(process.env.AASPAI_GATEWAY_CONTROL_URL);
-  const controlToken = process.env.AASPAI_GATEWAY_CONTROL_TOKEN;
-  if (!baseUrl && !controlToken) return null;
-  if (!baseUrl || !controlToken) {
-    throw new Error(
-      "Both AASPAI_GATEWAY_CONTROL_URL and AASPAI_GATEWAY_CONTROL_TOKEN are required",
+async function workspaceFileHashes(root: string): Promise<Map<string, string>> {
+  const hashes = new Map<string, string>();
+  for (const path of await listWorkspaceFiles(root)) {
+    hashes.set(
+      path,
+      createHash("sha256")
+        .update(await readFile(join(root, path)))
+        .digest("hex"),
     );
   }
-  const response = await fetch(`${baseUrl}/v1/attempt-credentials`, {
-    method: "POST",
-    signal: AbortSignal.timeout(10_000),
-    headers: {
-      authorization: `Bearer ${controlToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ organizationId, attemptId }),
-  });
-  if (!response.ok) throw new Error(`Credential gateway issue failed (${response.status})`);
-  const value = (await response.json()) as Partial<AttemptCredential>;
-  if (
-    typeof value.id !== "string" ||
-    !value.id ||
-    typeof value.token !== "string" ||
-    !value.token ||
-    typeof value.expiresAt !== "string" ||
-    !Number.isFinite(Date.parse(value.expiresAt)) ||
-    Date.parse(value.expiresAt) <= Date.now()
-  ) {
-    throw new Error("Credential gateway returned an invalid attempt credential");
-  }
-  return value as AttemptCredential;
+  return hashes;
 }
 
-async function revokeAttemptCredential(credential: AttemptCredential): Promise<void> {
-  const baseUrl = gatewayControlUrl(process.env.AASPAI_GATEWAY_CONTROL_URL);
-  const controlToken = process.env.AASPAI_GATEWAY_CONTROL_TOKEN;
-  if (!baseUrl || !controlToken) throw new Error("Credential gateway control config disappeared");
-  const response = await fetch(
-    `${baseUrl}/v1/attempt-credentials/${encodeURIComponent(credential.id)}`,
-    {
-      method: "DELETE",
-      signal: AbortSignal.timeout(10_000),
-      headers: { authorization: `Bearer ${controlToken}` },
-    },
-  );
-  if (!response.ok) throw new Error(`Credential gateway revoke failed (${response.status})`);
-}
-
-export function gatewayControlUrl(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const url = new URL(value);
-  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-    throw new Error("AASPAI_GATEWAY_CONTROL_URL must use HTTPS except on loopback");
-  }
-  return url.toString().replace(/\/+$/, "");
+function changedWorkspaceFiles(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): string[] {
+  return [...new Set([...before.keys(), ...after.keys()])]
+    .filter((path) => before.get(path) !== after.get(path))
+    .sort();
 }
 
 export interface CheckerVerdict {
@@ -395,16 +519,19 @@ export class WorkerDaemon {
   private readonly legacySessionExecutor?: (request: Record<string, unknown>) => Promise<{
     sessionId?: string;
     status?: string;
+    summary?: string;
   }>;
   private loopLineage: LoopExecutionLineage | null = null;
   private unwatchAgents: (() => void) | null = null;
   private unwatchLoops: (() => void) | null = null;
   private agentReconcile: Promise<void> = Promise.resolve();
+  private readonly hiredAgentRelationships = new Map<string, Set<string>>();
 
   private tickHandle: NodeJS.Timeout | null = null;
   private pollHandle: NodeJS.Timeout | null = null;
   private pollInFlight = false;
   private inFlightWork: Promise<void> | null = null;
+  private lastRecoveryAt = 0;
   private shuttingDown = false;
   private running = false;
   private startedAt: string | null = null;
@@ -431,7 +558,7 @@ export class WorkerDaemon {
       start?: unknown;
       execute?: (
         request: Record<string, unknown>,
-      ) => Promise<{ sessionId?: string; status?: string }>;
+      ) => Promise<{ sessionId?: string; status?: string; summary?: string }>;
     };
     if (typeof compatibility.start !== "function" && compatibility.execute) {
       this.legacySessionExecutor = compatibility.execute.bind(sessionFacade);
@@ -651,6 +778,8 @@ export class WorkerDaemon {
     }
     this.pollInFlight = true;
     try {
+      if (Date.now() - this.lastRecoveryAt >= STALE_CLAIM_MS) await this.recoverStaleClaims();
+      await this.enqueueDueManagerRuns();
       const handle = getDefaultDb();
       const queued = await handle.db
         .select()
@@ -691,7 +820,7 @@ export class WorkerDaemon {
     const now = new Date().toISOString();
     const claimed = await handle.db
       .update(wakeupsTable)
-      .set({ status: "claimed", claimedAt: now } as never)
+      .set({ status: "claimed", claimedAt: now, heartbeatAt: now } as never)
       .where(
         and(
           eq(wakeupsTable.id, wakeupId),
@@ -706,35 +835,60 @@ export class WorkerDaemon {
       return;
     }
 
-    const maxAttempts = 3;
-    const backoffsMs = [0, 1_000, 5_000];
-    let lastError: Error | null = null;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (this.shuttingDown) {
-        await this.markFailed(wakeupId, "worker shutting down");
-        return;
+    const heartbeat = setInterval(() => {
+      void this.heartbeatWakeupClaim(wakeupId).catch((error) =>
+        log.warn("wakeup heartbeat failed", { wakeupId, error: String(error) }),
+      );
+    }, WAKEUP_HEARTBEAT_INTERVAL_MS);
+    heartbeat.unref();
+    try {
+      const maxAttempts = 3;
+      const backoffsMs = [0, 1_000, 5_000];
+      let lastError: Error | null = null;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (this.shuttingDown) {
+          await this.markFailed(wakeupId, "worker shutting down");
+          return;
+        }
+        if (attempt > 0) {
+          log.info("retrying wakeup after backoff", {
+            wakeupId,
+            attempt,
+            backoffMs: backoffsMs[attempt],
+          });
+          await new Promise((r) => setTimeout(r, backoffsMs[attempt]));
+        }
+        try {
+          await this.executeWakeup(wakeupId);
+          return;
+        } catch (err) {
+          lastError = err as Error;
+          log.warn("wakeup attempt failed", { wakeupId, attempt, err: String(err) });
+        }
       }
-      if (attempt > 0) {
-        log.info("retrying wakeup after backoff", {
-          wakeupId,
-          attempt,
-          backoffMs: backoffsMs[attempt],
-        });
-        await new Promise((r) => setTimeout(r, backoffsMs[attempt]));
+      log.error("wakeup exhausted retries", { wakeupId, err: String(lastError) });
+      const reason = `exhausted retries: ${String(lastError?.message ?? lastError)}`;
+      if (await this.markFailed(wakeupId, reason)) {
+        await this.failDurableWakeupWork(wakeupId, reason);
       }
-      try {
-        await this.executeWakeup(wakeupId);
-        return;
-      } catch (err) {
-        lastError = err as Error;
-        log.warn("wakeup attempt failed", { wakeupId, attempt, err: String(err) });
-      }
+    } finally {
+      clearInterval(heartbeat);
     }
-    log.error("wakeup exhausted retries", { wakeupId, err: String(lastError) });
-    await this.markFailed(
-      wakeupId,
-      `exhausted retries: ${String(lastError?.message ?? lastError)}`,
-    );
+  }
+
+  private async heartbeatWakeupClaim(wakeupId: string): Promise<boolean> {
+    const changed = await getDefaultDb()
+      .db.update(wakeupsTable)
+      .set({ heartbeatAt: new Date().toISOString() } as never)
+      .where(
+        and(
+          eq(wakeupsTable.id, wakeupId),
+          eq(wakeupsTable.organizationId, this.organizationId),
+          eq(wakeupsTable.status, "claimed"),
+        ),
+      )
+      .returning({ id: wakeupsTable.id });
+    return changed.length === 1;
   }
 
   private async executeWakeup(wakeupId: string): Promise<void> {
@@ -750,6 +904,50 @@ export class WorkerDaemon {
     }
     if (wakeupRow.organizationId !== this.organizationId) {
       throw new Error(`wakeup ${wakeupId} belongs to another organization`);
+    }
+
+    const controlPayload = (safeJsonParse(wakeupRow.payloadJson) ?? {}) as Record<string, unknown>;
+    if (typeof controlPayload.operatorRunId === "string") {
+      const result = await new OperatorService(this.executionStore).tick(
+        {
+          organizationId: this.organizationId,
+          actorId: "worker",
+          correlationId: wakeupId,
+        },
+        controlPayload.operatorRunId,
+      );
+      if (result.decision?.action === "dispatch" && result.run.workflowRunId) {
+        await this.executeManagerWorkItem(
+          result.run.workflowRunId,
+          result.decision.targetId,
+          result.run.operatorAgentId,
+        );
+        await this.queueManagerWake(
+          result.run.id,
+          result.run.operatorAgentId,
+          result.run.observedStateVersion,
+          "Manager work item finished",
+        );
+      } else if (result.decision?.action === "complete" && result.run.workflowRunId) {
+        await this.finalizeManagerRun(
+          result.run.id,
+          result.run.workflowRunId,
+          result.run.operatorAgentId,
+        );
+      }
+      await this.finishWakeup(wakeupId);
+      return;
+    }
+
+    // Company commands already performed their durable state mutation before
+    // emitting this wakeup. Only discovery needs another agent turn; the rest
+    // are notifications, not new repository work.
+    if (
+      typeof controlPayload.command === "string" &&
+      controlPayload.command !== "start_discovery"
+    ) {
+      await this.finishWakeup(wakeupId);
+      return;
     }
 
     const resolved = this.patternRegistry.get(wakeupRow.loopId);
@@ -791,7 +989,7 @@ export class WorkerDaemon {
     wakeupRow: typeof wakeupsTable.$inferSelect,
     wakeupId: string,
   ): Promise<void> {
-    const payload = safeJsonParse(wakeupRow.payloadJson) ?? {};
+    const payload = (safeJsonParse(wakeupRow.payloadJson) ?? {}) as Record<string, unknown>;
     const request = payload as {
       agentId?: string;
       adapter?: string;
@@ -800,6 +998,16 @@ export class WorkerDaemon {
       sessionId?: string;
       workItemId?: string;
       workflowRunId?: string;
+      resumeSessionId?: string;
+      parentAttemptId?: string;
+      parentSessionId?: string;
+      managerAgentId?: string;
+      managerWorkItemId?: string;
+      managerProviderSessionId?: string;
+      managerWorkspaceId?: string;
+      resumeWorkspaceId?: string;
+      mustResumeSession?: boolean;
+      requiredCompanyActions?: unknown;
     };
     const agentId = wakeupRow.agentId ?? request.agentId;
     if (!agentId) throw new Error("wakeup has no agentId");
@@ -810,36 +1018,65 @@ export class WorkerDaemon {
       request.prompt ??
       `Worker-triggered wakeup for ${wakeupRow.loopId} (${wakeupRow.reason ?? "no reason"})`;
     if (request.workItemId && request.workflowRunId) {
-      const result = await this.autonomousExecutor.execute({
-        organizationId: this.organizationId,
-        workflowRunId: request.workflowRunId,
-        workItemId: request.workItemId,
-        agentId,
-        harness: adapter,
-        runProvider: async ({ attempt, workItem }) => {
-          const executed = await this.executeDurableAttempt({
-            attempt,
-            workItem,
-            agentId,
-            adapter,
-            prompt,
-            runtime,
-            durableSessionId: request.sessionId,
-          });
-          return {
-            status: executed.timedOut
-              ? ("timed_out" as const)
-              : executed.exitCode === 0
-                ? ("succeeded" as const)
-                : ("failed" as const),
-            usage: {
-              tokens: (executed.usage?.inputTokens ?? 0) + (executed.usage?.outputTokens ?? 0),
-              costUsd: executed.costUsd,
-            },
-          };
-        },
-      });
+      let result: Awaited<ReturnType<AutonomousWorkExecutor["execute"]>>;
+      try {
+        result = await this.autonomousExecutor.execute({
+          organizationId: this.organizationId,
+          workflowRunId: request.workflowRunId,
+          workItemId: request.workItemId,
+          agentId,
+          harness: adapter,
+          parentAttemptId: request.parentAttemptId,
+          runProvider: async ({ attempt, workItem }) => {
+            const executed = await this.executeDurableAttempt({
+              attempt,
+              workItem,
+              agentId,
+              adapter,
+              prompt,
+              runtime,
+              durableSessionId: request.sessionId,
+              resumeSessionId: request.resumeSessionId,
+              resumeWorkspaceId: request.resumeWorkspaceId,
+            });
+            return {
+              status: executed.timedOut
+                ? ("timed_out" as const)
+                : executed.exitCode === 0
+                  ? ("succeeded" as const)
+                  : ("failed" as const),
+              usage: {
+                tokens: (executed.usage?.inputTokens ?? 0) + (executed.usage?.outputTokens ?? 0),
+                costUsd: executed.costUsd,
+              },
+            };
+          },
+        });
+      } catch (error) {
+        await this.settleDelegationLifecycle(request);
+        throw error;
+      }
       await this.verifyPendingWorkItems(request.workflowRunId);
+      await this.settleDelegationLifecycle(request, result.attempt);
+      if (result.workItem.status === "ready") {
+        const harnessSession = result.attempt.harnessSessionId
+          ? await this.executionStore.getHarnessSession(result.attempt.harnessSessionId)
+          : null;
+        const resumeSessionId =
+          harnessSession?.sessionId &&
+          (result.attempt.status === "timed_out" ||
+            harnessSession.errorCode === "evidence_persistence_failed")
+            ? harnessSession.sessionId
+            : undefined;
+        await this.queueRetryWakeup(wakeupRow, request, result.attempt.attemptNumber + 1, {
+          ...(resumeSessionId ? { resumeSessionId } : {}),
+          ...(harnessSession?.errorMessage
+            ? { failure: harnessSession.errorMessage }
+            : harnessSession?.errorCode
+              ? { failure: harnessSession.errorCode }
+              : {}),
+        });
+      }
       await this.finishWakeup(wakeupId, request.sessionId ?? result.attempt.harnessSessionId);
       return;
     }
@@ -863,6 +1100,12 @@ export class WorkerDaemon {
           `session ${result.sessionId ?? request.sessionId ?? "unknown"} ${result.status ?? "failed"}`,
         );
       }
+      await this.applyDiscoveryProposal(
+        payload,
+        result.summary,
+        result.sessionId ?? request.sessionId ?? wakeupId,
+        wakeupId,
+      );
       await this.finishWakeup(wakeupId, result.sessionId ?? request.sessionId);
       return;
     }
@@ -880,6 +1123,9 @@ export class WorkerDaemon {
       branchName: "worker-wakeup",
       idempotencyKey: wakeupId,
       status: "ready",
+      metadata: Array.isArray(request.requiredCompanyActions)
+        ? { requiredCompanyActions: request.requiredCompanyActions }
+        : {},
     });
     const workflowRun = await this.executionStore.createWorkflowRun({
       id: `run:wakeup:${wakeupId}`,
@@ -920,11 +1166,64 @@ export class WorkerDaemon {
     await this.executionStore.updateWorkItemStatus(claimedWorkItem.id, legacyStatus, {
       blockedReason: legacyStatus === "completed" ? null : (result.errorMessage ?? result.summary),
     });
+    if (legacyStatus === "completed") {
+      await this.applyDiscoveryProposal(
+        payload,
+        result.summary,
+        result.sessionId ?? request.sessionId ?? wakeupId,
+        wakeupId,
+      );
+    }
     await this.finishWakeup(wakeupId, result.sessionId ?? request.sessionId);
   }
 
-  private async finishWakeup(wakeupId: string, sessionId?: string | null): Promise<void> {
-    await getDefaultDb()
+  private async applyDiscoveryProposal(
+    payload: Record<string, unknown>,
+    summary: string | undefined,
+    sessionId: string,
+    wakeupId: string,
+  ): Promise<void> {
+    if (payload.command !== "start_discovery") return;
+    const proposal = parsePortfolioProposal(summary);
+    if (!proposal) throw new Error("CEO discovery did not return AASPAI_PORTFOLIO_PROPOSAL");
+    await new CompanyCommandService(getDefaultDb().db).execute({
+      type: "submit_portfolio_proposal",
+      organizationId: this.organizationId,
+      actorId: typeof payload.operatorAgentId === "string" ? payload.operatorAgentId : "agent/ceo",
+      idempotencyKey: `discovery-proposal:${wakeupId}`,
+      summary: proposal.summary,
+      evidence: [`session/${sessionId}`],
+      projects: proposal.projects,
+    });
+  }
+
+  private wakeupClaimGuard(
+    wakeupId: string,
+    snapshot?: { claimedAt: string | null; heartbeatAt: string | null },
+  ) {
+    return and(
+      eq(wakeupsTable.id, wakeupId),
+      eq(wakeupsTable.organizationId, this.organizationId),
+      eq(wakeupsTable.status, "claimed"),
+      snapshot
+        ? snapshot.claimedAt
+          ? eq(wakeupsTable.claimedAt, snapshot.claimedAt)
+          : isNull(wakeupsTable.claimedAt)
+        : undefined,
+      snapshot
+        ? snapshot.heartbeatAt
+          ? eq(wakeupsTable.heartbeatAt, snapshot.heartbeatAt)
+          : isNull(wakeupsTable.heartbeatAt)
+        : undefined,
+    );
+  }
+
+  private async finishWakeup(
+    wakeupId: string,
+    sessionId?: string | null,
+    snapshot?: { claimedAt: string | null; heartbeatAt: string | null },
+  ): Promise<boolean> {
+    const changed = await getDefaultDb()
       .db.update(wakeupsTable)
       .set({
         status: "completed",
@@ -932,7 +1231,204 @@ export class WorkerDaemon {
         sessionId: sessionId ?? undefined,
         error: undefined,
       } as never)
-      .where(eq(wakeupsTable.id, wakeupId));
+      .where(this.wakeupClaimGuard(wakeupId, snapshot))
+      .returning({ id: wakeupsTable.id });
+    return changed.length === 1;
+  }
+
+  private async queueRetryWakeup(
+    wakeup: typeof wakeupsTable.$inferSelect,
+    request: {
+      adapter?: string;
+      runtime?: unknown;
+      prompt?: string;
+      workItemId?: string;
+      workflowRunId?: string;
+      sessionId?: string;
+      resumeSessionId?: string;
+      resumeWorkspaceId?: string;
+      mustResumeSession?: boolean;
+    },
+    attemptNumber: number,
+    retry: { resumeSessionId?: string; failure?: string },
+  ): Promise<void> {
+    const agentId = wakeup.agentId;
+    if (!request.workItemId || !request.workflowRunId || !agentId) return;
+    const suffix = createHash("sha256")
+      .update(`${request.workItemId}\0${attemptNumber}`)
+      .digest("hex")
+      .slice(0, 32);
+    const sessionId = `sess_retry_${suffix}`;
+    const wakeupId = `wake_retry_${suffix}`;
+    const requestedAt = new Date().toISOString();
+    const retryPayload = {
+      ...request,
+      sessionId,
+      prompt: retryPrompt(request.prompt, retry.failure),
+    };
+    const resumeSessionId = request.mustResumeSession
+      ? request.resumeSessionId
+      : retry.resumeSessionId;
+    delete retryPayload.resumeSessionId;
+    if (resumeSessionId) retryPayload.resumeSessionId = resumeSessionId;
+    getDefaultDb().db.transaction((tx) => {
+      tx.insert(wakeupsTable)
+        .values({
+          id: wakeupId,
+          organizationId: this.organizationId,
+          loopId: wakeup.loopId,
+          source: "system",
+          triggerDetail: "attempt-retry",
+          reason: `Retry ${attemptNumber} for ${request.workItemId}`,
+          agentId,
+          payloadJson: JSON.stringify(retryPayload),
+          status: "queued",
+          idempotencyKey: `retry:${request.workItemId}:${attemptNumber}`,
+          requestedAt,
+          requestedByActorId: "system/recovery",
+          requestedByActorType: "system",
+        } as never)
+        .onConflictDoNothing()
+        .run();
+      tx.insert(sessionsTable)
+        .values({
+          id: sessionId,
+          organizationId: this.organizationId,
+          wakeupId,
+          agentId,
+          adapter: request.adapter ?? "dry_run_local",
+          runtimeJson: JSON.stringify(request.runtime ?? {}),
+          prompt: retryPayload.prompt ?? `Retry ${request.workItemId}`,
+          configJson: "{}",
+          status: "queued",
+          ...(request.sessionId ? { parentSessionId: request.sessionId } : {}),
+        })
+        .onConflictDoNothing()
+        .run();
+    });
+  }
+
+  private async settleDelegationLifecycle(
+    request: {
+      workItemId?: string;
+      managerAgentId?: string;
+      managerWorkItemId?: string;
+      managerProviderSessionId?: string;
+      managerWorkspaceId?: string;
+      parentAttemptId?: string;
+      parentSessionId?: string;
+      resumeWorkspaceId?: string;
+      mustResumeSession?: boolean;
+    },
+    completedAttempt?: AgentAttempt,
+  ): Promise<void> {
+    if (!request.workItemId) return;
+    const workItem = await this.executionStore.getWorkItem(request.workItemId);
+    if (!workItem || !TERMINAL_WORK_ITEM_STATUSES.has(workItem.status)) return;
+    const verification = await this.executionStore.getVerificationForWorkItem(workItem.id);
+    const attempt =
+      completedAttempt ??
+      (verification ? await this.executionStore.getAttempt(verification.makerAttemptId) : null) ??
+      (await this.executionStore.listAttemptsForWorkItem(workItem.id))
+        .filter((candidate) => candidate.role === "maker")
+        .at(-1);
+    if (request.mustResumeSession && request.resumeWorkspaceId) {
+      const ownerAttemptId = attempt?.id ?? request.parentAttemptId;
+      if (ownerAttemptId) {
+        await this.releaseRetainedManagerWorkspace(request.resumeWorkspaceId, ownerAttemptId);
+      }
+      return;
+    }
+    await this.queueDelegationCallback(request, attempt);
+  }
+
+  private async releaseRetainedManagerWorkspace(
+    workspaceId: string,
+    ownerAttemptId: string,
+  ): Promise<void> {
+    const workspace = await this.executionStore.getWorkspace(workspaceId);
+    if (!workspace || workspace.organizationId !== this.organizationId) {
+      throw new Error(`Retained manager workspace ${workspaceId} is invalid`);
+    }
+    if (!workspace.branchName.startsWith("disposable/")) {
+      throw new Error(`Retained manager workspace ${workspaceId} is not disposable`);
+    }
+    if (workspace.status === "released") return;
+    const existingLock = await this.executionStore.findResourceLock(
+      this.organizationId,
+      "workspace",
+      workspaceId,
+    );
+    // The lock is the runtime-liveness authority. Stale-attempt recovery owns
+    // releasing it after the independent attempt heartbeat stops.
+    if (existingLock) return;
+    const lock = await this.executionStore.acquireResourceLock({
+      organizationId: this.organizationId,
+      resourceType: "workspace",
+      resourceId: workspaceId,
+      ownerAttemptId,
+      leaseExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+    });
+    if (!lock) return;
+    try {
+      // ponytail: O(n) per-organization wakeup scan; index normalized callback ownership if volume makes cleanup slow.
+      const related = await getDefaultDb()
+        .db.select({ payloadJson: wakeupsTable.payloadJson })
+        .from(wakeupsTable)
+        .where(eq(wakeupsTable.organizationId, this.organizationId));
+      for (const row of related) {
+        const payload = (safeJsonParse(row.payloadJson) ?? {}) as Record<string, unknown>;
+        const usesWorkspace =
+          payload.managerWorkspaceId === workspaceId ||
+          (payload.mustResumeSession === true && payload.resumeWorkspaceId === workspaceId);
+        if (!usesWorkspace || typeof payload.workItemId !== "string") continue;
+        const workItem = await this.executionStore.getWorkItem(payload.workItemId);
+        if (workItem && !TERMINAL_WORK_ITEM_STATUSES.has(workItem.status)) return;
+      }
+      await new LocalExecutionWorkspaceManager(this.git, this.executionStore, async () => {
+        throw new Error("Retained disposable workspace has no repository worktree");
+      }).releaseDisposable(workspaceId);
+    } finally {
+      await this.executionStore.releaseResourceLock(lock.id);
+    }
+  }
+
+  private async recoverDelegationCallbacks(): Promise<void> {
+    const rows = await getDefaultDb()
+      .db.select()
+      .from(wakeupsTable)
+      .where(eq(wakeupsTable.organizationId, this.organizationId));
+    const retainedWorkspaces = new Map<string, string>();
+    for (const row of rows) {
+      if (row.triggerDetail !== "manager-delegation") continue;
+      const request = (safeJsonParse(row.payloadJson) ?? {}) as {
+        workItemId?: string;
+        managerAgentId?: string;
+        managerWorkItemId?: string;
+        managerProviderSessionId?: string;
+        managerWorkspaceId?: string;
+        parentAttemptId?: string;
+        parentSessionId?: string;
+      };
+      if (request.managerWorkspaceId && request.parentAttemptId) {
+        retainedWorkspaces.set(request.managerWorkspaceId, request.parentAttemptId);
+      }
+      await this.settleDelegationLifecycle(request);
+    }
+    for (const [workspaceId, ownerAttemptId] of retainedWorkspaces) {
+      await this.releaseRetainedManagerWorkspace(workspaceId, ownerAttemptId);
+    }
+  }
+
+  private async resumeStalledSession(workItemId: string): Promise<string | undefined> {
+    const previous = (await this.executionStore.listAttemptsForWorkItem(workItemId))
+      .filter((attempt) => attempt.status === "timed_out" && attempt.harnessSessionId)
+      .at(-1);
+    if (!previous?.harnessSessionId) return undefined;
+    return (
+      (await this.executionStore.getHarnessSession(previous.harnessSessionId))?.sessionId ??
+      undefined
+    );
   }
 
   private async executeWorkItems(workflowRunId: string, agentId: string): Promise<void> {
@@ -969,6 +1465,7 @@ export class WorkerDaemon {
               agentId,
               adapter,
               prompt,
+              resumeSessionId: await this.resumeStalledSession(workItem.id),
             });
             return {
               status: result.timedOut
@@ -988,6 +1485,191 @@ export class WorkerDaemon {
       { maxTicks: 100, executorOwnsAttempt: true },
     );
     await this.verifyPendingWorkItems(workflowRunId);
+  }
+
+  private async executeManagerWorkItem(
+    workflowRunId: string,
+    workItemId: string | null,
+    managerAgentId: string,
+  ): Promise<void> {
+    if (!workItemId) throw new Error("manager dispatch has no work item");
+    const workItem = await this.executionStore.getWorkItem(workItemId, {
+      organizationId: this.organizationId,
+      actorId: managerAgentId,
+      correlationId: workflowRunId,
+    });
+    if (!workItem || workItem.workflowRunId !== workflowRunId)
+      throw new Error("manager dispatch target is outside its workflow");
+    const assignedAgentId = workItem.assignedAgentId ?? managerAgentId;
+    const agent = await this.agentSource.get(assignedAgentId);
+    await this.autonomousExecutor.execute({
+      organizationId: this.organizationId,
+      workflowRunId,
+      workItemId,
+      agentId: assignedAgentId,
+      harness: agent.adapter,
+      runProvider: async ({ attempt }) => {
+        const result = await this.executeDurableAttempt({
+          attempt,
+          workItem,
+          agentId: assignedAgentId,
+          adapter: agent.adapter,
+          prompt: workItem.description,
+          resumeSessionId: await this.resumeStalledSession(workItem.id),
+        });
+        return {
+          status: result.timedOut
+            ? ("timed_out" as const)
+            : result.exitCode === 0
+              ? ("succeeded" as const)
+              : ("failed" as const),
+          usage: {
+            tokens: (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
+            costUsd: result.costUsd,
+          },
+        };
+      },
+    });
+    await this.verifyPendingWorkItems(workflowRunId);
+  }
+
+  private async queueManagerWake(
+    managerRunId: string,
+    managerAgentId: string,
+    stateVersion: number,
+    reason: string,
+  ): Promise<void> {
+    const timestamp = new Date().toISOString();
+    const loopId = `loop/manager/${this.organizationId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+    const key = `manager:${managerRunId}:${stateVersion}`;
+    const db = getDefaultDb().db;
+    db.transaction((tx) => {
+      tx.insert(loops)
+        .values({
+          id: loopId,
+          organizationId: this.organizationId,
+          patternId: "manager",
+          configJson: "{}",
+          gateJson: "{}",
+          budgetJson: "{}",
+          scheduleJson: "{}",
+          paused: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .onConflictDoNothing()
+        .run();
+      tx.insert(wakeupsTable)
+        .values({
+          id: `wake/manager/${createHash("sha256").update(key).digest("hex").slice(0, 24)}`,
+          organizationId: this.organizationId,
+          loopId,
+          source: "continuation",
+          triggerDetail: "manager",
+          reason,
+          agentId: managerAgentId,
+          payloadJson: JSON.stringify({ managerRunId, operatorRunId: managerRunId }),
+          status: "queued",
+          idempotencyKey: key,
+          requestedAt: timestamp,
+          requestedByActorId: "worker",
+          requestedByActorType: "system",
+        })
+        .onConflictDoNothing()
+        .run();
+    });
+  }
+
+  private async finalizeManagerRun(
+    managerRunId: string,
+    workflowRunId: string,
+    managerAgentId: string,
+  ): Promise<void> {
+    const items = await this.executionStore.listWorkItemsForWorkflow(
+      this.organizationId,
+      workflowRunId,
+    );
+    if (items.length === 0 || items.some((item) => item.status !== "completed"))
+      throw new Error("Manager run cannot roll up incomplete work");
+    const evidence: string[] = [];
+    for (const item of items) {
+      const verification = await this.executionStore.getVerificationForWorkItem(item.id);
+      if (verification?.status !== "passed")
+        throw new Error(`Manager work ${item.id} has no passed verification`);
+      evidence.push(verification.id);
+    }
+    const milestoneIds = [...new Set(items.map((item) => item.milestoneId).filter(Boolean))];
+    if (milestoneIds.length !== 1)
+      throw new Error("Manager process must align to exactly one milestone");
+    const projectId = items[0]?.projectId;
+    if (!projectId) throw new Error("Manager process has no project");
+    const commands = new CompanyCommandService(getDefaultDb().db);
+    await commands.execute({
+      type: "record_milestone_evaluation",
+      organizationId: this.organizationId,
+      actorId: managerAgentId,
+      idempotencyKey: `manager-rollup:${managerRunId}:${milestoneIds[0]}`,
+      projectId,
+      milestoneId: milestoneIds[0] as string,
+      status: "accepted",
+      evidence,
+      rationale: "All milestone process steps passed independent verification.",
+    });
+    const projectMilestones = await getDefaultDb()
+      .db.select({ status: milestones.status })
+      .from(milestones)
+      .where(
+        and(
+          eq(milestones.organizationId, this.organizationId),
+          eq(milestones.projectId, projectId),
+        ),
+      );
+    if (!projectMilestones.every((milestone) => milestone.status === "accepted")) return;
+    await commands.execute({
+      type: "evaluate_project",
+      organizationId: this.organizationId,
+      actorId: managerAgentId,
+      idempotencyKey: `manager-rollup:${managerRunId}:project`,
+      projectId,
+      evidence,
+    });
+    const [project] = await getDefaultDb()
+      .db.select({ goalId: projects.goalId })
+      .from(projects)
+      .where(and(eq(projects.organizationId, this.organizationId), eq(projects.id, projectId)))
+      .limit(1);
+    const [profile] = await getDefaultDb()
+      .db.select({ ceoAgentId: companyProfiles.ceoAgentId })
+      .from(companyProfiles)
+      .where(eq(companyProfiles.organizationId, this.organizationId))
+      .limit(1);
+    if (project?.goalId && profile?.ceoAgentId) {
+      await commands.execute({
+        type: "evaluate_objective",
+        organizationId: this.organizationId,
+        actorId: profile.ceoAgentId,
+        idempotencyKey: `manager-rollup:${managerRunId}:objective`,
+        goalId: project.goalId,
+        evidence,
+      });
+    }
+  }
+
+  private async enqueueDueManagerRuns(): Promise<void> {
+    const rows = await getDefaultDb()
+      .db.select()
+      .from(executionOperatorRuns)
+      .where(eq(executionOperatorRuns.organizationId, this.organizationId));
+    const timestamp = new Date().toISOString();
+    for (const run of rows) {
+      if (run.status !== "waiting" || !run.wakeAt || run.wakeAt > timestamp) continue;
+      await this.queueManagerWake(
+        run.id,
+        run.operatorAgentId,
+        run.observedStateVersion,
+        "Scheduled manager review",
+      );
+    }
   }
 
   private async verifyPendingWorkItems(workflowRunId: string): Promise<void> {
@@ -1015,7 +1697,9 @@ export class WorkerDaemon {
         ...workItem.governance.verification.acceptanceCriteria.map(
           (criterion) => `Acceptance: ${criterion.description}`,
         ),
-        "Inspect the diff and run the smallest relevant tests. Do not modify files.",
+        workItem.workKind === "general"
+          ? "The maker's durable artifacts are mounted at their declared relative paths. Inspect them and do not modify files."
+          : "Inspect the diff and run the smallest relevant tests. Do not modify files.",
         'End with exactly one line: AASPAI_CHECK_RESULT={"verdict":"passed|failed|concerns","summary":"brief evidence-based conclusion"}',
       ]
         .filter(Boolean)
@@ -1165,6 +1849,8 @@ export class WorkerDaemon {
     prompt: string;
     runtime?: ReturnType<typeof executionTargetSchema.parse>;
     durableSessionId?: string;
+    resumeSessionId?: string;
+    resumeWorkspaceId?: string;
   }): Promise<AdapterExecutionResult> {
     const persistedPlan = await this.executionStore.getPlanForAttempt(input.attempt.id);
     const profile = persistedPlan
@@ -1175,6 +1861,31 @@ export class WorkerDaemon {
           prompt: input.prompt,
           definitionRevisionId: input.workItem.definitionRevisionId ?? "",
         });
+    const sessionStart = await this.executionStore.resolveHarnessSessionStart({
+      id: input.durableSessionId,
+      organizationId: this.organizationId,
+      agentId: input.agentId,
+      adapter: input.adapter,
+    });
+    const resumeSessionId = input.resumeSessionId ?? sessionStart.resumeSessionId;
+    const requestedTools = Array.isArray(input.workItem.metadata.tools)
+      ? input.workItem.metadata.tools.filter((tool): tool is string => typeof tool === "string")
+      : [];
+    const availableTools = new Set(
+      profile.tools
+        .filter((tool) => tool.allowed && tool.ready)
+        .map((tool) => tool.name.toLowerCase()),
+    );
+    const missingTools = requestedTools.filter((tool) => !availableTools.has(tool.toLowerCase()));
+    if (missingTools.length > 0)
+      throw new Error(`Assigned agent lacks required tools: ${missingTools.join(", ")}`);
+    const requestedSkills = Array.isArray(input.workItem.metadata.skills)
+      ? input.workItem.metadata.skills.filter((skill): skill is string => typeof skill === "string")
+      : [];
+    const availableSkills = new Set(profile.skills.map((skill) => skill.key));
+    const missingSkills = requestedSkills.filter((skill) => !availableSkills.has(skill));
+    if (missingSkills.length > 0)
+      throw new Error(`Assigned agent lacks required skills: ${missingSkills.join(", ")}`);
     const skillRegistry = persistedPlan
       ? null
       : await loadSkillDirectory(process.env.AASPAI_SKILLS_DIR ?? "./skills");
@@ -1217,29 +1928,77 @@ export class WorkerDaemon {
             ? await this.git.resolveCommit(repository.localPath, repository.defaultBranch)
             : (input.workItem.sourceCommitSha ?? "0000000");
     const workspaceRoot = process.env.AASPAI_WORKSPACE_ROOT ?? join("workspace", "worker");
-    const workspace = repository
-      ? await workspaceManager.prepare({
+    const retainedWorkspace = input.resumeWorkspaceId
+      ? await this.executionStore.getWorkspace(input.resumeWorkspaceId)
+      : null;
+    if (input.resumeWorkspaceId) {
+      if (
+        !retainedWorkspace ||
+        retainedWorkspace.organizationId !== this.organizationId ||
+        retainedWorkspace.repositoryId !== input.workItem.repositoryId ||
+        retainedWorkspace.status !== "ready" ||
+        !retainedWorkspace.branchName.startsWith("disposable/") ||
+        !(await stat(retainedWorkspace.path).catch(() => null))?.isDirectory()
+      ) {
+        throw new Error(`Retained manager workspace ${input.resumeWorkspaceId} is unavailable`);
+      }
+      if (repositoryWork) throw new Error("Repository work cannot reuse a disposable workspace");
+    }
+    const retainedWorkspaceLock = retainedWorkspace
+      ? await this.executionStore.acquireResourceLock({
           organizationId: this.organizationId,
-          attemptId: input.attempt.id,
-          repositoryId: repository.id,
-          repositoryPath: repository.localPath,
-          baseCommitSha: sourceCommit,
-          workspaceRoot,
-          branchName:
-            input.attempt.role === "checker"
-              ? `checker/${input.attempt.id}`
-              : (input.workItem.branchName ?? `worker/${input.attempt.id}`),
+          resourceType: "workspace",
+          resourceId: retainedWorkspace.id,
+          ownerAttemptId: input.attempt.id,
+          // ponytail: 24h lease; renew from progress events when multi-day sessions are supported.
+          leaseExpiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
         })
-      : await workspaceManager.prepareDisposable({
-          organizationId: this.organizationId,
-          attemptId: input.attempt.id,
-          repositoryId: input.workItem.repositoryId,
-          baseCommitSha: sourceCommit,
-          workspaceRoot,
-        });
+      : null;
+    if (retainedWorkspace && !retainedWorkspaceLock) {
+      throw new Error(`Retained manager workspace ${retainedWorkspace.id} is already in use`);
+    }
+    const workspace = retainedWorkspace
+      ? executionWorkspaceSchema.parse(retainedWorkspace)
+      : repository
+        ? await workspaceManager.prepare({
+            organizationId: this.organizationId,
+            attemptId: input.attempt.id,
+            repositoryId: repository.id,
+            repositoryPath: repository.localPath,
+            baseCommitSha: sourceCommit,
+            workspaceRoot,
+            branchName:
+              input.attempt.role === "checker"
+                ? `checker/${input.attempt.id}`
+                : (input.workItem.branchName ?? `worker/${input.attempt.id}`),
+          })
+        : await workspaceManager.prepareDisposable({
+            organizationId: this.organizationId,
+            attemptId: input.attempt.id,
+            repositoryId: input.workItem.repositoryId,
+            baseCommitSha: sourceCommit,
+            workspaceRoot,
+          });
     const workspacePath = workspace.path;
     const materializedPaths: string[] = [];
+    let checkerBaseline: Map<string, string> | undefined;
     try {
+      if (
+        !retainedWorkspace &&
+        !repositoryWork &&
+        input.attempt.role === "maker" &&
+        input.attempt.attemptNumber > 1
+      ) {
+        await this.restorePreviousAttemptArtifacts(input.attempt, workspacePath);
+      }
+      if (!repositoryWork && input.attempt.role === "checker") {
+        const verification = input.attempt.verificationId
+          ? await this.executionStore.getVerification(input.attempt.verificationId)
+          : null;
+        if (!verification) throw new Error("Checker attempt has no verification lineage");
+        await this.restoreAttemptArtifacts(verification.makerAttemptId, workspacePath);
+        checkerBaseline = await workspaceFileHashes(workspacePath);
+      }
       const scriptedSkills = profile.skills.filter((entry) =>
         entry.skill.files.some((file) => file.kind === "script"),
       );
@@ -1279,38 +2038,123 @@ export class WorkerDaemon {
         });
       }
     } catch (error) {
-      await (repositoryWork
-        ? workspaceManager.release(workspace.id)
-        : workspaceManager.releaseDisposable(workspace.id)
-      ).catch(() => undefined);
+      if (retainedWorkspaceLock) {
+        await this.executionStore.releaseResourceLock(retainedWorkspaceLock.id);
+      } else {
+        await (repositoryWork
+          ? workspaceManager.release(workspace.id)
+          : workspaceManager.releaseDisposable(workspace.id)
+        ).catch(() => undefined);
+      }
       throw error;
     }
-    const adapterConfig = {
-      ...profile.inputs.adapterConfig,
-      ...(input.adapter === "opencode_cli" &&
-      profile.skills.length > 0 &&
-      !Array.isArray(profile.inputs.adapterConfig.skillsPaths)
-        ? { skillsPaths: [".opencode_cli/skills"] }
-        : {}),
-      ...(input.adapter === "opencode_cli" && input.agentId === "agent/ceo"
-        ? { xdgConfigHome: ".opencode_cli" }
-        : {}),
-    };
-    if (input.adapter === "opencode_cli" && input.agentId === "agent/ceo") {
-      const companyActionTool = join(
-        workspacePath,
-        ".opencode_cli",
-        "opencode",
-        "tools",
-        "company_action.ts",
-      );
-      await mkdir(dirname(companyActionTool), { recursive: true });
-      await writeFile(companyActionTool, COMPANY_ACTION_TOOL_SOURCE, "utf8");
-      materializedPaths.push(companyActionTool);
-    }
-    let credential: AttemptCredential | null = null;
-    let credentialRevoked = false;
+    const mayManageCompany =
+      input.attempt.role === "maker" &&
+      (await this.isAuthorizedManager(input.agentId, input.workItem.projectId));
+    const runtimeTarget = input.runtime ?? profile.runtime.target;
+    const brokerAppliedActions: CompanyAction[] = [];
+    let companyActionBroker: CompanyActionBroker | undefined;
+    let retainWorkspaceForCallback = Boolean(retainedWorkspace);
     try {
+      if (
+        mayManageCompany &&
+        runtimeTarget.kind === "local" &&
+        (input.adapter === "opencode_cli" || input.adapter === "codex_local")
+      ) {
+        companyActionBroker = await startCompanyActionBroker({
+          organizationId: this.organizationId,
+          attemptId: input.attempt.id,
+          agentId: input.agentId,
+          requiredProviderSessionId: input.adapter === "opencode_cli" ? resumeSessionId : undefined,
+          apply: async (actions) => {
+            if (resumeSessionId) {
+              const currentAttempt = await this.executionStore.getAttempt(input.attempt.id);
+              let currentSession = currentAttempt?.harnessSessionId
+                ? await this.executionStore.getHarnessSession(currentAttempt.harnessSessionId)
+                : null;
+              if (input.adapter === "opencode_cli" || input.adapter === "codex_local") {
+                // ponytail: local 1s observation gate; replace polling with an identity signal
+                // if harness session persistence ever moves off-process.
+                for (let retry = 0; !currentSession?.sessionId && retry < 40; retry++) {
+                  await new Promise((resolve) => setTimeout(resolve, 25));
+                  currentSession = currentAttempt?.harnessSessionId
+                    ? await this.executionStore.getHarnessSession(currentAttempt.harnessSessionId)
+                    : null;
+                }
+              }
+              if (currentSession?.sessionId !== resumeSessionId) {
+                throw new Error(
+                  "Company action rejected because the manager session did not resume",
+                );
+              }
+            }
+            const results = await this.applyCompanyActions(
+              actions,
+              {
+                attempt: input.attempt,
+                workItem: input.workItem,
+                managerAgentId: input.agentId,
+                managerWorkspaceId: workspace.id,
+              },
+              brokerAppliedActions.length,
+            );
+            if (results.some((result) => result.actionType === "hire_and_delegate")) {
+              retainWorkspaceForCallback = true;
+            }
+            brokerAppliedActions.push(...actions);
+            return results;
+          },
+        });
+      }
+      const mayUseBrowser =
+        input.adapter === "opencode_cli" &&
+        profile.tools.some(
+          (decision) =>
+            decision.name.toLowerCase() === "browser_snapshot" &&
+            decision.allowed &&
+            decision.ready,
+        );
+      const adapterConfig = {
+        ...profile.inputs.adapterConfig,
+        ...(input.adapter === "opencode_cli" &&
+        profile.skills.length > 0 &&
+        !Array.isArray(profile.inputs.adapterConfig.skillsPaths)
+          ? { skillsPaths: [".opencode_cli/skills"] }
+          : {}),
+        ...(input.adapter === "opencode_cli" && (mayManageCompany || mayUseBrowser)
+          ? { xdgConfigHome: ".opencode_cli" }
+          : {}),
+      };
+      if (input.adapter === "opencode_cli" && mayManageCompany) {
+        const companyActionTool = join(
+          workspacePath,
+          ".opencode_cli",
+          "opencode",
+          "tools",
+          "company_action.ts",
+        );
+        await mkdir(dirname(companyActionTool), { recursive: true });
+        await writeFile(companyActionTool, COMPANY_ACTION_TOOL_SOURCE, "utf8");
+        materializedPaths.push(companyActionTool);
+      }
+      if (input.adapter === "codex_local" && companyActionBroker) {
+        const companyActionClient = join(workspacePath, ".aaspai", "company_action.mjs");
+        await mkdir(dirname(companyActionClient), { recursive: true });
+        await writeFile(companyActionClient, CODEX_COMPANY_ACTION_CLIENT_SOURCE, "utf8");
+        materializedPaths.push(companyActionClient);
+      }
+      if (mayUseBrowser) {
+        const browserTool = join(
+          workspacePath,
+          ".opencode_cli",
+          "opencode",
+          "tools",
+          "browser_snapshot.ts",
+        );
+        await mkdir(dirname(browserTool), { recursive: true });
+        await writeFile(browserTool, BROWSER_SNAPSHOT_TOOL_SOURCE, "utf8");
+        materializedPaths.push(browserTool);
+      }
       const plan =
         persistedPlan ??
         (await this.executionStore.createPlan({
@@ -1333,61 +2177,112 @@ export class WorkerDaemon {
           harness: input.adapter,
           agentId: input.agentId,
           idempotencyKey: input.attempt.id,
-          prompt: input.prompt,
+          prompt:
+            mayManageCompany && companyActionBroker
+              ? `${input.prompt}\n\n${companyActionRunInstruction(input.adapter)}`
+              : input.prompt,
           harnessConfig: adapterConfig,
           runtimeConfig: { workspacePolicy: "disposable" },
           profile,
         }));
       assertGovernedRuntimeIsolation(plan.harness, plan.target, true);
-      credential = await issueAttemptCredential(this.organizationId, input.attempt.id);
 
-      const result = await new HarnessExecutionPlanRunner(this.executionStore).run({
-        plan,
-        workspace: { ...workspace, status: "ready" },
-        profile,
-        durableSessionId: input.durableSessionId,
-        ...(credential ? { ephemeralEnv: { AASPAI_ATTEMPT_TOKEN: credential.token } } : {}),
-        onExecuted: async (result) => {
-          if (credential) {
-            await revokeAttemptCredential(credential);
-            credentialRevoked = true;
-          }
-          await Promise.all(
-            materializedPaths.map((path) => rm(path, { recursive: true, force: true })),
-          );
-          await this.persistAttemptOutput({
-            result,
-            attempt: input.attempt,
-            workItem: input.workItem,
-            workspacePath,
-            sourceCommit,
-            branchName: workspace.branchName,
-            repositoryWork,
-          });
-          if (input.agentId === "agent/ceo" && !result.timedOut && result.exitCode === 0) {
-            await this.applyCompanyActions(companyActions(result), {
+      const runController = new AbortController();
+      let checkingCancellation = false;
+      const checkCancellation = async () => {
+        if (checkingCancellation || runController.signal.aborted) return;
+        checkingCancellation = true;
+        try {
+          const current = await this.executionStore.getAttempt(input.attempt.id);
+          if (current?.status === "cancelling" || current?.cancelRequestedAt) runController.abort();
+        } finally {
+          checkingCancellation = false;
+        }
+      };
+      await checkCancellation();
+      const cancellationPoll = setInterval(() => void checkCancellation(), 1_000);
+      cancellationPoll.unref();
+      let result: AdapterExecutionResult;
+      try {
+        result = await new HarnessExecutionPlanRunner(this.executionStore).run({
+          plan,
+          workspace: { ...workspace, status: "ready" },
+          profile,
+          durableSessionId: sessionStart.durableSessionId,
+          parentSessionId: sessionStart.parentSessionId,
+          wakeupId: sessionStart.wakeupId,
+          resumeSessionId,
+          allowWorkspaceReuse: Boolean(retainedWorkspace),
+          signal: runController.signal,
+          ephemeralEnv: companyActionBroker?.env,
+          onExecuted: async (result) => {
+            await companyActionBroker?.close();
+            await Promise.all(
+              materializedPaths.map((path) => rm(path, { recursive: true, force: true })),
+            );
+            await this.persistAttemptOutput({
+              result,
               attempt: input.attempt,
               workItem: input.workItem,
-              managerAgentId: input.agentId,
+              workspacePath,
+              sourceCommit,
+              branchName: workspace.branchName,
+              repositoryWork,
+              checkerBaseline,
+              ephemeralSecrets: companyActionBroker?.env.AASPAI_COMPANY_BROKER_TOKEN
+                ? [companyActionBroker.env.AASPAI_COMPANY_BROKER_TOKEN]
+                : [],
             });
-          }
-        },
-      });
+            if (mayManageCompany && !result.timedOut && result.exitCode === 0) {
+              const reportedActions = companyActions(result);
+              // A live broker is authoritative: a rejected tool call must never be replayed
+              // as a trusted post-run mutation.
+              const fallbackActions = companyActionBroker ? [] : reportedActions;
+              const actions = [...brokerAppliedActions, ...fallbackActions];
+              const missingActions = missingRequiredCompanyActions(
+                input.workItem.metadata.requiredCompanyActions,
+                actions,
+              );
+              if (missingActions.length > 0)
+                throw new Error(
+                  `Manager run omitted required company actions: ${missingActions
+                    .map(
+                      (action) => `${action.type}${action.projectId ? `:${action.projectId}` : ""}`,
+                    )
+                    .join(", ")}`,
+                );
+              const fallbackResults = await this.applyCompanyActions(
+                fallbackActions,
+                {
+                  attempt: input.attempt,
+                  workItem: input.workItem,
+                  managerAgentId: input.agentId,
+                  managerWorkspaceId: workspace.id,
+                },
+                brokerAppliedActions.length,
+              );
+              if (fallbackResults.some((action) => action.actionType === "hire_and_delegate")) {
+                retainWorkspaceForCallback = true;
+              }
+            }
+          },
+        });
+      } finally {
+        clearInterval(cancellationPoll);
+      }
       await this.recordGeneralWorkEvidence(result, input.attempt, input.workItem);
       return result;
     } finally {
-      if (credential && !credentialRevoked) {
-        await revokeAttemptCredential(credential).catch((error) =>
-          log.error("attempt credential revocation failed", {
-            attemptId: input.attempt.id,
-            err: String(error),
-          }),
-        );
+      await companyActionBroker?.close().catch(() => undefined);
+      if (retainedWorkspaceLock) {
+        await this.executionStore.releaseResourceLock(retainedWorkspaceLock.id);
       }
-      await (repositoryWork
-        ? workspaceManager.release(workspace.id)
-        : workspaceManager.releaseDisposable(workspace.id)
-      ).catch(() => undefined);
+      if (!retainWorkspaceForCallback) {
+        await (repositoryWork
+          ? workspaceManager.release(workspace.id)
+          : workspaceManager.releaseDisposable(workspace.id)
+        ).catch(() => undefined);
+      }
     }
   }
 
@@ -1422,99 +2317,430 @@ export class WorkerDaemon {
   }
 
   private async applyCompanyActions(
-    actions: HireAndDelegateAction[],
+    actions: CompanyAction[],
     input: {
       attempt: AgentAttempt;
       workItem: ExecutionWorkItem;
       managerAgentId: string;
+      managerWorkspaceId: string;
     },
-  ): Promise<void> {
-    if (actions.length === 0 || input.managerAgentId !== "agent/ceo") return;
+    actionIndexOffset = 0,
+  ): Promise<AppliedCompanyAction[]> {
+    if (actions.length === 0) return [];
+    if (!(await this.isAuthorizedManager(input.managerAgentId, input.workItem.projectId))) {
+      throw new Error(`${input.managerAgentId} is not authorized to hire for this project`);
+    }
     const manager = await this.agentSource.get(input.managerAgentId);
     const operations = new CompanyOperationsService(getDefaultDb().db);
     const control = new CompanyControlPlaneService(getDefaultDb().db, this.executionStore);
+    const commands = new CompanyCommandService(getDefaultDb().db);
+    const [companyProfile] = await getDefaultDb()
+      .db.select({ ceoAgentId: companyProfiles.ceoAgentId })
+      .from(companyProfiles)
+      .where(eq(companyProfiles.organizationId, this.organizationId))
+      .limit(1);
+    const isCeo = input.managerAgentId === companyProfile?.ceoAgentId;
+    const applied: AppliedCompanyAction[] = [];
 
-    for (const action of actions) {
-      const definition = await this.writeHiredAgent(action, manager);
-      await operations.registerServiceAgent({
-        organizationId: this.organizationId,
-        agentId: action.agentId,
-        metadata: {
-          roles: [action.role],
-          capabilities: [action.role],
-          definitionManaged: true,
-          hiredBy: input.managerAgentId,
-        },
-      });
-      await control.setAuthorityEdge({
-        organizationId: this.organizationId,
-        fromAgentId: input.managerAgentId,
-        toAgentId: action.agentId,
-        relation: "may_delegate_to",
-      });
-      const definitionRevision = await this.executionStore.createDefinitionRevision({
-        organizationId: this.organizationId,
-        repositoryId: input.workItem.repositoryId,
-        commitSha: input.workItem.sourceCommitSha ?? "0000000",
-        sourcePath: definition.sourcePath,
-        dirty: true,
-        contentHash: definition.contentHash,
-      });
-      const delegation = await control.delegate({
-        organizationId: this.organizationId,
-        idempotencyKey: `ceo-action:${input.workItem.id}:${action.agentId}`,
-        requestedByAgentId: input.managerAgentId,
-        targetAgentId: action.agentId,
-        departmentId: null,
-        requiredRole: action.role,
-        capability: null,
-        risk: "low",
-        priority: Math.min(100, input.workItem.priority + 1),
-        title: action.workTitle,
-        description: action.workDescription,
-        goalId: input.workItem.goalId,
-        projectId: input.workItem.projectId,
-        repositoryId: input.workItem.repositoryId,
-        workflowRunId: input.workItem.workflowRunId,
-        definitionRevisionId: definitionRevision.id,
-        sourceCommitSha: input.workItem.sourceCommitSha,
-        maxAttempts: input.workItem.maxAttempts,
-        workKind: "general",
-        deliveryMode: "none",
-        metadata: {
-          ...(action.artifactPaths
-            ? {
-                declaredArtifacts: action.artifactPaths.map((path) => ({
-                  path,
-                  kind: "other",
-                })),
-              }
-            : {}),
-          evidencePolicy: {
-            citationPaths: action.citationPaths ?? [],
-            commercialClaimPaths: action.commercialClaimPaths ?? [],
-            scanAllArtifacts: true,
-          },
-        },
-      });
-      if (!delegation.workItemId) throw new Error(`Delegation ${delegation.id} has no work item`);
-      const delegated = await this.executionStore.getWorkItem(delegation.workItemId);
-      if (!delegated) throw new Error(`Delegated work ${delegation.workItemId} disappeared`);
-      await this.queueDelegatedWork(action, delegated, manager.adapter);
-      await this.executionStore.recordGovernanceEvent({
-        organizationId: this.organizationId,
-        workItemId: input.workItem.id,
-        attemptId: input.attempt.id,
-        action: "agent.hire_and_delegate",
-        decision: "allowed",
-        reason: `${action.title} hired and assigned ${delegated.id}`,
-        metadata: {
+    let activeAction: { action: CompanyAction; actionIndex: number; projectId: string } | null =
+      null;
+    try {
+      for (const [localActionIndex, action] of actions.entries()) {
+        const actionIndex = actionIndexOffset + localActionIndex;
+        const targetProjectId = action.projectId ?? input.workItem.projectId;
+        if (!targetProjectId) throw new Error("Company action has no project");
+        activeAction = { action, actionIndex, projectId: targetProjectId };
+        await this.recordCompanyAction(
+          input.attempt.id,
+          action,
+          actionIndex,
+          targetProjectId,
+          "started",
+        );
+        if (!isCeo && targetProjectId !== input.workItem.projectId)
+          throw new Error("A manager may only hire within their assigned project");
+        const [targetProject] = await getDefaultDb()
+          .db.select({ id: projects.id, goalId: projects.goalId })
+          .from(projects)
+          .where(
+            and(eq(projects.organizationId, this.organizationId), eq(projects.id, targetProjectId)),
+          )
+          .limit(1);
+        if (!targetProject) throw new Error(`Project ${targetProjectId} not found`);
+        const actionFingerprint = companyActionFingerprint(action, targetProject.id);
+        if (
+          action.type === "hire_and_delegate" &&
+          input.workItem.metadata.delegationCallback &&
+          input.workItem.parentWorkItemId
+        ) {
+          const completed = await this.executionStore.getWorkItem(input.workItem.parentWorkItemId);
+          const verification = completed
+            ? await this.executionStore.getVerificationForWorkItem(completed.id)
+            : null;
+          if (
+            completed &&
+            verification?.status === "passed" &&
+            completed.projectId === targetProject.id &&
+            completed.metadata.routedBy === input.managerAgentId &&
+            repeatsCompletedDelegation(action, completed, targetProject.id)
+          ) {
+            const [existingDelegation] = await getDefaultDb()
+              .db.select({ id: delegations.id })
+              .from(delegations)
+              .where(
+                and(
+                  eq(delegations.organizationId, this.organizationId),
+                  eq(delegations.workItemId, completed.id),
+                ),
+              )
+              .limit(1);
+            if (!existingDelegation) {
+              throw new Error(`Completed delegated work ${completed.id} lost its delegation`);
+            }
+            const outcome = {
+              agentId: action.agentId,
+              delegationId: existingDelegation.id,
+              delegatedWorkItemId: completed.id,
+              reusedVerifiedDelegation: true,
+            };
+            await this.recordCompanyAction(
+              input.attempt.id,
+              action,
+              actionIndex,
+              targetProject.id,
+              "succeeded",
+              outcome,
+            );
+            applied.push({
+              actionIndex,
+              actionType: action.type,
+              projectId: targetProject.id,
+              status: "succeeded",
+              outcome,
+            });
+            activeAction = null;
+            continue;
+          }
+        }
+        if (action.type === "create_milestone") {
+          const created = await commands.execute({
+            type: "create_milestone",
+            organizationId: this.organizationId,
+            actorId: input.managerAgentId,
+            idempotencyKey: `manager-action:${input.workItem.id}:milestone:${actionFingerprint}`,
+            projectId: targetProject.id,
+            title: action.title,
+            outcome: action.outcome,
+            sequence: action.sequence,
+            acceptance: action.acceptance,
+            ownerAgentId: input.managerAgentId,
+          });
+          await this.recordCompanyAction(
+            input.attempt.id,
+            action,
+            actionIndex,
+            targetProject.id,
+            "succeeded",
+            { milestoneId: created.id ?? null },
+          );
+          applied.push({
+            actionIndex,
+            actionType: action.type,
+            projectId: targetProject.id,
+            status: "succeeded",
+            outcome: { milestoneId: created.id ?? null },
+          });
+          activeAction = null;
+          continue;
+        }
+        if (action.type === "define_and_start_process") {
+          if (!input.workItem.definitionRevisionId)
+            throw new Error("Process action requires a pinned definition revision");
+          const milestoneId = (
+            await getDefaultDb()
+              .db.select({ id: milestones.id })
+              .from(milestones)
+              .where(
+                and(
+                  eq(milestones.organizationId, this.organizationId),
+                  eq(milestones.projectId, targetProject.id),
+                  eq(milestones.sequence, action.milestoneSequence),
+                ),
+              )
+              .limit(1)
+          )[0]?.id;
+          if (!milestoneId)
+            throw new Error("Process action must reference a milestone created for the project");
+          const binding = await commands.execute({
+            type: "bind_process",
+            organizationId: this.organizationId,
+            actorId: input.managerAgentId,
+            idempotencyKey: `manager-action:${input.workItem.id}:bind:${actionFingerprint}`,
+            projectId: targetProject.id,
+            processDefinitionId: action.definition.id,
+            processRevision: action.definition.revision,
+            definition: action.definition,
+            ownerAgentId: input.managerAgentId,
+            loopId: action.loopId ?? null,
+            policy: action.policy ?? {},
+          });
+          const processRun = await commands.execute({
+            type: "start_process_run",
+            organizationId: this.organizationId,
+            actorId: input.managerAgentId,
+            idempotencyKey: `manager-action:${input.workItem.id}:run:${actionFingerprint}`,
+            projectId: targetProject.id,
+            goalId: targetProject.goalId,
+            milestoneId,
+            repositoryId: input.workItem.repositoryId,
+            definitionRevisionId: input.workItem.definitionRevisionId,
+            operatorAgentId: input.managerAgentId,
+            sourceCommitSha: input.workItem.sourceCommitSha,
+            definition: action.definition,
+          });
+          await this.recordCompanyAction(
+            input.attempt.id,
+            action,
+            actionIndex,
+            targetProject.id,
+            "succeeded",
+            { processBindingId: binding.id ?? null, processRunId: processRun.id ?? null },
+          );
+          applied.push({
+            actionIndex,
+            actionType: action.type,
+            projectId: targetProject.id,
+            status: "succeeded",
+            outcome: {
+              processBindingId: binding.id ?? null,
+              processRunId: processRun.id ?? null,
+            },
+          });
+          activeAction = null;
+          continue;
+        }
+        const delegationFingerprint = actionFingerprint;
+        const definition = await this.writeHiredAgent(action, manager);
+        await operations.registerServiceAgent({
+          organizationId: this.organizationId,
           agentId: action.agentId,
-          delegationId: delegation.id,
-          delegatedWorkItemId: delegated.id,
-        },
-      });
+          metadata: {
+            roles: [action.role],
+            capabilities: [action.role],
+            definitionManaged: true,
+            hiredBy: input.managerAgentId,
+          },
+        });
+        if (action.projectRole === "manager") {
+          if (!isCeo) throw new Error("Only the CEO may appoint a project manager");
+          await commands.execute({
+            type: "appoint_project_manager",
+            organizationId: this.organizationId,
+            actorId: input.managerAgentId,
+            idempotencyKey: `manager-action:${input.workItem.id}:${targetProject.id}:${action.agentId}:${delegationFingerprint}:assignment`,
+            projectId: targetProject.id,
+            agentId: action.agentId,
+          });
+        } else {
+          await commands.execute({
+            type: "assign_agent_to_project",
+            organizationId: this.organizationId,
+            actorId: input.managerAgentId,
+            idempotencyKey: `manager-action:${input.workItem.id}:${targetProject.id}:${action.agentId}:${delegationFingerprint}:assignment`,
+            projectId: targetProject.id,
+            agentId: action.agentId,
+            role: "member",
+            allocationPercent: 100,
+          });
+        }
+        await control.setAuthorityEdge({
+          organizationId: this.organizationId,
+          fromAgentId: input.managerAgentId,
+          toAgentId: action.agentId,
+          relation: "may_delegate_to",
+        });
+        const definitionRevision = await this.executionStore.createDefinitionRevision({
+          organizationId: this.organizationId,
+          repositoryId: input.workItem.repositoryId,
+          commitSha: input.workItem.sourceCommitSha ?? "0000000",
+          sourcePath: definition.sourcePath,
+          dirty: true,
+          contentHash: definition.contentHash,
+        });
+        const delegatedWorkflow = await this.executionStore.createWorkflowRun({
+          organizationId: this.organizationId,
+          goalId: targetProject.goalId,
+          definitionRevisionId: definitionRevision.id,
+          sourceType: "manager_delegation",
+          sourceId: input.workItem.id,
+          idempotencyKey: `manager-action:${input.workItem.id}:${action.agentId}:${delegationFingerprint}:workflow`,
+        });
+        const delegation = await control.delegate({
+          organizationId: this.organizationId,
+          idempotencyKey: `manager-action:${input.workItem.id}:${action.agentId}:${delegationFingerprint}`,
+          requestedByAgentId: input.managerAgentId,
+          targetAgentId: action.agentId,
+          departmentId: null,
+          requiredRole: action.role,
+          capability: null,
+          risk: "low",
+          priority: Math.min(100, input.workItem.priority + 1),
+          title: action.workTitle,
+          description: action.workDescription,
+          goalId: targetProject.goalId,
+          projectId: targetProject.id,
+          repositoryId: input.workItem.repositoryId,
+          workflowRunId: delegatedWorkflow.id,
+          milestoneId: input.workItem.milestoneId,
+          processBindingId: input.workItem.processBindingId,
+          parentWorkItemId: input.workItem.id,
+          definitionRevisionId: definitionRevision.id,
+          sourceCommitSha: input.workItem.sourceCommitSha,
+          maxAttempts: Math.max(3, input.workItem.maxAttempts),
+          workKind: "general",
+          deliveryMode: "none",
+          metadata: {
+            delegationActionFingerprint: delegationFingerprint,
+            ...(action.artifactPaths
+              ? {
+                  declaredArtifacts: action.artifactPaths.map((path) => ({
+                    path,
+                    kind: "other",
+                  })),
+                }
+              : {}),
+            evidencePolicy: {
+              citationPaths: action.citationPaths ?? [],
+              commercialClaimPaths: action.commercialClaimPaths ?? [],
+              scanAllArtifacts: true,
+            },
+            ...(action.projectRole === "manager"
+              ? {
+                  requiredCompanyActions: [
+                    { type: "create_milestone", projectId: targetProject.id },
+                    { type: "define_and_start_process", projectId: targetProject.id },
+                  ],
+                }
+              : {}),
+          },
+          governance: {
+            verification: {
+              required: true,
+              checkerAgentId: input.managerAgentId,
+              acceptanceCriteria: [
+                {
+                  id: `delegation/${delegationFingerprint}`,
+                  description: `Independently verify the evidence and outcome for: ${action.workTitle}`,
+                },
+              ],
+              minEvidence: 1,
+            },
+          },
+        });
+        if (!delegation.workItemId) throw new Error(`Delegation ${delegation.id} has no work item`);
+        const delegated = await this.executionStore.getWorkItem(delegation.workItemId);
+        if (!delegated) throw new Error(`Delegated work ${delegation.workItemId} disappeared`);
+        const managerAttempt = await this.executionStore.getAttempt(input.attempt.id);
+        if (!managerAttempt?.harnessSessionId) {
+          throw new Error(`Manager attempt ${input.attempt.id} has no durable session`);
+        }
+        const managerSession = await this.executionStore.getHarnessSession(
+          managerAttempt.harnessSessionId,
+        );
+        if (
+          !managerSession ||
+          managerSession.organizationId !== this.organizationId ||
+          managerSession.agentId !== input.managerAgentId
+        ) {
+          throw new Error(`Manager session ${managerAttempt.harnessSessionId} is invalid`);
+        }
+        await this.queueDelegatedWork(action, delegated, manager.adapter, {
+          agentId: input.managerAgentId,
+          attemptId: input.attempt.id,
+          workItemId: input.workItem.id,
+          harnessSessionId: managerSession.id,
+          providerSessionId: managerSession.sessionId ?? undefined,
+          workspaceId: input.managerWorkspaceId,
+        });
+        await this.executionStore.recordGovernanceEvent({
+          organizationId: this.organizationId,
+          workItemId: input.workItem.id,
+          attemptId: input.attempt.id,
+          action: "agent.hire_and_delegate",
+          decision: "allowed",
+          reason: `${action.title} hired and assigned ${delegated.id}`,
+          metadata: {
+            agentId: action.agentId,
+            delegationId: delegation.id,
+            delegatedWorkItemId: delegated.id,
+          },
+        });
+        await this.recordCompanyAction(
+          input.attempt.id,
+          action,
+          actionIndex,
+          targetProject.id,
+          "succeeded",
+          {
+            agentId: action.agentId,
+            delegationId: delegation.id,
+            delegatedWorkItemId: delegated.id,
+          },
+        );
+        applied.push({
+          actionIndex,
+          actionType: action.type,
+          projectId: targetProject.id,
+          status: "succeeded",
+          outcome: {
+            agentId: action.agentId,
+            delegationId: delegation.id,
+            delegatedWorkItemId: delegated.id,
+          },
+        });
+        activeAction = null;
+      }
+    } catch (error) {
+      if (activeAction) {
+        await this.recordCompanyAction(
+          input.attempt.id,
+          activeAction.action,
+          activeAction.actionIndex,
+          activeAction.projectId,
+          "failed",
+          { error: error instanceof Error ? error.message : String(error) },
+        ).catch(() => undefined);
+      }
+      throw error;
     }
+    return applied;
+  }
+
+  private async recordCompanyAction(
+    attemptId: string,
+    action: CompanyAction,
+    actionIndex: number,
+    projectId: string,
+    status: "started" | "succeeded" | "failed",
+    outcome: Record<string, unknown> = {},
+  ): Promise<void> {
+    await this.executionStore.appendNextEvent({
+      organizationId: this.organizationId,
+      attemptId,
+      type: `company.action.${status}`,
+      payload: {
+        plane: "company",
+        origin: "aaspai",
+        tool: "company_action",
+        actionType: action.type,
+        actionIndex,
+        actionFingerprint: companyActionFingerprint(action, projectId),
+        projectId,
+        status,
+        expectedEffects: COMPANY_TOOL_CATALOG[action.type].effects,
+        ...outcome,
+      },
+    });
   }
 
   private async writeHiredAgent(
@@ -1526,9 +2752,13 @@ export class WorkerDaemon {
     const directory = resolve(root, slug);
     if (await this.agentSource.has(action.agentId)) {
       const existing = await this.agentSource.get(action.agentId);
+      if (existing.reportsTo !== manager.id) {
+        throw new Error(`Agent ${action.agentId} reports to ${existing.reportsTo ?? "no manager"}`);
+      }
       if (existing.title !== action.title || existing.role !== action.role) {
         throw new Error(`Agent ${action.agentId} already exists with a different profile`);
       }
+      await this.ensureManagerManages(root, manager, action.agentId);
       return {
         sourcePath: `agents/${slug}`,
         contentHash: await hashAgentDefinition(directory),
@@ -1553,7 +2783,7 @@ export class WorkerDaemon {
     );
     await writeFile(
       join(directory, "tools.yaml"),
-      `${JSON.stringify(hiredAgentTools(manager.tools, action.role), null, 2)}\n`,
+      `${JSON.stringify(hiredAgentTools(manager.tools, action), null, 2)}\n`,
       "utf8",
     );
     const requestedSkills = new Set(action.skillKeys ?? []);
@@ -1565,7 +2795,7 @@ export class WorkerDaemon {
         requestedSkills.has(String(skill.key)),
     );
     if (skills.length !== requestedSkills.size) {
-      throw new Error("Hired agent requested a skill not approved for the CEO");
+      throw new Error("Hired agent requested a skill not approved for the manager");
     }
     await writeFile(
       join(directory, "skills.lock.json"),
@@ -1574,7 +2804,7 @@ export class WorkerDaemon {
     );
     await writeFile(
       join(directory, "relations.yaml"),
-      "reportsTo: agent/ceo\nmanages: []\npeers: []\n",
+      `reportsTo: ${manager.id}\nmanages: []\npeers: []\n`,
       "utf8",
     );
     const agentDefinition = join(directory, "AGENT.md");
@@ -1589,7 +2819,7 @@ description: ${JSON.stringify(action.description)}
 timestamp: ${new Date().toISOString()}
 adapter: ${manager.adapter}
 ${manager.model ? `model: ${JSON.stringify(manager.model)}\n` : ""}role: ${action.role}
-reportsTo: agent/ceo
+reportsTo: ${manager.id}
 manages: []
 peers: []
 tools:
@@ -1609,28 +2839,49 @@ runtime:
 ${action.description}
 
 Complete assigned work with concrete evidence. Report what you did, what remains uncertain, and the next action.
+
+Use typed actions instead of merely describing company changes. In OpenCode call company_action. In Codex return the exact final line AASPAI_COMPANY_ACTIONS={"actions":[...]}. Project managers establish measurable outcomes with create_milestone, then pass that persisted milestone's sequence as milestoneSequence when creating the smallest repeatable operating loop with define_and_start_process. Hire only immediately needed specialists with hire_and_delegate.
 `,
       "utf8",
     );
     await rename(pendingDefinition, agentDefinition);
 
-    const ceo = await this.agentSource.get("agent/ceo");
-    const manages = [...new Set([...ceo.manages, action.agentId])];
-    await writeFile(
-      join(root, "ceo", "relations.yaml"),
-      `reportsTo: null\nmanages:\n${manages.map((id) => `  - ${id}`).join("\n")}\npeers: []\n`,
-      "utf8",
-    );
+    await this.ensureManagerManages(root, manager, action.agentId);
     return {
       sourcePath: `agents/${slug}`,
       contentHash: await hashAgentDefinition(directory),
     };
   }
 
+  private async ensureManagerManages(
+    root: string,
+    manager: Readonly<AgentConfig>,
+    agentId: string,
+  ): Promise<void> {
+    const manages = this.hiredAgentRelationships.get(manager.id) ?? new Set<string>();
+    for (const existing of manager.manages) manages.add(existing);
+    if (manages.has(agentId)) return;
+    manages.add(agentId);
+    await writeFile(
+      join(root, manager.id.slice("agent/".length), "relations.yaml"),
+      `reportsTo: ${JSON.stringify(manager.reportsTo)}\nmanages: ${JSON.stringify([...manages])}\npeers: ${JSON.stringify(manager.peers)}\n`,
+      "utf8",
+    );
+    this.hiredAgentRelationships.set(manager.id, manages);
+  }
+
   private async queueDelegatedWork(
     action: HireAndDelegateAction,
     workItem: ExecutionWorkItem,
     adapter: string,
+    manager: {
+      agentId: string;
+      attemptId: string;
+      workItemId: string;
+      harnessSessionId: string;
+      providerSessionId?: string;
+      workspaceId: string;
+    },
   ): Promise<void> {
     if (!workItem.workflowRunId) throw new Error("Delegated work has no workflow run");
     const suffix = createHash("sha256")
@@ -1648,8 +2899,8 @@ Complete assigned work with concrete evidence. Report what you did, what remains
           organizationId: this.organizationId,
           loopId: "manual",
           source: "agent",
-          triggerDetail: "ceo-delegation",
-          reason: `Delegated by agent/ceo to ${action.agentId}`,
+          triggerDetail: "manager-delegation",
+          reason: `Delegated by ${manager.agentId} to ${action.agentId}`,
           agentId: action.agentId,
           payloadJson: JSON.stringify({
             prompt,
@@ -1658,11 +2909,17 @@ Complete assigned work with concrete evidence. Report what you did, what remains
             workItemId: workItem.id,
             workflowRunId: workItem.workflowRunId,
             traceId: sessionId,
+            parentAttemptId: manager.attemptId,
+            parentSessionId: manager.harnessSessionId,
+            managerAgentId: manager.agentId,
+            managerWorkItemId: manager.workItemId,
+            managerProviderSessionId: manager.providerSessionId,
+            managerWorkspaceId: manager.workspaceId,
           }),
           status: "queued",
           idempotencyKey: `delegated-run:${workItem.id}`,
           requestedAt,
-          requestedByActorId: "agent/ceo",
+          requestedByActorId: manager.agentId,
           requestedByActorType: "agent",
         } as never)
         .onConflictDoNothing()
@@ -1678,10 +2935,260 @@ Complete assigned work with concrete evidence. Report what you did, what remains
           prompt,
           configJson: "{}",
           status: "queued",
+          parentSessionId: manager.harnessSessionId,
         })
         .onConflictDoNothing()
         .run();
     });
+  }
+
+  private async queueDelegationCallback(
+    request: {
+      workItemId?: string;
+      managerAgentId?: string;
+      managerWorkItemId?: string;
+      managerProviderSessionId?: string;
+      managerWorkspaceId?: string;
+      parentAttemptId?: string;
+      parentSessionId?: string;
+    },
+    childAttempt: AgentAttempt | null | undefined,
+  ): Promise<void> {
+    if (
+      !request.managerAgentId ||
+      !request.workItemId ||
+      !request.managerWorkItemId ||
+      !request.managerWorkspaceId ||
+      !request.parentAttemptId ||
+      !request.parentSessionId
+    ) {
+      return;
+    }
+    const managerAgentId = request.managerAgentId;
+    if (
+      childAttempt &&
+      (childAttempt.parentAttemptId !== request.parentAttemptId ||
+        childAttempt.workItemId !== request.workItemId)
+    ) {
+      throw new Error("Delegated attempt lost its manager lineage");
+    }
+    const [childWorkItem, managerWorkItem, managerAttempt, managerSession, managerWorkspace] =
+      await Promise.all([
+        this.executionStore.getWorkItem(request.workItemId),
+        this.executionStore.getWorkItem(request.managerWorkItemId),
+        this.executionStore.getAttempt(request.parentAttemptId),
+        this.executionStore.getHarnessSession(request.parentSessionId),
+        this.executionStore.getWorkspace(request.managerWorkspaceId),
+      ]);
+    if (
+      !childWorkItem ||
+      childWorkItem.organizationId !== this.organizationId ||
+      !managerWorkItem ||
+      managerWorkItem.organizationId !== this.organizationId ||
+      childWorkItem.parentWorkItemId !== managerWorkItem.id ||
+      !managerAttempt ||
+      managerAttempt.organizationId !== this.organizationId ||
+      managerAttempt.workItemId !== managerWorkItem.id ||
+      managerAttempt.agentId !== managerAgentId ||
+      (managerWorkItem.assignedAgentId !== null &&
+        managerWorkItem.assignedAgentId !== managerAgentId) ||
+      (childAttempt !== null &&
+        childAttempt !== undefined &&
+        childAttempt.organizationId !== this.organizationId) ||
+      !managerSession ||
+      managerSession.organizationId !== this.organizationId ||
+      managerSession.agentId !== managerAgentId ||
+      managerAttempt.harnessSessionId !== managerSession.id ||
+      !managerWorkspace ||
+      managerWorkspace.organizationId !== this.organizationId ||
+      managerWorkspace.attemptId !== managerAttempt.id ||
+      managerWorkspace.repositoryId !== managerWorkItem.repositoryId ||
+      managerWorkspace.status !== "ready"
+    ) {
+      return;
+    }
+    const verification = await this.executionStore.getVerificationForWorkItem(childWorkItem.id);
+    const verified = childWorkItem.status === "completed" && verification?.status === "passed";
+    if (
+      !verified &&
+      (childWorkItem.status === "completed" ||
+        !TERMINAL_WORK_ITEM_STATUSES.has(childWorkItem.status))
+    ) {
+      return;
+    }
+    const resumeSessionId = managerSession.sessionId ?? request.managerProviderSessionId;
+    if (!resumeSessionId) {
+      throw new Error(`Manager session ${managerSession.id} has no provider session to resume`);
+    }
+    const definitionRevisionId =
+      managerWorkItem.definitionRevisionId ?? childWorkItem.definitionRevisionId;
+    if (!definitionRevisionId) throw new Error("Manager callback has no definition revision");
+    const evidenceIds = [
+      ...(verification ? [verification.id, ...verification.evidenceIds] : []),
+      ...(childAttempt
+        ? (await this.executionStore.listArtifacts(childAttempt.id)).map((artifact) => artifact.id)
+        : []),
+    ].filter((id, index, values) => values.indexOf(id) === index);
+    const outcomeSummary = verified
+      ? verification.summary
+      : (childWorkItem.blockedReason ??
+        verification?.summary ??
+        childAttempt?.error ??
+        `${childWorkItem.status} without details`);
+    const prompt = [
+      `Delegated work reached a terminal outcome: ${childWorkItem.title}`,
+      `Work item: ${childWorkItem.id}`,
+      `Outcome: ${verified ? "completed and independently verified" : childWorkItem.status}`,
+      `Summary: ${outcomeSummary}`,
+      ...(verification
+        ? [`Verification: ${verification.id} (${verification.status}: ${verification.summary})`]
+        : []),
+      `Evidence: ${evidenceIds.join(", ")}`,
+      "Review this terminal result in your existing manager session and update the project direction. Do not recreate, repeat, or redelegate the same assignment. Create a company action only for a genuinely different next outcome; if none is justified, acknowledge the outcome and stop.",
+    ].join("\n\n");
+    const workflowRun = await this.executionStore.createWorkflowRun({
+      organizationId: this.organizationId,
+      goalId: managerWorkItem.goalId,
+      definitionRevisionId,
+      sourceType: "delegation_callback",
+      sourceId: childWorkItem.id,
+      idempotencyKey: `delegation-callback:workflow:${childWorkItem.id}`,
+    });
+    const callbackWorkItem = await this.executionStore.createWorkItem({
+      organizationId: this.organizationId,
+      goalId: managerWorkItem.goalId,
+      projectId: managerWorkItem.projectId,
+      repositoryId: managerWorkItem.repositoryId,
+      workflowRunId: workflowRun.id,
+      parentWorkItemId: childWorkItem.id,
+      assignedAgentId: managerAgentId,
+      alignmentRationale: `Resume manager after terminal delegation ${childWorkItem.id}`,
+      title: `Review delegated result: ${childWorkItem.title}`.slice(0, 512),
+      description: prompt,
+      definitionRevisionId,
+      sourceCommitSha: managerWorkItem.sourceCommitSha,
+      priority: managerWorkItem.priority,
+      maxAttempts: Math.max(3, managerWorkItem.maxAttempts),
+      idempotencyKey: `delegation-callback:work:${childWorkItem.id}`,
+      workKind: "general",
+      deliveryMode: "none",
+      status: "ready",
+      metadata: {
+        delegationCallback: {
+          childWorkItemId: childWorkItem.id,
+          childAttemptId: childAttempt?.id ?? null,
+          childStatus: childWorkItem.status,
+          outcome: verified ? "verified" : "unsuccessful",
+          ...(verification ? { verificationId: verification.id } : {}),
+          evidenceIds,
+          managerSessionId: managerSession.id,
+          resumeSessionId,
+          managerWorkspaceId: managerWorkspace.id,
+        },
+      },
+    });
+    const suffix = createHash("sha256")
+      .update(`${childWorkItem.id}\0${verification?.id ?? childWorkItem.status}\0${managerAgentId}`)
+      .digest("hex")
+      .slice(0, 32);
+    const sessionId = `sess_callback_${suffix}`;
+    const wakeupId = `wake_callback_${suffix}`;
+    const requestedAt = new Date().toISOString();
+    const queued = getDefaultDb().db.transaction((tx) => {
+      const inserted = tx
+        .insert(wakeupsTable)
+        .values({
+          id: wakeupId,
+          organizationId: this.organizationId,
+          loopId: "manual",
+          source: "continuation",
+          triggerDetail: verified ? "delegation-verified" : "delegation-terminal",
+          reason: `Terminal delegated work ${childWorkItem.id}; resume ${managerAgentId}`,
+          agentId: managerAgentId,
+          payloadJson: JSON.stringify({
+            prompt,
+            adapter: managerSession.adapter,
+            sessionId,
+            workItemId: callbackWorkItem.id,
+            workflowRunId: workflowRun.id,
+            traceId: sessionId,
+            parentAttemptId: childAttempt?.id ?? managerAttempt.id,
+            parentSessionId: managerSession.id,
+            resumeSessionId,
+            resumeWorkspaceId: managerWorkspace.id,
+            managerWorkspaceId: managerWorkspace.id,
+            mustResumeSession: true,
+            childStatus: childWorkItem.status,
+            ...(verification ? { verificationId: verification.id } : {}),
+            evidenceIds,
+          }),
+          status: "queued",
+          idempotencyKey: `delegation-callback:${childWorkItem.id}`,
+          requestedAt,
+          requestedByActorId: childAttempt?.agentId ?? "system/recovery",
+          requestedByActorType: childAttempt ? "agent" : "system",
+        } as never)
+        .onConflictDoNothing()
+        .run();
+      tx.insert(sessionsTable)
+        .values({
+          id: sessionId,
+          organizationId: this.organizationId,
+          wakeupId,
+          agentId: managerAgentId,
+          adapter: managerSession.adapter,
+          runtimeJson: "{}",
+          prompt,
+          configJson: "{}",
+          status: "queued",
+          parentSessionId: managerSession.id,
+        })
+        .onConflictDoNothing()
+        .run();
+      return inserted.changes > 0;
+    });
+    if (!queued) return;
+    await this.executionStore.recordGovernanceEvent({
+      organizationId: this.organizationId,
+      workItemId: childWorkItem.id,
+      attemptId: childAttempt?.id,
+      action: "delegation.callback.queued",
+      decision: "allowed",
+      reason: `Terminal delegation outcome queued for ${managerAgentId}`,
+      metadata: {
+        callbackWorkItemId: callbackWorkItem.id,
+        childStatus: childWorkItem.status,
+        ...(verification ? { verificationId: verification.id } : {}),
+        evidenceIds,
+        managerSessionId: managerSession.id,
+        resumeSessionId,
+        managerWorkspaceId: managerWorkspace.id,
+      },
+    });
+  }
+
+  private async isAuthorizedManager(agentId: string, projectId: string | null) {
+    const [profile] = await getDefaultDb()
+      .db.select({ ceoAgentId: companyProfiles.ceoAgentId })
+      .from(companyProfiles)
+      .where(eq(companyProfiles.organizationId, this.organizationId))
+      .limit(1);
+    if (agentId === profile?.ceoAgentId) return true;
+    if (!projectId) return false;
+    const [assignment] = await getDefaultDb()
+      .db.select({ id: projectAssignments.id })
+      .from(projectAssignments)
+      .where(
+        and(
+          eq(projectAssignments.organizationId, this.organizationId),
+          eq(projectAssignments.projectId, projectId),
+          eq(projectAssignments.agentId, agentId),
+          eq(projectAssignments.role, "manager"),
+          eq(projectAssignments.status, "active"),
+        ),
+      )
+      .limit(1);
+    return Boolean(assignment);
   }
 
   private async persistAttemptOutput(input: {
@@ -1692,6 +3199,8 @@ Complete assigned work with concrete evidence. Report what you did, what remains
     sourceCommit: string;
     branchName: string;
     repositoryWork: boolean;
+    checkerBaseline?: ReadonlyMap<string, string>;
+    ephemeralSecrets?: readonly string[];
   }): Promise<void> {
     const successful = input.result.exitCode === 0 && !input.result.timedOut;
     let artifactDeclarations = declaredArtifacts(input.workItem.metadata);
@@ -1713,8 +3222,28 @@ Complete assigned work with concrete evidence. Report what you did, what remains
     const changedPaths = input.repositoryWork
       ? changedPathsFromStatus((await this.git.status(input.workspacePath)).entries)
       : input.attempt.role === "checker"
-        ? await listWorkspaceFiles(input.workspacePath)
+        ? changedWorkspaceFiles(
+            input.checkerBaseline ?? new Map(),
+            await workspaceFileHashes(input.workspacePath),
+          )
         : artifactDeclarations.map((artifact) => artifact.path);
+    const ephemeralSecrets = [...new Set(input.ephemeralSecrets ?? [])]
+      .filter((secret) => secret.length >= 8)
+      .sort((left, right) => right.length - left.length);
+    assertSecretFreeValue({ artifactDeclarations, changedPaths }, ephemeralSecrets);
+    const workspaceRoot = await realpath(input.workspacePath);
+    for (const outputPath of new Set([
+      ...changedPaths,
+      ...artifactDeclarations.map((artifact) => artifact.path),
+    ])) {
+      const source = await realpath(resolve(workspaceRoot, outputPath)).catch(() => null);
+      if (!source) continue;
+      const scoped = relative(workspaceRoot, source);
+      if (!scoped || scoped.startsWith("..") || isAbsolute(scoped)) {
+        throw new Error("Attempt output path escapes the workspace");
+      }
+      if ((await stat(source)).isFile()) await assertSecretFreeFile(source, ephemeralSecrets);
+    }
     if (input.attempt.role === "checker" && changedPaths.length > 0)
       throw new Error(`checker modified files: ${changedPaths.join(", ")}`);
     const policyDecision = evaluateExecutionPolicy(input.workItem.governance, {
@@ -1733,7 +3262,7 @@ Complete assigned work with concrete evidence. Report what you did, what remains
       });
       throw new Error(`post-run policy denied changes: ${policyDecision.reason}`);
     }
-    if (successful && input.attempt.role === "maker") {
+    if (successful && input.attempt.role === "maker" && input.repositoryWork) {
       await validateEvidencePolicy(
         input.workspacePath,
         input.workItem.metadata,
@@ -1767,6 +3296,7 @@ Complete assigned work with concrete evidence. Report what you did, what remains
     const patch = input.repositoryWork
       ? await this.git.diff(input.workspacePath, input.sourceCommit, commit ?? undefined)
       : "";
+    assertSecretFreeValue(patch, ephemeralSecrets);
     const attemptRoot = resolve(
       process.env.AASPAI_ARTIFACTS_ROOT ?? join(".aaspai", "artifacts"),
       input.attempt.id,
@@ -1775,18 +3305,21 @@ Complete assigned work with concrete evidence. Report what you did, what remains
     const resultPath = join(attemptRoot, "result.json");
     await writeFile(
       resultPath,
-      JSON.stringify(
-        {
-          exitCode: input.result.exitCode,
-          timedOut: input.result.timedOut,
-          summary: input.result.summary ?? null,
-          resultJson: input.result.resultJson ?? null,
-          errorMessage: input.result.errorMessage ?? null,
-          usage: input.result.usage ?? null,
-          costUsd: input.result.costUsd ?? null,
-        },
-        null,
-        2,
+      redactKnownSecrets(
+        JSON.stringify(
+          {
+            exitCode: input.result.exitCode,
+            timedOut: input.result.timedOut,
+            summary: input.result.summary ?? null,
+            resultJson: input.result.resultJson ?? null,
+            errorMessage: input.result.errorMessage ?? null,
+            usage: input.result.usage ?? null,
+            costUsd: input.result.costUsd ?? null,
+          },
+          null,
+          2,
+        ),
+        ephemeralSecrets,
       ),
       "utf8",
     );
@@ -1797,11 +3330,14 @@ Complete assigned work with concrete evidence. Report what you did, what remains
       await this.recordArtifact(input.attempt.id, "patch", patchPath, "text/x-diff");
     }
 
-    const workspaceRoot = await realpath(input.workspacePath);
     let artifactBytes = 0;
     for (const declaration of artifactDeclarations) {
       if (isAbsolute(declaration.path)) throw new Error("Declared artifact path must be relative");
-      const source = await realpath(resolve(workspaceRoot, declaration.path));
+      const source = await realpath(resolve(workspaceRoot, declaration.path)).catch(() => null);
+      if (!source) {
+        if (successful) throw new Error(`Declared artifact does not exist: ${declaration.path}`);
+        continue;
+      }
       const safePath = relative(workspaceRoot, source);
       if (!safePath || safePath.startsWith("..") || isAbsolute(safePath)) {
         throw new Error(`Declared artifact escapes the workspace: ${declaration.path}`);
@@ -1827,6 +3363,13 @@ Complete assigned work with concrete evidence. Report what you did, what remains
         declaration.mediaType,
       );
     }
+    if (successful && input.attempt.role === "maker" && !input.repositoryWork) {
+      await validateEvidencePolicy(
+        input.workspacePath,
+        input.workItem.metadata,
+        artifactDeclarations.map((artifact) => artifact.path),
+      );
+    }
     if (commit) {
       await this.executionStore.recordDeliveryCommit(
         input.workItem.id,
@@ -1835,6 +3378,59 @@ Complete assigned work with concrete evidence. Report what you did, what remains
         input.branchName,
       );
     }
+  }
+
+  private async restorePreviousAttemptArtifacts(
+    attempt: AgentAttempt,
+    workspacePath: string,
+  ): Promise<void> {
+    const priorAttempts = (await this.executionStore.listAttemptsForWorkItem(attempt.workItemId))
+      .filter((candidate) => candidate.attemptNumber < attempt.attemptNumber)
+      .reverse();
+    for (const prior of priorAttempts) {
+      const restored = await this.restoreAttemptArtifacts(prior.id, workspacePath);
+      if (restored > 0) {
+        log.info("restored prior attempt artifacts", {
+          workItemId: attempt.workItemId,
+          attemptId: attempt.id,
+          sourceAttemptId: prior.id,
+          restored,
+        });
+        return;
+      }
+    }
+  }
+
+  private async restoreAttemptArtifacts(
+    sourceAttemptId: string,
+    workspacePath: string,
+  ): Promise<number> {
+    const declaredRoot = resolve(
+      process.env.AASPAI_ARTIFACTS_ROOT ?? join(".aaspai", "artifacts"),
+      sourceAttemptId,
+      "files",
+    );
+    const [artifactRoot, workspaceRoot] = await Promise.all([
+      realpath(declaredRoot).catch(() => null),
+      realpath(workspacePath),
+    ]);
+    if (!artifactRoot) return 0;
+    let restored = 0;
+    for (const artifact of await this.executionStore.listArtifacts(sourceAttemptId)) {
+      const source = await realpath(artifact.path).catch(() => null);
+      if (!source) continue;
+      const scoped = relative(artifactRoot, source);
+      if (!scoped || scoped.startsWith("..") || isAbsolute(scoped)) continue;
+      const destination = resolve(workspaceRoot, scoped);
+      const destinationScope = relative(workspaceRoot, destination);
+      if (!destinationScope || destinationScope.startsWith("..") || isAbsolute(destinationScope)) {
+        throw new Error(`Attempt artifact escapes the workspace: ${artifact.path}`);
+      }
+      await mkdir(dirname(destination), { recursive: true });
+      await copyFile(source, destination);
+      restored++;
+    }
+    return restored;
   }
 
   private async recordArtifact(
@@ -1918,12 +3514,23 @@ Complete assigned work with concrete evidence. Report what you did, what remains
       await this.executionStore.createRepository({
         id: repositoryId,
         organizationId: this.organizationId,
-        projectId,
+        projectId: null,
         purpose: "blueprint",
         provider: "local",
         localPath: process.env.AASPAI_DEFINITIONS_DIR ?? ".",
         defaultBranch: "main",
       });
+    } else if (repository[0].projectId !== null) {
+      await handle.db
+        .update(repositories)
+        .set({ projectId: null, updatedAt: new Date().toISOString() })
+        .where(
+          and(
+            eq(repositories.organizationId, this.organizationId),
+            eq(repositories.id, repositoryId),
+          ),
+        )
+        .run();
     }
     const revision = await handle.db
       .select()
@@ -1944,36 +3551,173 @@ Complete assigned work with concrete evidence. Report what you did, what remains
     return { goalId, projectId, repositoryId, definitionRevisionId };
   }
 
-  private async markFailed(wakeupId: string, reason: string): Promise<void> {
+  private async markFailed(
+    wakeupId: string,
+    reason: string,
+    snapshot?: { claimedAt: string | null; heartbeatAt: string | null },
+  ): Promise<boolean> {
     const handle = getDefaultDb();
-    await handle.db
+    const changed = await handle.db
       .update(wakeupsTable)
       .set({
         status: "failed",
         finishedAt: new Date().toISOString(),
         error: reason,
       } as never)
-      .where(eq(wakeupsTable.id, wakeupId));
+      .where(this.wakeupClaimGuard(wakeupId, snapshot))
+      .returning({ id: wakeupsTable.id });
+    return changed.length === 1;
+  }
+
+  private async failDurableWakeupWork(wakeupId: string, reason: string): Promise<void> {
+    const [wakeup] = await getDefaultDb()
+      .db.select({ payloadJson: wakeupsTable.payloadJson })
+      .from(wakeupsTable)
+      .where(eq(wakeupsTable.id, wakeupId))
+      .limit(1);
+    const request = (safeJsonParse(wakeup?.payloadJson ?? null) ?? {}) as {
+      workItemId?: string;
+      managerAgentId?: string;
+      managerWorkItemId?: string;
+      managerProviderSessionId?: string;
+      managerWorkspaceId?: string;
+      parentAttemptId?: string;
+      parentSessionId?: string;
+      resumeWorkspaceId?: string;
+      mustResumeSession?: boolean;
+    };
+    if (!request.workItemId) return;
+    const workItem = await this.executionStore.getWorkItem(request.workItemId);
+    if (workItem && !TERMINAL_WORK_ITEM_STATUSES.has(workItem.status)) {
+      await this.executionStore.updateWorkItemStatus(workItem.id, "failed", {
+        blockedReason: reason,
+      });
+    }
+    await this.settleDelegationLifecycle(request);
   }
 
   private async recoverStaleClaims(): Promise<void> {
+    this.lastRecoveryAt = Date.now();
     const handle = getDefaultDb();
-    const staleMs = 5 * 60_000;
+    const execution = new ExecutionStore(handle.db);
+    const staleMs = STALE_CLAIM_MS;
     const cutoff = new Date(Date.now() - staleMs).toISOString();
-    const lostAttempts = await new ExecutionStore(handle.db).reconcileLostAttempts(cutoff);
-    if (lostAttempts > 0) log.warn("reconciled lost execution attempts", { lostAttempts, staleMs });
+    const lostAttempts = await execution.reconcileLostAttempts(cutoff, this.organizationId);
     const stale = await handle.db
       .select()
       .from(wakeupsTable)
-      .where(eq(wakeupsTable.status, "claimed"));
+      .where(
+        and(
+          eq(wakeupsTable.organizationId, this.organizationId),
+          eq(wakeupsTable.status, "claimed"),
+        ),
+      );
 
     let recovered = 0;
     for (const row of stale) {
-      if (!row.claimedAt) continue;
-      if (row.claimedAt > cutoff) continue;
-      await this.markFailed(row.id, "stale claim: worker died before completing wakeup");
+      const claimActivity = row.heartbeatAt ?? row.claimedAt;
+      if (!claimActivity || claimActivity > cutoff) continue;
+      const payload = (safeJsonParse(row.payloadJson) ?? {}) as Record<string, unknown> & {
+        adapter?: string;
+        runtime?: unknown;
+        prompt?: string;
+        workItemId?: string;
+        workflowRunId?: string;
+        sessionId?: string;
+        resumeSessionId?: string;
+        resumeWorkspaceId?: string;
+        mustResumeSession?: boolean;
+      };
+      if (typeof payload.workItemId === "string") {
+        const workItem = await execution.getWorkItem(payload.workItemId);
+        const [claim] = await handle.db
+          .select({ claimedByAttemptId: executionWorkItems.claimedByAttemptId })
+          .from(executionWorkItems)
+          .where(eq(executionWorkItems.id, payload.workItemId))
+          .limit(1);
+        const currentAttempt = claim?.claimedByAttemptId
+          ? await execution.getAttempt(claim.claimedByAttemptId)
+          : null;
+        const lost = (await execution.listAttemptsForWorkItem(payload.workItemId))
+          .filter((attempt) => attempt.status === "lost")
+          .at(-1);
+        if (
+          workItem &&
+          lost &&
+          claim?.claimedByAttemptId === lost.id &&
+          lost.attemptNumber < workItem.maxAttempts
+        ) {
+          if (
+            !(await this.markFailed(
+              row.id,
+              `lost attempt ${lost.attemptNumber}; retry queued`,
+              row,
+            ))
+          ) {
+            continue;
+          }
+          const providerSession = lost.harnessSessionId
+            ? await execution.getHarnessSession(lost.harnessSessionId)
+            : null;
+          await execution.updateWorkItemStatus(workItem.id, "ready", {
+            retryAfter: new Date().toISOString(),
+          });
+          await this.queueRetryWakeup(row, payload, lost.attemptNumber + 1, {
+            ...(providerSession?.sessionId ? { resumeSessionId: providerSession.sessionId } : {}),
+            failure:
+              providerSession?.errorMessage ??
+              providerSession?.errorCode ??
+              "The worker stopped before the attempt reached a terminal result",
+          });
+          recovered++;
+          continue;
+        }
+        if (workItem?.status === "completed") {
+          if (await this.finishWakeup(row.id, currentAttempt?.harnessSessionId, row)) recovered++;
+          continue;
+        }
+        if (
+          currentAttempt &&
+          ["preparing", "running", "cancelling"].includes(currentAttempt.status)
+        ) {
+          continue;
+        }
+        if (
+          !(await this.markFailed(row.id, "stale claim: worker died before completing wakeup", row))
+        ) {
+          continue;
+        }
+        if (currentAttempt?.status === "queued") {
+          await execution.transitionAttempt(currentAttempt.id, "cancelled");
+        }
+        if (currentAttempt && claim?.claimedByAttemptId === currentAttempt.id) {
+          await handle.db
+            .update(resourceLocks)
+            .set({ releasedAt: new Date().toISOString() })
+            .where(
+              and(
+                eq(resourceLocks.ownerAttemptId, currentAttempt.id),
+                isNull(resourceLocks.releasedAt),
+              ),
+            );
+        }
+        await this.failDurableWakeupWork(
+          row.id,
+          "stale claim: worker died before completing wakeup",
+        );
+        recovered++;
+        continue;
+      }
+      if (
+        !(await this.markFailed(row.id, "stale claim: worker died before completing wakeup", row))
+      ) {
+        continue;
+      }
+      await this.failDurableWakeupWork(row.id, "stale claim: worker died before completing wakeup");
       recovered++;
     }
+    await this.recoverDelegationCallbacks();
+    if (lostAttempts > 0) log.warn("reconciled lost execution attempts", { lostAttempts, staleMs });
     if (recovered > 0) {
       log.warn("recovered stale wakeup claims on startup", { recovered, staleMs });
     }

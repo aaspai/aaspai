@@ -56,6 +56,32 @@ describe("output evidence policy", () => {
     ).rejects.toThrow("Unsupported");
   });
 
+  it("checks only lead-table rows for citations", async () => {
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      `${root}/leads.md`,
+      "| Lead | Source |\n|---|---|\n| Acme | https://acme.test |\n\n| Step | Owner |\n|---|---|\n| Review | Founder |\n",
+    );
+    await expect(
+      validateEvidencePolicy(root, { evidencePolicy: { citationPaths: ["leads.md"] } }, [
+        "leads.md",
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("checks each headed lead section for its citation", async () => {
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      `${root}/leads.md`,
+      "## Lead 1: Acme\n- URL: https://acme.test\n- Fit: Good\n\n## Lead 2: Beta\n- URL: https://beta.test\n",
+    );
+    await expect(
+      validateEvidencePolicy(root, { evidencePolicy: { citationPaths: ["leads.md"] } }, [
+        "leads.md",
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
   it("requires evidence files to be exported as durable artifacts", async () => {
     await mkdir(root, { recursive: true });
     await writeFile(`${root}/leads.md`, "- Zedblock https://zedblock.com\n", "utf8");
@@ -67,5 +93,28 @@ describe("output evidence policy", () => {
         },
       }),
     ).rejects.toThrow("not a declared durable artifact");
+  });
+
+  it("allows a campaign to propose a case study without presenting it as fact", async () => {
+    await mkdir(root, { recursive: true });
+    await writeFile(`${root}/campaign.md`, "Content mix: 30% case study, 70% educational posts.\n");
+    await expect(
+      validateEvidencePolicy(root, { evidencePolicy: { commercialClaimPaths: ["campaign.md"] } }, [
+        "campaign.md",
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not treat an operating-report heading as a list of uncited leads", async () => {
+    await mkdir(root, { recursive: true });
+    await writeFile(
+      `${root}/operating-report.md`,
+      "## Lead research\n- Completed the declared lead-list artifact\n- Awaiting manager review\n",
+    );
+    await expect(
+      validateEvidencePolicy(root, { evidencePolicy: { scanAllArtifacts: true } }, [
+        "operating-report.md",
+      ]),
+    ).resolves.toBeUndefined();
   });
 });

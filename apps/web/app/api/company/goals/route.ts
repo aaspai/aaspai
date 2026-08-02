@@ -1,5 +1,7 @@
+import { CompanyCommandService } from "@aaspai/company";
+import { getDefaultDb, runMigrations } from "@aaspai/db";
 import { NextResponse } from "next/server";
-import { createFrontendGoal } from "@/lib/company-goals";
+import { ensureWorkspaceEnv } from "@/lib/aaspai";
 import { currentUser } from "@/lib/local-auth";
 
 export async function POST(request: Request) {
@@ -17,14 +19,17 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const result = await createFrontendGoal({
+  ensureWorkspaceEnv();
+  const db = getDefaultDb();
+  runMigrations(db);
+  const result = await new CompanyCommandService(db.db).execute({
+    type: "create_objective",
     organizationId: user.organizationId,
-    companyName: user.companyName,
+    actorId: user.id,
+    idempotencyKey: `web-objective:${user.organizationId}:${body.title.trim().toLowerCase()}`,
     title: body.title.trim(),
-    description: typeof body.description === "string" ? body.description : undefined,
-    projectTitle: typeof body.projectTitle === "string" ? body.projectTitle : undefined,
-    mandate: body.mandate,
-    requestedByActorId: user.id,
+    description: typeof body.description === "string" ? body.description : "",
+    successCriteria: [body.mandate],
   });
   return NextResponse.json({ data: result }, { status: 201 });
 }

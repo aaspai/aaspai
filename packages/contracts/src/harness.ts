@@ -25,7 +25,6 @@ export const ADAPTER_TYPE_VALUES = [
   "openclaw_gateway",
   "hermes_gateway",
   "dry_run_local",
-  "opencode_local",
   "opencode_cli",
 ] as const;
 

@@ -68,4 +68,13 @@ describe("Logger", () => {
     expect(captured).toBe(""); // info should not reach stdout at warn level
     spy.mockRestore();
   });
+
+  it("stops writing after the output pipe closes", () => {
+    const writeSpy = vi.spyOn(process.stdout, "write");
+    process.stdout.emit("error", Object.assign(new Error("pipe closed"), { code: "EPIPE" }));
+
+    expect(() => rootLogger.info("discarded after pipe close")).not.toThrow();
+    expect(writeSpy).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+  });
 });

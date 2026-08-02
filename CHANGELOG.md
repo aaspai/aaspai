@@ -7,6 +7,13 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Verified autonomous-company work cycle** — local OpenCode managers can apply
+  governed company actions synchronously, delegate to separate employee sessions,
+  require independent checking, and resume the original manager conversation with
+  durable child evidence.
+- **Long-running execution supervision** — attempt heartbeats, progress-based stall
+  detection, immutable retry sessions, interrupt/resume, live execution lanes, and
+  recovery controls keep multi-hour CLI work visible without an arbitrary deadline.
 - **Running-company command center** — onboarding now creates only the CEO and
   launches real company work; dedicated goal, work-item, employee, session, and
   governance pages expose the complete operating trail.

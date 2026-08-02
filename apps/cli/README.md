@@ -54,8 +54,8 @@ required, no network call. Switch to a real LLM by setting
 - **Two-storage tier** — your project (versioned) vs. `.aaspai/`
   (gitignored). The CLI enforces the boundary.
 - **Eight harness adapters** — `dry_run_local`, `claude_local`,
-  `codex_local`, `cursor_local`, `cursor_cloud`, `opencode_local`,
-  `opencode_cli`, plus `dry_run_local` as a default. Same agent
+  `codex_local`, `cursor_local`, `cursor_cloud`, `opencode_cli`, plus
+  gateway stubs. Same agent
   contract, swap adapters per agent.
 - **Seven starter loops** — `daily-triage`, `pr-babysitter`,
   `ci-sweeper`, `dependency-sweeper`, `changelog-drafter`,

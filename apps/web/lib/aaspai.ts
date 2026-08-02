@@ -18,6 +18,11 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
+  CompanyCommandService,
+  type HumanInboxItem,
+  OperationalGovernanceService,
+} from "@aaspai/company";
+import {
   type AutonomyChangeRequest,
   type AutonomyProposal,
   autonomyChangeRequestSchema,
@@ -64,6 +69,7 @@ import {
 } from "@aaspai/file-loader";
 import type { KnowledgeSnapshot } from "@aaspai/knowledge";
 import { createKnowledgeCurator } from "@aaspai/knowledge";
+import { type ObservedExecutionEvent, observeExecution } from "@aaspai/observability";
 import { asc, desc, eq } from "drizzle-orm";
 
 /**
@@ -117,6 +123,19 @@ export function isAaspaiWorkspace(): boolean {
     existsSync(join(root, DEFAULT_JSON_CONFIG_PATH)) ||
     existsSync(join(root, ".aaspai", "state.db"))
   );
+}
+
+export async function getStrategicSummary() {
+  ensureWorkspaceEnv();
+  if (!isAaspaiWorkspace()) return null;
+  const handle = getDefaultDb();
+  runMigrations(handle);
+  const rows = await handle.db
+    .select({ organizationId: goals.organizationId })
+    .from(goals)
+    .limit(1);
+  const organizationId = rows[0]?.organizationId;
+  return organizationId ? new CompanyCommandService(handle.db).getSummary(organizationId) : null;
 }
 
 export async function listMemoryRecords(
@@ -716,6 +735,15 @@ export interface ExecutionAttemptDetail {
     payload: Record<string, unknown>;
   }>;
   artifacts: Record<string, unknown>[];
+  timeline: ObservedExecutionEvent[];
+  observer: {
+    phase: string;
+    lastProgressAt: string | null;
+    lastProgressAgeMs: number | null;
+    stalled: boolean;
+    companyEvents: number;
+    workEvents: number;
+  };
 }
 
 export async function getExecutionAttemptDetail(
@@ -794,6 +822,33 @@ export async function getExecutionAttemptDetail(
     .from(artifacts)
     .where(eq(artifacts.attemptId, id))
     .orderBy(asc(artifacts.createdAt));
+  const sessionEventRows = attempt.harnessSessionId
+    ? await handle.db
+        .select()
+        .from(sessionEvents)
+        .where(eq(sessionEvents.sessionId, attempt.harnessSessionId))
+        .orderBy(asc(sessionEvents.seq))
+    : [];
+  const timeline = observeExecution({
+    executionEvents: eventRows.map((event) => ({
+      id: event.id,
+      seq: event.seq,
+      ts: event.ts,
+      type: event.type,
+      payload: safeJson(event.payloadJson) ?? {},
+    })),
+    sessionEvents: sessionEventRows.map((event) => ({
+      id: event.id,
+      seq: event.seq,
+      ts: event.ts,
+      kind: event.kind,
+      payload: safeJson(event.payloadJson) ?? {},
+    })),
+  });
+  const lastProgressAt = timeline.at(-1)?.ts ?? attempt.startedAt ?? attempt.createdAt;
+  const lastProgressAgeMs = lastProgressAt
+    ? Math.max(0, Date.now() - new Date(lastProgressAt).getTime())
+    : null;
 
   return {
     attempt: {
@@ -834,7 +889,28 @@ export async function getExecutionAttemptDetail(
       payload: safeJson(event.payloadJson) ?? {},
     })),
     artifacts: artifactRows,
+    timeline,
+    observer: {
+      phase: attemptPhase(attempt.status, timeline),
+      lastProgressAt,
+      lastProgressAgeMs,
+      stalled:
+        ["preparing", "running", "cancelling"].includes(attempt.status) &&
+        lastProgressAgeMs !== null &&
+        lastProgressAgeMs >= 15 * 60_000,
+      companyEvents: timeline.filter((event) => event.lane === "company").length,
+      workEvents: timeline.filter((event) => event.lane === "work").length,
+    },
   };
+}
+
+function attemptPhase(status: string, timeline: ObservedExecutionEvent[]): string {
+  if (["succeeded", "failed", "cancelled", "timed_out", "lost"].includes(status)) return "terminal";
+  if (timeline.some((event) => event.lane === "company" && event.status === "started"))
+    return "applying company action";
+  if (timeline.some((event) => event.kind === "tool_call")) return "working with tools";
+  if (status === "running") return "agent reasoning";
+  return status;
 }
 
 export interface CompanyGoalSummary {
@@ -941,6 +1017,7 @@ export interface CompanyOverview {
   }>;
   workItems: CompanyWorkItemSummary[];
   approvals: CompanyApprovalSummary[];
+  inbox: HumanInboxItem[];
   runs: CompanyRunSummary[];
   attempts: ExecutionAttemptSummary[];
   evidence: CompanyEvidenceSummary[];
@@ -1040,6 +1117,9 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
   const health = organizationId
     ? await new ExecutionStore(db).getCompanyHealth(organizationId)
     : null;
+  const inbox = organizationId
+    ? await new OperationalGovernanceService(db).getHumanInbox(organizationId)
+    : [];
   const projectById = new Map(companyProjects.map((project) => [project.id, project]));
   const repositoryById = new Map(
     companyRepositories.map((repository) => [repository.id, repository]),
@@ -1181,6 +1261,7 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
       createdAt: revision.createdAt,
     })),
     workItems,
+    inbox,
     approvals: companyApprovals.map((approval) => ({
       id: approval.id,
       workItemId: approval.workItemId,

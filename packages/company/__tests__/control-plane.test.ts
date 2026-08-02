@@ -43,6 +43,11 @@ describe("Layer 4 company control plane", () => {
           capability: "security",
           evidencePolicy: { citationPaths: ["evidence.md"] },
         });
+        expect(input).toMatchObject({
+          milestoneId: "milestone/security",
+          processBindingId: "binding/security",
+          parentWorkItemId: "work/parent",
+        });
         return { id: "work/security-1" };
       },
     });
@@ -69,6 +74,9 @@ describe("Layer 4 company control plane", () => {
       projectId: "project/security",
       repositoryId: "repo/security",
       definitionRevisionId: "revision/security",
+      milestoneId: "milestone/security",
+      processBindingId: "binding/security",
+      parentWorkItemId: "work/parent",
       metadata: {
         assignedAgentId: "agent/attacker",
         risk: "low",

@@ -78,8 +78,6 @@ import { getLogger } from "@aaspai/observability";
 const log = getLogger("harness.opencode-cli");
 const MAX_RESULT_TEXT_BYTES = 1024 * 1024;
 
-const CLI_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
-
 const opencodeCliConfigSchema = {
   model: "opencode-go/mimo-v2.5",
   title: "OpenCode Session",
@@ -214,7 +212,7 @@ interface ResolvedConfig {
   pureEnv: boolean;
 }
 
-function resolveConfig(ctx: AdapterExecutionContext): ResolvedConfig {
+function resolveConfig(ctx: { config: unknown }): ResolvedConfig {
   const cfg = (ctx.config as Record<string, unknown>) ?? {};
   const shareModeRaw = asString(cfg.shareMode);
   const shareMode =
@@ -682,6 +680,7 @@ async function runOpencodeCli(
   if (config.logLevel) args.push("--log-level", config.logLevel);
   if (config.printLogs) args.push("--print-logs");
   if (config.workingDir) args.push("--dir", config.workingDir);
+  else if (options.resumeSessionId && !config.attachServer) args.push("--dir", cwd);
   if (config.attachServer) args.push("--attach", config.attachServer);
   for (const a of config.attachments) args.push("--file", a);
   if (options.resumeSessionId) {
@@ -750,7 +749,7 @@ async function runOpencodeCli(
     let inputTokens = 0;
     let outputTokens = 0;
     let cost = 0;
-    let timedOut = false;
+    const timedOut = false;
     let closed = false;
     let thinkingEventCount = 0;
     let toolEventCount = 0;
@@ -783,50 +782,6 @@ async function runOpencodeCli(
       }
     };
 
-    const timer = setTimeout(() => {
-      timedOut = true;
-      log.warn("opencode cli timeout, killing", { cli, timeoutMs: CLI_TIMEOUT_MS });
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* ignore */
-      }
-      setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* ignore */
-        }
-        // If even SIGKILL doesn't work, resolve with what we have so
-        // the session doesn't hang the worker.
-        setTimeout(
-          () =>
-            resolve({
-              sessionId,
-              text: textParts.join(""),
-              inputTokens,
-              outputTokens,
-              cost,
-              exitCode: null,
-              signal: "SIGKILL" as NodeJS.Signals,
-              timedOut: true,
-              errorMessage:
-                stderrBuf.trim().slice(0, 2_048) ||
-                "opencode killed by SIGKILL (hard-timeout fallback)",
-              resumedSession: Boolean(options.resumeSessionId),
-              continuedLast: config.continueLast,
-              attached: Boolean(config.attachServer),
-              cliSessionId: sessionId,
-              thinkingEventCount,
-              toolEventCount,
-              toolsInvoked: [...toolsInvoked],
-              companyActions: [...companyActions],
-            }),
-          1000,
-        );
-      }, 5_000);
-    }, CLI_TIMEOUT_MS);
-    timer.unref();
     if (signal?.aborted) abort();
     else signal?.addEventListener("abort", abort, { once: true });
 
@@ -888,6 +843,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "assistant",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             text: chunk,
             delta: true,
           })}\n`,
@@ -896,7 +852,7 @@ async function runOpencodeCli(
         emitProgress({
           kind: "text_delta",
           ts: new Date().toISOString(),
-          sessionId: ev.sessionID,
+          sessionId,
           text: chunk,
         });
       } else if (
@@ -910,6 +866,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "thinking",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             text: ev.part.text,
             delta: true,
           })}\n`,
@@ -917,7 +874,7 @@ async function runOpencodeCli(
         emitProgress({
           kind: "thinking_delta",
           ts: new Date().toISOString(),
-          sessionId: ev.sessionID,
+          sessionId,
           text: ev.part.text,
         });
       } else if (ev.type === "tool_use" || ev.type === "tool") {
@@ -931,6 +888,11 @@ async function runOpencodeCli(
           ev.part?.state?.input ??
           {};
         const toolKey = `${callId ?? "no-id"}:${toolName}`;
+        const firstToolEvent = !toolsDispatched.has(toolKey);
+        if (firstToolEvent) {
+          toolsDispatched.add(toolKey);
+          toolsInvoked.push(toolName);
+        }
         if (
           toolName === "company_action" &&
           status === "completed" &&
@@ -956,6 +918,7 @@ async function runOpencodeCli(
                 ? "tool_result"
                 : "tool_call",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             name: toolName,
             id: callId,
             status: status as "started" | "completed" | "failed" | "cancelled",
@@ -966,7 +929,7 @@ async function runOpencodeCli(
         emitProgress({
           kind: "tool_event",
           ts: new Date().toISOString(),
-          sessionId: ev.sessionID,
+          sessionId,
           name: toolName,
           id: callId,
           status,
@@ -979,17 +942,15 @@ async function runOpencodeCli(
         // dispatcher gets the call even if the CLI reports the
         // tool as already-completed. Each tool is dispatched at
         // most once per run (deduped by callId+name).
-        if (options.tools && !toolsDispatched.has(`${callId ?? "no-id"}:${toolName}`)) {
-          toolsDispatched.add(`${callId ?? "no-id"}:${toolName}`);
+        if (options.tools && firstToolEvent) {
           // Fire-and-forget — the opencode CLI continues its own
           // tool loop, so the dispatcher result is advisory. The
           // session layer (or a future "approval" gate) decides
           // whether to short-circuit.
-          toolsInvoked.push(toolName);
           void options.tools
             .invoke(toolName, toolInput, {
               callId,
-              sessionId: ev.sessionID,
+              sessionId,
             })
             .then((output) => {
               emitLog(
@@ -997,6 +958,7 @@ async function runOpencodeCli(
                 `${JSON.stringify({
                   kind: "tool_result",
                   ts: new Date().toISOString(),
+                  sessionID: sessionId,
                   name: toolName,
                   id: callId,
                   status: "completed",
@@ -1006,7 +968,7 @@ async function runOpencodeCli(
               emitProgress({
                 kind: "tool_event",
                 ts: new Date().toISOString(),
-                sessionId: ev.sessionID,
+                sessionId,
                 name: toolName,
                 id: callId,
                 status: "completed",
@@ -1019,6 +981,7 @@ async function runOpencodeCli(
                 `${JSON.stringify({
                   kind: "tool_result",
                   ts: new Date().toISOString(),
+                  sessionID: sessionId,
                   name: toolName,
                   id: callId,
                   status: "failed",
@@ -1052,6 +1015,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "result",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             summary: textParts.join("").slice(0, 200),
             tokens,
             cost,
@@ -1074,6 +1038,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "init",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             event: "error",
             errorMessage: msg,
           })}\n`,
@@ -1084,6 +1049,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "init",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             event: ev.type,
           })}\n`,
         );
@@ -1091,14 +1057,12 @@ async function runOpencodeCli(
     }
 
     child.on("error", (err) => {
-      clearTimeout(timer);
       cleanup();
       reject(err);
     });
 
     child.on("close", async (code, closeSignal) => {
       closed = true;
-      clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
       cleanup();
       // Unregister from the runningSessions map so cancel() won't find a dead child.
@@ -1216,6 +1180,11 @@ async function runOpencodeThroughRuntime(input: {
         event.part?.state?.input ??
         {};
       const toolKey = `${callId}:${toolName}`;
+      const firstToolEvent = !toolsDispatched.has(toolKey);
+      if (firstToolEvent) {
+        toolsDispatched.add(toolKey);
+        toolsInvoked.push(toolName);
+      }
       const status = String(event.part?.state?.status ?? "started");
       if (
         toolName === "company_action" &&
@@ -1234,14 +1203,12 @@ async function runOpencodeThroughRuntime(input: {
             error instanceof Error ? error.message : "company_action input is invalid";
         }
       }
-      if (input.tools && !toolsDispatched.has(`${callId}:${toolName}`)) {
-        toolsDispatched.add(`${callId}:${toolName}`);
-        toolsInvoked.push(toolName);
+      if (input.tools && firstToolEvent) {
         pendingTools = pendingTools.then(async () => {
           try {
             const output = await input.tools?.invoke(toolName, toolInput, {
               callId,
-              sessionId: event.sessionID,
+              sessionId,
             });
             await input.onLog?.(
               "stdout",
@@ -1295,7 +1262,6 @@ async function runOpencodeThroughRuntime(input: {
     cwd: input.cwd,
     env: input.env,
     signal: input.signal,
-    timeoutMs: CLI_TIMEOUT_MS,
     onLog: async (stream, chunk) => {
       if (stream === "stdout") parse(chunk);
       else if (!errorMessage) errorMessage = chunk.trim().split(/\r?\n/).find(Boolean);
@@ -1583,6 +1549,7 @@ export function stopOpencodeServe(workspaceKey: string): void {
 
 export async function runOpencodeHelloProbe(opts: {
   cli?: string;
+  commandArgs?: string[];
   model?: string;
   cwd?: string;
   expectedReply?: string;
@@ -1595,6 +1562,7 @@ export async function runOpencodeHelloProbe(opts: {
     const child = spawn(
       cli,
       [
+        ...(opts.commandArgs ?? []),
         "run",
         "--format",
         "json",
@@ -1666,11 +1634,15 @@ export async function runOpencodeHelloProbe(opts: {
   });
 }
 
-export async function listOpencodeModels(opts: { cli?: string; cwd?: string }): Promise<string[]> {
+export async function listOpencodeModels(opts: {
+  cli?: string;
+  commandArgs?: string[];
+  cwd?: string;
+}): Promise<string[]> {
   const cli = await resolveOpencodeBinary(opts.cli);
   try {
     const { stdout } = await new Promise<{ stdout: string; stderr: string }>((res, rej) => {
-      const p = spawn(cli, ["models"], {
+      const p = spawn(cli, [...(opts.commandArgs ?? []), "models"], {
         cwd: opts.cwd ?? process.cwd(),
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
@@ -2706,7 +2678,8 @@ export const opencodeCli: ServerAdapterModule = {
       },
     };
   },
-  async testEnvironment() {
+  async testEnvironment(ctx) {
+    const config = resolveConfig(ctx);
     const checks: Array<{
       name: string;
       level: "info" | "warn" | "error";
@@ -2718,8 +2691,8 @@ export const opencodeCli: ServerAdapterModule = {
       const { execFile } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const exec = promisify(execFile);
-      const cli = await resolveOpencodeBinary(process.env.OPENCODE_CLI);
-      const { stdout } = await exec(cli, ["--version"]);
+      const cli = await resolveOpencodeBinary(config.command);
+      const { stdout } = await exec(cli, [...config.commandArgs, "--version"], { cwd: ctx.cwd });
       checks.push({ name: "opencode_cli", level: "info", message: `${cli} ${stdout.trim()}` });
     } catch (err) {
       checks.push({
@@ -2729,9 +2702,38 @@ export const opencodeCli: ServerAdapterModule = {
       });
       return { ok: false, checks };
     }
-    // 2. models list
+    // 2. native CLI authentication state
     try {
-      const models = await listOpencodeModels({});
+      const { readFile } = await import("node:fs/promises");
+      const { homedir } = await import("node:os");
+      const { join } = await import("node:path");
+      const dataHome = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
+      const auth = JSON.parse(
+        await readFile(
+          process.env.OPENCODE_AUTH_PATH ?? join(dataHome, "opencode", "auth.json"),
+          "utf8",
+        ),
+      ) as Record<string, unknown>;
+      if (Object.keys(auth).length === 0) throw new Error("auth store is empty");
+      checks.push({
+        name: "opencode_cli.auth",
+        level: "info",
+        message: "OpenCode native authentication is configured",
+      });
+    } catch (err) {
+      checks.push({
+        name: "opencode_cli.auth",
+        level: "error",
+        message: `OpenCode is not authenticated: ${(err as Error).message}`,
+      });
+    }
+    // 3. models list
+    try {
+      const models = await listOpencodeModels({
+        cli: config.command,
+        commandArgs: config.commandArgs,
+        cwd: ctx.cwd,
+      });
       if (models.length > 0) {
         checks.push({
           name: "opencode_cli.models",
@@ -2758,7 +2760,12 @@ export const opencodeCli: ServerAdapterModule = {
     const allInfo = checks.every((c) => c.level === "info");
     if (allInfo) {
       try {
-        const probe = await runOpencodeHelloProbe({});
+        const probe = await runOpencodeHelloProbe({
+          cli: config.command,
+          commandArgs: config.commandArgs,
+          model: config.model,
+          cwd: ctx.cwd,
+        });
         checks.push({
           name: "opencode_cli.hello",
           level: probe.ok ? "info" : "warn",
@@ -2882,11 +2889,13 @@ export const opencodeCli: ServerAdapterModule = {
         "grep",
         "list",
         "webfetch",
+        "websearch",
         "todowrite",
         "task",
         "skill",
         "lsp",
         "company_action",
+        "browser_snapshot",
       ],
       supportsCancel: true,
       supportsCompact: true,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { DbHandle } from "@aaspai/db";
-import { createDb, runMigrations } from "@aaspai/db";
+import { agentAttempts, createDb, eq, runMigrations, sessionEvents, sessions } from "@aaspai/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecutionStore } from "../src/store";
 
@@ -48,11 +48,18 @@ describe("ExecutionStore", () => {
       sourcePath: "company",
       contentHash: "sha256:definitions",
     });
+    const run = await store.createWorkflowRun({
+      organizationId,
+      goalId: goal.id,
+      definitionRevisionId: revision.id,
+      idempotencyKey: "run:first-slice",
+    });
     const workItem = await store.createWorkItem({
       organizationId,
       goalId: goal.id,
       projectId: project.id,
       repositoryId: repository.id,
+      workflowRunId: run.id,
       title: "Implement the first slice",
       definitionRevisionId: revision.id,
       idempotencyKey: "work:first-slice",
@@ -70,12 +77,6 @@ describe("ExecutionStore", () => {
       id: workItem.id,
       metadata: { priority: "high" },
     });
-    const run = await store.createWorkflowRun({
-      organizationId,
-      goalId: goal.id,
-      definitionRevisionId: revision.id,
-      idempotencyKey: "run:first-slice",
-    });
     const attempt = await store.createAttempt({
       organizationId,
       workflowRunId: run.id,
@@ -88,6 +89,15 @@ describe("ExecutionStore", () => {
     expect(JSON.parse(workItem.metadataJson)).toEqual({ priority: "high" });
     expect(await store.claimWorkItem(workItem.id, attempt.id)).toBe(true);
     expect(await store.claimWorkItem(workItem.id, attempt.id)).toBe(false);
+    await expect(store.getWorkItem(workItem.id)).resolves.toMatchObject({
+      assignedAgentId: "agent_ceo",
+      claimedByAttemptId: attempt.id,
+      claimedAt: expect.any(String),
+    });
+    await expect(store.getWorkflowRun(run.id)).resolves.toMatchObject({
+      status: "running",
+      startedAt: expect.any(String),
+    });
 
     expect((await store.transitionAttempt(attempt.id, "preparing")).status).toBe("preparing");
     expect((await store.transitionAttempt(attempt.id, "running")).startedAt).toEqual(
@@ -294,6 +304,37 @@ describe("ExecutionStore", () => {
     expect(results.filter((lock) => lock === null)).toHaveLength(1);
   });
 
+  it("heartbeats active attempts and renews their scheduler leases", async () => {
+    const attempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_heartbeat",
+      workItemId: "work_heartbeat",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+      id: "attempt_heartbeat",
+    });
+    await store.transitionAttempt(attempt.id, "preparing");
+    await store.transitionAttempt(attempt.id, "running");
+    const lock = await store.acquireResourceLock({
+      organizationId: "org_test",
+      resourceType: "workspace",
+      resourceId: "workspace:attempt_heartbeat",
+      ownerAttemptId: attempt.id,
+      leaseExpiresAt: "2026-07-23T00:00:00.000Z",
+    });
+
+    await expect(store.heartbeatAttempt(attempt.id)).resolves.toBe(true);
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({
+      heartbeatAt: expect.any(String),
+    });
+    await expect(
+      store.findResourceLock("org_test", "workspace", "workspace:attempt_heartbeat"),
+    ).resolves.toMatchObject({
+      id: lock?.id,
+      leaseExpiresAt: expect.not.stringMatching(/^2026-07-23/),
+    });
+  });
+
   it("marks stale preparing and running attempts as lost", async () => {
     const attempt = await store.createAttempt({
       organizationId: "org_test",
@@ -305,10 +346,217 @@ describe("ExecutionStore", () => {
     });
     await store.transitionAttempt(attempt.id, "preparing");
     await store.transitionAttempt(attempt.id, "running");
+    await handle.db
+      .update(agentAttempts)
+      .set({
+        startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+        heartbeatAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      })
+      .where(eq(agentAttempts.id, attempt.id));
+    await store.acquireResourceLock({
+      organizationId: "org_test",
+      resourceType: "workspace",
+      resourceId: "workspace:attempt_lost",
+      ownerAttemptId: attempt.id,
+      leaseExpiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    });
 
-    await expect(
-      store.reconcileLostAttempts(new Date(Date.now() + 60_000).toISOString()),
-    ).resolves.toBe(1);
+    const cutoff = new Date(Date.now() - 5 * 60_000).toISOString();
+    await expect(store.countStaleAttempts(cutoff, "org_test")).resolves.toBe(1);
+    await expect(store.reconcileLostAttempts(cutoff)).resolves.toBe(1);
     await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "lost" });
+    await expect(
+      store.findResourceLock("org_test", "workspace", "workspace:attempt_lost"),
+    ).resolves.toBeNull();
+  });
+
+  it("does not lose a quiet attempt with a current executor heartbeat", async () => {
+    const attempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_quiet",
+      workItemId: "work_quiet",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+      id: "attempt_quiet",
+    });
+    await store.transitionAttempt(attempt.id, "preparing");
+    await store.transitionAttempt(attempt.id, "running");
+    await handle.db
+      .update(agentAttempts)
+      .set({ startedAt: new Date(Date.now() - 10 * 60_000).toISOString() })
+      .where(eq(agentAttempts.id, attempt.id));
+    await store.heartbeatAttempt(attempt.id);
+
+    const cutoff = new Date(Date.now() - 5 * 60_000).toISOString();
+    await expect(store.countStaleAttempts(cutoff, "org_test")).resolves.toBe(0);
+    await expect(store.reconcileLostAttempts(cutoff)).resolves.toBe(0);
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "running" });
+  });
+
+  it("uses the latest persisted session activity when reconciling long attempts", async () => {
+    const attempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_active",
+      workItemId: "work_active",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+      id: "attempt_active",
+    });
+    await store.transitionAttempt(attempt.id, "preparing");
+    await store.transitionAttempt(attempt.id, "running");
+    await handle.db
+      .update(agentAttempts)
+      .set({ startedAt: new Date(Date.now() - 10 * 60_000).toISOString() })
+      .where(eq(agentAttempts.id, attempt.id));
+    const session = await store.createHarnessSession({
+      organizationId: "org_test",
+      agentId: "agent_test",
+      adapter: "dry_run_local",
+      prompt: "long work",
+    });
+    await store.linkHarnessSession(attempt.id, session.id);
+    await store.appendHarnessSessionEvent({
+      sessionId: session.id,
+      kind: "tool_result",
+      payload: { tool: "bash" },
+      seq: 1,
+    });
+
+    const cutoff = new Date(Date.now() - 5 * 60_000).toISOString();
+    await expect(store.countStaleAttempts(cutoff, "org_test")).resolves.toBe(0);
+    await expect(store.reconcileLostAttempts(cutoff)).resolves.toBe(0);
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "running" });
+  });
+
+  it("preserves an early provider session identity when completion has none", async () => {
+    const session = await store.createHarnessSession({
+      organizationId: "org_test",
+      agentId: "agent_test",
+      adapter: "dry_run_local",
+      prompt: "long work",
+    });
+    await store.setHarnessSessionProviderIdentity(session.id, "provider_session_123");
+    await store.completeHarnessSession(
+      session.id,
+      {
+        protocolVersion: 1,
+        exitCode: 1,
+        timedOut: false,
+        usageBasis: "per_run",
+        clearSession: false,
+        summary: "interrupted",
+        resultJson: { toolsInvoked: ["bash"], toolEventCount: 1 },
+      },
+      "failed",
+    );
+
+    const completed = await store.getHarnessSession(session.id);
+    expect(completed).toMatchObject({
+      sessionId: "provider_session_123",
+      sessionDisplayId: "provider_ses",
+    });
+    expect(JSON.parse(completed?.resultJson ?? "{}")).toMatchObject({
+      toolsInvoked: ["bash"],
+      toolEventCount: 1,
+    });
+  });
+
+  it("activates a pristine queued session but forks immutable execution evidence", async () => {
+    const input = {
+      id: "session_reused",
+      organizationId: "org_test",
+      agentId: "agent_test",
+      adapter: "opencode_cli" as const,
+      prompt: "resume work",
+    };
+    await handle.db.insert(sessions).values({
+      ...input,
+      wakeupId: "manual",
+      runtimeJson: "{}",
+      configJson: "{}",
+      status: "queued",
+      parentSessionId: "session_parent",
+    });
+    const activated = await store.createHarnessSession(input);
+    expect(activated).toMatchObject({
+      id: input.id,
+      parentSessionId: "session_parent",
+    });
+    await store.setHarnessSessionProviderIdentity(input.id, "provider_previous");
+    await store.appendHarnessSessionEvent({
+      sessionId: input.id,
+      kind: "assistant",
+      payload: { text: "previous evidence" },
+      seq: 1,
+    });
+    await store.completeHarnessSession(
+      input.id,
+      {
+        protocolVersion: 1,
+        sessionId: "provider_previous",
+        exitCode: 0,
+        timedOut: false,
+        usageBasis: "per_run",
+        clearSession: false,
+        summary: "previous result",
+      },
+      "succeeded",
+    );
+
+    await expect(store.createHarnessSession({ ...input, agentId: "agent_other" })).rejects.toThrow(
+      /another execution identity/,
+    );
+    const continued = await store.createHarnessSession(input);
+
+    await expect(store.getHarnessSession(input.id)).resolves.toMatchObject({
+      status: "succeeded",
+      sessionId: "provider_previous",
+      resultJson: expect.stringContaining("previous result"),
+    });
+    expect(continued).toMatchObject({
+      status: "running",
+      parentSessionId: input.id,
+      wakeupId: "manual",
+      inheritedProviderSessionId: "provider_previous",
+    });
+    expect(continued.id).not.toBe(input.id);
+    await store.appendHarnessSessionEvent({
+      sessionId: continued.id,
+      kind: "assistant",
+      payload: { text: "continued evidence" },
+      seq: 1,
+    });
+    const events = await handle.db.select().from(sessionEvents);
+    expect(events.filter((event) => event.sessionId === input.id)).toMatchObject([{ seq: 1 }]);
+    expect(events.filter((event) => event.sessionId === continued.id)).toMatchObject([{ seq: 1 }]);
+  });
+
+  it("does not link one harness session to two attempts", async () => {
+    const first = await store.createAttempt({
+      id: "attempt_first_session_owner",
+      organizationId: "org_test",
+      workflowRunId: "run_first_session_owner",
+      workItemId: "work_first_session_owner",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+    });
+    const second = await store.createAttempt({
+      id: "attempt_second_session_owner",
+      organizationId: "org_test",
+      workflowRunId: "run_second_session_owner",
+      workItemId: "work_second_session_owner",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+    });
+    const session = await store.createHarnessSession({
+      organizationId: "org_test",
+      agentId: "agent_test",
+      adapter: "dry_run_local",
+      prompt: "owned once",
+    });
+    await store.linkHarnessSession(first.id, session.id);
+    await expect(store.linkHarnessSession(second.id, session.id)).rejects.toThrow(
+      /already linked to another attempt/,
+    );
   });
 });

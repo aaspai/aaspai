@@ -60,7 +60,7 @@ try {
     command: "node",
     args: [
       "-e",
-      "const fs=require('node:fs'); const stdin=fs.readFileSync(0,'utf8'); const seed=fs.readFileSync('input.txt','utf8'); fs.writeFileSync('input.txt',seed+'remote\\n'); fs.unlinkSync('delete-me.txt'); fs.writeFileSync('binary.bin',Buffer.from([0,255,1,254])); fs.writeFileSync('daytona-marker.json',JSON.stringify({cwd:process.cwd(),stdin,seed})); console.log(JSON.stringify({cwd:process.cwd(),runtime:'daytona',stdin}));",
+      "const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const stdin=fs.readFileSync(0,'utf8'); const seed=fs.readFileSync('input.txt','utf8'); const curl=execFileSync('curl',['-fsSL','https://example.com'],{encoding:'utf8',timeout:30000}); const browser=execFileSync('chromium',['--headless','--no-sandbox','--disable-gpu','--dump-dom','https://example.com'],{encoding:'utf8',timeout:30000}); const search=execFileSync('ddgr',['--json','--num','1','OpenAI official'],{encoding:'utf8',timeout:30000}); if(!curl.includes('Example Domain')||!browser.includes('Example Domain')||JSON.parse(search).length<1)throw new Error('Daytona internet tool check failed'); fs.writeFileSync('input.txt',seed+'remote\\n'); fs.unlinkSync('delete-me.txt'); fs.writeFileSync('binary.bin',Buffer.from([0,255,1,254])); fs.writeFileSync('daytona-marker.json',JSON.stringify({cwd:process.cwd(),stdin,seed})); console.log(JSON.stringify({cwd:process.cwd(),runtime:'daytona',webTools:'passed',stdin}));",
     ],
     cwd: root,
     stdin: "stdin-ok\n",
@@ -73,6 +73,7 @@ try {
   if (
     result.exitCode !== 0 ||
     !result.stdout.includes('"runtime":"daytona"') ||
+    !result.stdout.includes('"webTools":"passed"') ||
     result.runtimeIdentity?.kind !== "sandbox" ||
     !result.runtimeIdentity.connectionIdentity?.startsWith("daytona:")
   ) {

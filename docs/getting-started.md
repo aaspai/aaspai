@@ -93,11 +93,11 @@ The worker loads definitions from `.aaspai/`, polls durable wakeups, schedules
 eligible work, creates isolated execution workspaces, and records attempts and
 evidence in SQLite.
 
-The web onboarding flow launches real OpenCode work in Daytona; it does not
-fall back to `dry_run_local`. Before onboarding, configure `DAYTONA_API_KEY`,
-`AASPAI_GATEWAY_CONTROL_URL`, and `AASPAI_GATEWAY_CONTROL_TOKEN`. The gateway
-keeps permanent provider credentials outside the agent sandbox and issues only
-short-lived attempt credentials.
+The web onboarding flow launches real authenticated Codex or OpenCode CLI
+sessions; it does not call a model-provider API or fall back to
+`dry_run_local`. Before onboarding, log in with `codex login` or `opencode
+auth login`. Readiness runs the selected CLI's native authentication/session
+probe.
 
 For a single scheduler tick:
 

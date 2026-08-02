@@ -220,14 +220,14 @@ export class DaytonaSandboxDriver extends SdkSandboxDriver<Sandbox> {
   private async bootstrapSandbox(sandbox: Sandbox): Promise<void> {
     // 1. Install the bounded baseline used by company agents and evidence checks.
     const baseline = await sandbox.process.executeCommand(
-      "command -v git >/dev/null && command -v curl >/dev/null && command -v ddgr >/dev/null && command -v jq >/dev/null && command -v python3 >/dev/null && command -v rg >/dev/null && test -s /etc/ssl/certs/ca-certificates.crt; echo $?",
+      "command -v git >/dev/null && command -v chromium >/dev/null && command -v curl >/dev/null && command -v ddgr >/dev/null && command -v jq >/dev/null && command -v python3 >/dev/null && command -v rg >/dev/null && test -s /etc/ssl/certs/ca-certificates.crt; echo $?",
       "/",
       DEFAULT_ENV,
       30,
     );
     if ((baseline.result ?? "").trim() !== "0") {
       const install = await sandbox.process.executeCommand(
-        "apt-get update -qq && apt-get install -y -qq bash build-essential ca-certificates curl ddgr file git jq openssh-client openssl python3 python3-pip ripgrep rsync unzip wget zip && update-ca-certificates && rm -rf /var/lib/apt/lists/*",
+        "apt-get update -qq && apt-get install -y -qq bash build-essential ca-certificates chromium curl ddgr file git jq openssh-client openssl python3 python3-pip ripgrep rsync unzip wget zip && update-ca-certificates && rm -rf /var/lib/apt/lists/*",
         "/",
         DEFAULT_ENV,
         240,

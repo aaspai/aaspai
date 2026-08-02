@@ -20,6 +20,7 @@
  *   <e2e:no_session>          - omit sessionID from all events
  *   <e2e:tokens:I,O,C,R,cost> - override the step_finish token counters
  *   <e2e:tool>                - emit a tool_use event with a fake tool call
+ *   <e2e:tool-no-session>     - emit a canonical tool_use without sessionID
  *
  *   <e2e:error:auth>          - emits {type:"error", error:{message:"api key invalid"}}, exit 1
  *   <e2e:error:quota>         - emits {type:"error", error:{message:"rate limit exceeded"}}, exit 1
@@ -224,6 +225,9 @@ async function runSuccessStream(prompt) {
   if (/<e2e:tool>/.test(prompt)) {
     emit(toolUseEvent(sessionID, "bash"));
   }
+  if (/<e2e:tool-no-session>/.test(prompt)) {
+    emit(toolUseEvent(undefined, "bash"));
+  }
   if (/<e2e:company-action>/.test(prompt)) {
     emit(
       toolUseEvent(sessionID, "company_action", {
@@ -275,6 +279,11 @@ function runHang() {
 }
 
 async function main() {
+  if (process.argv.includes("--version")) {
+    process.stdout.write(`${process.version}\n`);
+    return;
+  }
+
   // Honor the AASPAI_FAKE_OPENCODE env var as an explicit override
   // for the prompt — useful when the test wants to drive behavior
   // without polluting the user-visible prompt.

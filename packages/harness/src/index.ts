@@ -25,11 +25,6 @@ export { hermesGateway, hermesGatewayInfo } from "./drivers/hermes-gateway/index
 export { openclawGateway, openclawGatewayInfo } from "./drivers/openclaw-gateway/index.js";
 export { opencodeCli, opencodeCliInfo } from "./drivers/opencode-cli/index.js";
 export {
-  opencodeConfigSchema,
-  opencodeLocal,
-  opencodeLocalInfo,
-} from "./drivers/opencode-local/index.js";
-export {
   ADAPTER_REGISTRY_VERSION,
   getAdapter,
   getAdapterCapabilities,

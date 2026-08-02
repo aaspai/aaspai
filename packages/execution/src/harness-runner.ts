@@ -15,6 +15,8 @@ import { resolveTarget } from "@aaspai/runtime";
 import { assertHarnessExecutable, assertRuntimeReady } from "./capabilities.js";
 import type { ExecutionStore } from "./store.js";
 
+const DEFAULT_STUCK_AFTER_MS = 15 * 60_000;
+
 export interface HarnessAgentInput {
   id: string;
   name: string;
@@ -32,6 +34,13 @@ export interface ExecuteHarnessPlanInput {
   agent?: HarnessAgentInput;
   profile?: ResolvedAgentProfile;
   durableSessionId?: string;
+  /** Durable lineage for a fresh row replacing a previously used session. */
+  parentSessionId?: string;
+  wakeupId?: string;
+  /** Provider-native session ID to continue after a stalled CLI attempt. */
+  resumeSessionId?: string;
+  /** Reuse the retained manager-session workspace for a callback turn. */
+  allowWorkspaceReuse?: boolean;
   signal?: AbortSignal;
   /** Runtime-only credentials. Never persisted in the plan or session config. */
   ephemeralEnv?: Record<string, string>;
@@ -88,6 +97,13 @@ export class HarnessExecutionPlanRunner {
           tools: agent.tools,
         };
     const adapterConfig = policy.adapterConfig;
+    const stuckAfterMs = resolveStuckAfterMs(adapterConfig);
+    const ephemeralSecrets = Object.entries(input.ephemeralEnv ?? {})
+      .filter(
+        ([key, value]) => /(?:token|secret|password|credential|api[_-]?key)/i.test(key) && value,
+      )
+      .map(([, value]) => value);
+    const redactEphemeral = (value: string) => redactValues(value, ephemeralSecrets);
     const session = await this.store.createHarnessSession({
       id: input.durableSessionId,
       organizationId: input.plan.organizationId,
@@ -96,8 +112,15 @@ export class HarnessExecutionPlanRunner {
       prompt: input.plan.prompt,
       runtime: { cwd: input.workspace.path },
       config: adapterConfig,
+      parentSessionId: input.parentSessionId,
+      wakeupId: input.wakeupId,
     });
     await this.store.linkHarnessSession(input.plan.attemptId, session.id);
+    const requestedSessionId =
+      input.resumeSessionId ??
+      agent.resumeSessionId ??
+      session.inheritedProviderSessionId ??
+      undefined;
     const currentAttempt = await this.store.getAttempt(input.plan.attemptId);
     if (currentAttempt?.status === "queued") {
       await this.store.transitionAttempt(input.plan.attemptId, "preparing");
@@ -105,9 +128,24 @@ export class HarnessExecutionPlanRunner {
 
     let sessionEventSeq = 0;
     let rawOutputSeq = 0;
-    let executionEventSeq = 1;
     let persistenceFailure: Error | undefined;
     let actualRuntimeIdentity: AdapterExecutionResult["runtimeIdentity"];
+    let observedProviderSessionId: string | undefined;
+    let lastProgressAt = Date.now();
+    let stalled = false;
+    const runController = new AbortController();
+    const abortForCancellation = () => runController.abort();
+    if (input.signal?.aborted) abortForCancellation();
+    else input.signal?.addEventListener("abort", abortForCancellation, { once: true });
+    const watchdog = setInterval(
+      () => {
+        if (Date.now() - lastProgressAt < stuckAfterMs) return;
+        stalled = true;
+        runController.abort();
+      },
+      Math.min(stuckAfterMs, 60_000),
+    );
+    watchdog.unref();
     const recordSessionEvent = async (
       kind: TranscriptEntry["kind"],
       payload: Record<string, unknown>,
@@ -127,7 +165,7 @@ export class HarnessExecutionPlanRunner {
     if (preparedAttempt?.status === "preparing") {
       await this.store.transitionAttempt(input.plan.attemptId, "running");
     }
-    await this.store.appendEvent({
+    await this.store.appendNextEvent({
       organizationId: input.plan.organizationId,
       attemptId: input.plan.attemptId,
       type: "harness.session.started",
@@ -137,7 +175,6 @@ export class HarnessExecutionPlanRunner {
         cwd: input.workspace.path,
         requestedRuntime: input.plan.target,
       },
-      seq: executionEventSeq++,
     });
 
     let result: AdapterExecutionResult;
@@ -154,9 +191,9 @@ export class HarnessExecutionPlanRunner {
           adapterConfig,
         },
         runtime: {
-          sessionId: agent.resumeSessionId,
+          sessionId: requestedSessionId,
           sessionParams: {
-            resume: Boolean(agent.resumeSessionId),
+            resume: Boolean(requestedSessionId),
             fork: agent.forkSession === true,
           },
           runtimeIdentity: {
@@ -188,24 +225,25 @@ export class HarnessExecutionPlanRunner {
                 ...input.ephemeralEnv,
               },
               inheritEnv: false,
-              timeoutMs:
-                options.timeoutMs === undefined || input.plan.timeoutMs === null
-                  ? (options.timeoutMs ?? undefined)
-                  : Math.min(options.timeoutMs, input.plan.timeoutMs),
+              timeoutMs: requiresRuntimeExecution(adapterType)
+                ? undefined
+                : (input.plan.timeoutMs ?? options.timeoutMs),
               onLog: async (stream, chunk) => {
+                lastProgressAt = Date.now();
+                const safeChunk = redactEphemeral(chunk);
                 try {
                   await this.store.appendRawOutput({
                     organizationId: input.plan.organizationId,
                     attemptId: input.plan.attemptId,
                     ts: new Date().toISOString(),
                     stream,
-                    chunk,
+                    chunk: safeChunk,
                     seq: ++rawOutputSeq,
                   });
                 } catch (error) {
                   persistenceFailure = error instanceof Error ? error : new Error(String(error));
                 }
-                await options.onLog?.(stream, chunk);
+                await options.onLog?.(stream, safeChunk);
               },
             });
             assertRuntimeIdentity(input.plan.target, input.workspace.path, result.runtimeIdentity);
@@ -213,13 +251,32 @@ export class HarnessExecutionPlanRunner {
             return result;
           },
         },
-        signal: input.signal,
+        signal: runController.signal,
         onLog: async (stream, chunk) => {
-          for (const line of chunk.split(/\r?\n/)) {
+          lastProgressAt = Date.now();
+          for (const line of redactEphemeral(chunk).split(/\r?\n/)) {
             if (!line) continue;
             if (stream === "stdout") {
               try {
-                const parsed = JSON.parse(line) as { kind?: string } & Record<string, unknown>;
+                const parsed = JSON.parse(line) as {
+                  kind?: string;
+                  sessionID?: unknown;
+                  sessionId?: unknown;
+                  thread_id?: unknown;
+                  session_id?: unknown;
+                } & Record<string, unknown>;
+                const providerSessionId = [
+                  parsed.sessionID,
+                  parsed.sessionId,
+                  parsed.thread_id,
+                  parsed.session_id,
+                ].find(
+                  (value): value is string => typeof value === "string" && value.trim().length > 0,
+                );
+                if (providerSessionId && providerSessionId !== observedProviderSessionId) {
+                  observedProviderSessionId = providerSessionId;
+                  await this.store.setHarnessSessionProviderIdentity(session.id, providerSessionId);
+                }
                 const canonicalKinds = new Set([
                   "assistant",
                   "thinking",
@@ -256,6 +313,41 @@ export class HarnessExecutionPlanRunner {
         summary: "Harness adapter execution failed",
         usageBasis: "per_run",
         clearSession: false,
+      };
+    } finally {
+      clearInterval(watchdog);
+      input.signal?.removeEventListener("abort", abortForCancellation);
+    }
+
+    result = redactResult(result, ephemeralSecrets);
+
+    if (
+      result.exitCode === 0 &&
+      requestedSessionId &&
+      agent.forkSession !== true &&
+      result.sessionId !== requestedSessionId
+    ) {
+      result = {
+        ...result,
+        exitCode: 1,
+        errorCode: "session_resume_mismatch",
+        errorFamily: "internal",
+        errorMessage: result.sessionId
+          ? `Provider resumed ${result.sessionId} instead of ${requestedSessionId}`
+          : `Provider did not report the required resumed session ${requestedSessionId}`,
+        summary: "Provider did not continue the required manager session",
+      };
+    }
+
+    if (stalled) {
+      result = {
+        ...result,
+        exitCode: 1,
+        timedOut: true,
+        errorCode: "session_stalled",
+        errorFamily: "transient_upstream",
+        errorMessage: `No CLI progress for ${Math.round(stuckAfterMs / 60_000)} minutes; interrupted for resume`,
+        summary: "CLI session stalled and was interrupted for resume",
       };
     }
 
@@ -295,18 +387,17 @@ export class HarnessExecutionPlanRunner {
 
     const status = terminalStatus(result, input.signal);
     await this.store.completeHarnessSession(session.id, result, status);
-    await this.store.appendEvent({
+    await this.store.appendNextEvent({
       organizationId: input.plan.organizationId,
       attemptId: input.plan.attemptId,
       type: "harness.session.completed",
       payload: {
         harnessSessionId: session.id,
-        providerSessionId: result.sessionId ?? null,
+        providerSessionId: result.sessionId ?? observedProviderSessionId ?? null,
         status,
         exitCode: result.exitCode,
         runtimeIdentity: result.runtimeIdentity ?? null,
       },
-      seq: executionEventSeq,
     });
     await this.completeAttempt(input.plan.attemptId, status, input.signal);
     return result;
@@ -327,13 +418,39 @@ export class HarnessExecutionPlanRunner {
   }
 
   private assertWorkspace(input: ExecuteHarnessPlanInput): void {
-    if (input.workspace.attemptId !== input.plan.attemptId) {
+    if (!input.allowWorkspaceReuse && input.workspace.attemptId !== input.plan.attemptId) {
       throw new Error("Execution plan and workspace attempt IDs must match");
     }
     if (input.workspace.status !== "ready") {
       throw new Error(`Execution workspace is not ready: ${input.workspace.status}`);
     }
   }
+}
+
+function redactValues(value: string, secrets: readonly string[]): string {
+  return secrets.reduce(
+    (redacted, secret) =>
+      secret.length >= 8 ? redacted.replaceAll(secret, "[REDACTED]") : redacted,
+    value,
+  );
+}
+
+function redactResult(
+  result: AdapterExecutionResult,
+  secrets: readonly string[],
+): AdapterExecutionResult {
+  if (secrets.length === 0) return result;
+  const redact = (value: unknown): unknown => {
+    if (typeof value === "string") return redactValues(value, secrets);
+    if (Array.isArray(value)) return value.map(redact);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redact(item)]),
+      );
+    }
+    return value;
+  };
+  return redact(result) as AdapterExecutionResult;
 }
 
 const MANAGED_ENV_BASELINE_KEYS = [
@@ -414,13 +531,28 @@ function requiresRuntimeExecution(adapter: AdapterType): boolean {
   return ["claude_local", "codex_local", "opencode_cli"].includes(adapter);
 }
 
+function resolveStuckAfterMs(config: JsonObject): number {
+  const value = config.stuckAfterMs;
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1_000 &&
+    value <= 86_400_000
+    ? value
+    : DEFAULT_STUCK_AFTER_MS;
+}
+
 export function assertGovernedRuntimeIsolation(
   adapter: string,
   target: ExecutionTarget,
   governed: boolean,
 ): void {
-  if (governed && target.kind === "local" && requiresRuntimeExecution(adapter as AdapterType)) {
-    throw new Error("Governed maker and checker agents require an isolated execution runtime");
+  if (
+    governed &&
+    target.kind === "local" &&
+    target.envPassthrough === true &&
+    requiresRuntimeExecution(adapter as AdapterType)
+  ) {
+    throw new Error("Governed local CLI agents require a managed environment");
   }
 }
 
@@ -546,9 +678,23 @@ export function enforceRuntimeToolPolicy(
     : undefined;
 
   if (adapter === "codex_local") {
-    throw new Error(
-      "codex_local cannot enforce the resolved native tool allowlist; refusing execution",
-    );
+    const nativeBundle = ["apply_patch", "shell", "web_search", "view_image"];
+    if (nativeBundle.some((name) => !boundedNativeAllowed.includes(name))) {
+      throw new Error("codex_local requires its complete sandboxed native tool bundle");
+    }
+    assertNoPolicyOverrides(adapterConfig.extraArgs, [
+      "--sandbox",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--ask-for-approval",
+    ]);
+    return {
+      adapterConfig: {
+        ...adapterConfig,
+        sandbox: "workspace-write",
+        approvalMode: "never",
+      },
+      tools: guardedTools,
+    };
   }
   if (adapter === "claude_local") {
     assertNoPolicyOverrides(adapterConfig.extraArgs, [

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import type { ExecutionWorkspace } from "@aaspai/contracts/execution";
@@ -192,10 +193,13 @@ export class LocalExecutionWorkspaceManager {
 
   private pathFor(root: string, attemptId: string, workspaceSegment?: string): string {
     const absoluteRoot = resolve(root);
+    const attemptSegment = /^[a-zA-Z0-9._-]{1,120}$/.test(attemptId)
+      ? attemptId
+      : `attempt-${createHash("sha256").update(attemptId).digest("hex").slice(0, 24)}`;
     const candidate = resolve(
       absoluteRoot,
       "execution",
-      attemptId,
+      attemptSegment,
       ...(workspaceSegment ? [workspaceSegment] : []),
     );
     const child = relative(absoluteRoot, candidate);

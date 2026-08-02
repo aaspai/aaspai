@@ -3,7 +3,7 @@ import { extname, isAbsolute, relative, resolve } from "node:path";
 
 const URL = /https?:\/\/\S+/i;
 const COMMERCIAL_CLAIM =
-  /\b(?:SOC\s*2|ISO\s*27001|SLA|uptime|zero[- ]retention|integrates?\s+with|integration\s+with|case study|certif(?:ied|ication)|compliant|guarantee(?:d)?|(?:customers?|clients?)\s+(?:include|such as|use|trust))\b/i;
+  /\b(?:SOC\s*2|ISO\s*27001|SLA|uptime|zero[- ]retention|integrates?\s+with|integration\s+with|certif(?:ied|ication)|compliant|guarantee(?:d)?|(?:customers?|clients?)\s+(?:include|such as|use|trust))\b/i;
 
 export async function validateEvidencePolicy(
   workspacePath: string,
@@ -40,14 +40,7 @@ export async function validateEvidencePolicy(
     const text = await readFile(source, "utf8");
     const lines = text.split(/\r?\n/);
     if (citationPaths.includes(path) || looksLikeLeadArtifact(path, lines)) {
-      const tableRows = lines.filter(
-        (line) =>
-          /^\s*\|/.test(line) &&
-          !/^\s*\|?[\s:|-]+\|?\s*$/.test(line) &&
-          !/\b(?:source|url|website|citation)\b/i.test(line),
-      );
-      const claims =
-        tableRows.length > 0 ? tableRows : lines.filter((line) => /^\s*[-*]\s+/.test(line));
+      const claims = citationClaims(lines, citationPaths.includes(path));
       if (claims.length === 0 || claims.some((line) => !URL.test(line))) {
         throw new Error(`Every lead must include an HTTP citation in ${path}`);
       }
@@ -59,6 +52,39 @@ export async function validateEvidencePolicy(
       throw new Error(`Unsupported commercial or security claim in ${path}`);
     }
   }
+}
+
+function citationClaims(lines: readonly string[], allowBulletFallback: boolean): string[] {
+  const leadSections: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^\s*#{1,3}\s+(?:lead|prospect)(?:\s+#?\d+|\s*:)/i.test(lines[index] ?? "")) continue;
+    const section: string[] = [];
+    let end = index + 1;
+    for (; end < lines.length && !/^\s*#{1,3}\s/.test(lines[end] ?? ""); end += 1)
+      section.push(lines[end] ?? "");
+    leadSections.push(section.join("\n"));
+    index = end - 1;
+  }
+  if (leadSections.length > 0) return leadSections;
+  const rows: string[] = [];
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const header = lines[index] ?? "";
+    if (
+      !/^\s*\|/.test(header) ||
+      !/\b(?:source|url|website|citation)\b/i.test(header) ||
+      !/^\s*\|?[\s:|-]+\|?\s*$/.test(lines[index + 1] ?? "")
+    )
+      continue;
+    for (index += 2; /^\s*\|/.test(lines[index] ?? ""); index += 1) {
+      const row = lines[index] ?? "";
+      if (!/^\s*\|?[\s:|-]+\|?\s*$/.test(row)) rows.push(row);
+    }
+  }
+  return rows.length > 0
+    ? rows
+    : allowBulletFallback
+      ? lines.filter((line) => /^\s*[-*]\s+/.test(line))
+      : [];
 }
 
 function looksLikeLeadArtifact(path: string, lines: readonly string[]): boolean {

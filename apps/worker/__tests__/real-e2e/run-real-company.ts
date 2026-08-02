@@ -1,39 +1,58 @@
-import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { CompanyCommandService } from "@aaspai/company";
 import {
   agentAttempts,
+  companyProfiles,
   delegations,
+  executionVerifications,
   getDefaultDb,
   loopOutputs,
   runMigrations,
   serviceAgents,
   sessions,
   wakeups,
+  workflowRuns,
 } from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
-import { Daytona, type Sandbox } from "@daytonaio/sdk";
+import { observeExecution } from "@aaspai/observability";
 import { eq } from "drizzle-orm";
 import { WorkerDaemon } from "../../src/daemon.js";
 
 const execFileAsync = promisify(execFile);
 const targetName = process.argv[2];
-if (!["docker", "daytona"].includes(targetName)) {
-  throw new Error("Usage: run-real-company.ts <docker|daytona> [acceptance|zedblock]");
+if (targetName !== "local" && targetName !== "simulation") {
+  throw new Error("Usage: run-real-company.ts <local|simulation> [acceptance|zedblock]");
 }
 const scenarioName = process.argv[3] ?? "acceptance";
 if (!["acceptance", "zedblock"].includes(scenarioName)) {
   throw new Error("Scenario must be acceptance or zedblock");
 }
 const zedblock = scenarioName === "zedblock";
-const employeeSlug = zedblock ? "growth-director" : "evidence-specialist";
+const simulated = targetName === "simulation";
+if (simulated && zedblock) throw new Error("ZedBlock is a real-agent scenario; use acceptance");
+const adapter = simulated ? "dry_run_local" : "opencode_cli";
+const employeeSlug = simulated
+  ? "market-researcher"
+  : zedblock
+    ? "growth-director"
+    : "evidence-specialist";
 const employeeAgentId = `agent/${employeeSlug}`;
 const employeeSkill = zedblock ? "zedblock-growth" : "employee-evidence";
-const completionMarker = zedblock ? "ZEDBLOCK_GROWTH_PACKAGE_READY" : "REAL_EMPLOYEE_COMPLETED";
-const employeeTitle = zedblock ? "Growth Director" : "Evidence Specialist";
+const completionMarker = simulated
+  ? "# Plan (dry-run)"
+  : zedblock
+    ? "ZEDBLOCK_GROWTH_PACKAGE_READY"
+    : "REAL_EMPLOYEE_COMPLETED";
+const employeeTitle = simulated
+  ? "Market Researcher"
+  : zedblock
+    ? "Growth Director"
+    : "Evidence Specialist";
 const employeeRole = zedblock ? "cmo" : "researcher";
 const employeeDescription = zedblock
   ? "Researches qualified professional-services leads and builds evidence-backed campaigns and sales playbooks."
@@ -54,15 +73,19 @@ const companyAction = {
       description: employeeDescription,
       workTitle,
       workDescription,
-      skillKeys: [employeeSkill],
-      artifactPaths: zedblock
-        ? [
-            "zedblock-growth/lead-list.md",
-            "zedblock-growth/campaign.md",
-            "zedblock-growth/sales-playbook.md",
-            "zedblock-growth/operating-report.md",
-          ]
-        : ["employee-proof.txt"],
+      ...(simulated
+        ? {}
+        : {
+            skillKeys: [employeeSkill],
+            artifactPaths: zedblock
+              ? [
+                  "zedblock-growth/lead-list.md",
+                  "zedblock-growth/campaign.md",
+                  "zedblock-growth/sales-playbook.md",
+                  "zedblock-growth/operating-report.md",
+                ]
+              : ["employee-proof.txt"],
+          }),
       ...(zedblock
         ? {
             citationPaths: ["zedblock-growth/lead-list.md"],
@@ -78,27 +101,25 @@ const companyAction = {
 
 const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
 const repoRoot = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
-const evidenceRoot = join(repoRoot, "workspace", "company-real", scenarioName, targetName, runId);
+const evidenceRoot = join(
+  repoRoot,
+  "workspace",
+  simulated ? "company-simulation" : "company-real",
+  scenarioName,
+  targetName,
+  runId,
+);
 const repositoryPath = join(evidenceRoot, "repository");
 const agentsDir = join(evidenceRoot, "definitions", "agents");
 const skillsDir = join(evidenceRoot, "definitions", "skills");
 const knowledgeDir = join(evidenceRoot, "definitions", "knowledge");
 const loopsDir = join(evidenceRoot, "definitions", "loops");
 const organizationId = `org_company_${targetName}_${runId}`;
-const controlToken = randomBytes(32).toString("hex");
-const upstreamModel = process.env.AASPAI_REAL_E2E_MODEL?.trim() || "poolside/laguna-s-2.1:free";
-const model = `aaspai/${upstreamModel}`;
-const snapshot = process.env.DAYTONA_SNAPSHOT?.trim() || "aaspai-opencode-1-18-5-v2";
+const model = process.env.AASPAI_REAL_E2E_MODEL?.trim() || "opencode-go/mimo-v2.5";
 let daemon: WorkerDaemon | undefined;
-let gatewayProcess: ChildProcess | undefined;
-let gatewaySandbox: Sandbox | undefined;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
-}
-
-function quote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 async function git(args: string[]): Promise<string> {
@@ -111,89 +132,7 @@ async function git(args: string[]): Promise<string> {
   ).stdout.trim();
 }
 
-async function openRouterKey(): Promise<string> {
-  const authPath =
-    process.env.AASPAI_HOST_AUTH_PATH ??
-    join(process.env.USERPROFILE ?? "", ".local", "share", "opencode", "auth.json");
-  const auth = JSON.parse(await readFile(authPath, "utf8")) as {
-    openrouter?: { key?: string };
-  };
-  assert(auth.openrouter?.key, "OpenRouter credential missing from host OpenCode auth");
-  return auth.openrouter.key;
-}
-
-async function waitForHealth(url: string): Promise<void> {
-  for (let attempt = 0; attempt < 45; attempt += 1) {
-    if ((await fetch(`${url}/health`).catch(() => null))?.ok) return;
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000));
-  }
-  throw new Error("Attempt credential gateway did not become healthy");
-}
-
-async function startGateway(): Promise<{ controlUrl: string; agentUrl: string }> {
-  const upstreamKey = await openRouterKey();
-  const script = fileURLToPath(new URL("./attempt-gateway.mjs", import.meta.url));
-  if (targetName === "docker") {
-    const port = 18_787;
-    gatewayProcess = spawn(process.execPath, [script], {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        GATEWAY_CONTROL_TOKEN: controlToken,
-        OPENROUTER_API_KEY: upstreamKey,
-        GATEWAY_PORT: String(port),
-      },
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    const controlUrl = `http://127.0.0.1:${port}`;
-    await waitForHealth(controlUrl);
-    return { controlUrl, agentUrl: `http://host.docker.internal:${port}` };
-  }
-
-  assert(process.env.DAYTONA_API_KEY, "DAYTONA_API_KEY is required for the Daytona run");
-  gatewaySandbox = await new Daytona().create(
-    {
-      snapshot,
-      ephemeral: true,
-      public: true,
-      labels: { "aaspai-role": "attempt-credential-gateway", "aaspai-run": runId },
-    },
-    { timeout: 180 },
-  );
-  await gatewaySandbox.fs.uploadFile(script, "/tmp/aaspai-attempt-gateway.mjs");
-  const launch = await gatewaySandbox.process.executeCommand(
-    [
-      `GATEWAY_CONTROL_TOKEN=${quote(controlToken)}`,
-      `OPENROUTER_API_KEY=${quote(upstreamKey)}`,
-      "nohup node /tmp/aaspai-attempt-gateway.mjs",
-      ">/tmp/aaspai-attempt-gateway.log 2>&1 </dev/null &",
-    ].join(" "),
-    "/",
-    undefined,
-    30,
-  );
-  assert(launch.exitCode === 0, "Daytona credential gateway failed to launch");
-  const preview = await gatewaySandbox.getPreviewLink(8787);
-  const url = preview.url.replace(/\/+$/, "");
-  await waitForHealth(url);
-  return { controlUrl: url, agentUrl: url };
-}
-
-async function ensureDockerImage(): Promise<void> {
-  if (targetName !== "docker") return;
-  await execFileAsync("docker", ["version", "--format", "{{.Server.Version}}"], {
-    windowsHide: true,
-  });
-  const image = process.env.AASPAI_REAL_DOCKER_IMAGE ?? "aaspai-opencode-test:latest";
-  try {
-    await execFileAsync("docker", ["image", "inspect", image], { windowsHide: true });
-  } catch {
-    throw new Error(`Required local runtime image is missing: ${image}`);
-  }
-}
-
-async function prepareDefinitions(agentUrl: string): Promise<void> {
+async function prepareDefinitions(): Promise<void> {
   for (const directory of [
     repositoryPath,
     agentsDir,
@@ -213,42 +152,7 @@ async function prepareDefinitions(agentUrl: string): Promise<void> {
   await git(["add", "."]);
   await git(["commit", "-m", "acceptance base"]);
 
-  const runtime =
-    targetName === "docker"
-      ? {
-          default: {
-            kind: "docker",
-            image: process.env.AASPAI_REAL_DOCKER_IMAGE ?? "aaspai-opencode-test:latest",
-            remoteCwd: "/workspace",
-            network: "bridge",
-          },
-        }
-      : {
-          default: {
-            kind: "sandbox",
-            provider: "daytona",
-            remoteCwd: "/workspace",
-            timeoutMs: 300_000,
-          },
-        };
-  const adapterConfig = {
-    providers: {
-      aaspai: {
-        npm: "@ai-sdk/openai-compatible",
-        name: "AASPAI attempt gateway",
-        options: {
-          baseURL: `${agentUrl}/v1`,
-          apiKey: "{env:AASPAI_ATTEMPT_TOKEN}",
-        },
-        models: {
-          [upstreamModel]: {
-            name: `${upstreamModel} via attempt gateway`,
-            limit: { context: 128_000, output: 4_096 },
-          },
-        },
-      },
-    },
-  };
+  const runtime = { default: { kind: "local", envPassthrough: false } };
   await writeFile(
     join(agentsDir, "ceo", "AGENT.md"),
     `---
@@ -257,7 +161,7 @@ type: Agent
 title: Chief Executive Officer
 description: Runs the company and hires only when the work requires it.
 timestamp: 2026-07-29T00:00:00.000Z
-adapter: opencode_cli
+adapter: ${adapter}
 model: ${model}
 role: ceo
 reportsTo: null
@@ -273,12 +177,14 @@ Use the company-operator skill for staffing decisions. Perform real tool calls a
   );
   await writeFile(
     join(agentsDir, "ceo", "config.yaml"),
-    `${JSON.stringify({ adapterConfig, runtimeConfig: runtime }, null, 2)}\n`,
+    `${JSON.stringify({ adapterConfig: {}, runtimeConfig: runtime }, null, 2)}\n`,
     "utf8",
   );
   await writeFile(
     join(agentsDir, "ceo", "tools.yaml"),
-    "allow: [skill, read, write, bash, company_action]\ndeny: []\nrequire_approval_for: []\n",
+    simulated
+      ? "allow: []\ndeny: []\nrequire_approval_for: []\n"
+      : "allow: [skill, read, write, bash, websearch, browser_snapshot, company_action]\ndeny: []\nrequire_approval_for: []\n",
     "utf8",
   );
   await writeFile(
@@ -296,7 +202,7 @@ key: company-operator
 version: 1.0.0
 name: Company Operator
 description: Hire a specialist and delegate durable work through the structured company-action result.
-adapterTypes: [opencode_cli]
+adapterTypes: [${adapter}]
 owner: acceptance
 visibility: private
 createdAt: 2026-07-29T00:00:00.000Z
@@ -320,7 +226,7 @@ key: ${employeeSkill}
 version: 1.0.0
 name: ${zedblock ? "ZedBlock Growth" : "Employee Evidence"}
 description: ${zedblock ? "Build a sourced, approval-gated growth pipeline for ZedBlock." : "Produce and verify evidence using native runtime tools."}
-adapterTypes: [opencode_cli]
+adapterTypes: [${adapter}]
 owner: acceptance
 visibility: private
 createdAt: 2026-07-29T00:00:00.000Z
@@ -349,16 +255,75 @@ Read the file back. Your final response must include REAL_EMPLOYEE_COMPLETED and
   );
 }
 
-async function waitForEmployee(store: ExecutionStore, workflowRunId: string) {
-  for (let attempt = 0; attempt < 360; attempt += 1) {
-    const items = await store.listWorkItemsForWorkflow(organizationId, workflowRunId);
-    if (items.length === 2 && items.every((item) => item.status === "completed")) return items;
+async function waitForEmployee(store: ExecutionStore, goalId: string, parentWorkItemId: string) {
+  while (true) {
+    const items = await store.listWorkItems(organizationId, goalId);
+    const parent = items.find((item) => item.id === parentWorkItemId);
+    const child = items.find((item) => item.parentWorkItemId === parentWorkItemId);
+    if (parent?.status === "completed" && child?.status === "completed") return [parent, child];
     const failed = items.find((item) => ["failed", "blocked", "cancelled"].includes(item.status));
     if (failed)
       throw new Error(`Work ${failed.id} ended as ${failed.status}: ${failed.blockedReason}`);
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 1_000));
   }
-  throw new Error("Employee work did not complete within six minutes");
+}
+
+async function waitForManagerCallback(
+  store: ExecutionStore,
+  goalId: string,
+  employeeWorkItemId: string,
+) {
+  while (true) {
+    const items = await store.listWorkItems(organizationId, goalId);
+    const callback = items.find(
+      (item) =>
+        item.parentWorkItemId === employeeWorkItemId &&
+        item.assignedAgentId === "agent/ceo" &&
+        Boolean(item.metadata.delegationCallback),
+    );
+    if (callback?.status === "completed") return callback;
+    if (callback && ["failed", "blocked", "cancelled"].includes(callback.status)) {
+      throw new Error(
+        `Manager callback ${callback.id} ended as ${callback.status}: ${callback.blockedReason}`,
+      );
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+  }
+}
+
+async function waitForSimulatedProcess(store: ExecutionStore, goalId: string) {
+  while (true) {
+    const runs = await getDefaultDb()
+      .db.select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.organizationId, organizationId));
+    const processRun = runs.find((run) => run.sourceType === "operator");
+    if (processRun?.status === "failed") throw new Error("Simulated manager process failed");
+    if (processRun?.status === "succeeded") {
+      const items = (await store.listWorkItems(organizationId, goalId)).filter(
+        (item) => item.workflowRunId === processRun.id,
+      );
+      const verifications = await getDefaultDb()
+        .db.select()
+        .from(executionVerifications)
+        .where(eq(executionVerifications.organizationId, organizationId));
+      assert(items.length > 0, "Simulated process created no work");
+      assert(
+        items.every((item) => item.status === "completed"),
+        "Process work is incomplete",
+      );
+      assert(
+        verifications.some(
+          (verification) =>
+            items.some((item) => item.id === verification.workItemId) &&
+            verification.status === "passed",
+        ),
+        "Process work did not pass independent verification",
+      );
+      return processRun;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+  }
 }
 
 function provesTool(events: Array<{ payloadJson: string }>, tool: string): boolean {
@@ -378,9 +343,7 @@ function provesSkill(events: Array<{ payloadJson: string }>, slug: string): bool
 
 async function main(): Promise<void> {
   await mkdir(evidenceRoot, { recursive: true });
-  await ensureDockerImage();
-  const gateway = await startGateway();
-  await prepareDefinitions(gateway.agentUrl);
+  await prepareDefinitions();
   const databasePath = join(evidenceRoot, "state.db");
   process.env.AASPAI_DB = `sqlite:${databasePath}`;
   process.env.AASPAI_AGENTS_DIR = agentsDir;
@@ -390,15 +353,20 @@ async function main(): Promise<void> {
   process.env.AASPAI_DEFINITIONS_DIR = repositoryPath;
   process.env.AASPAI_WORKSPACE_ROOT = join(evidenceRoot, "workspaces");
   process.env.AASPAI_ARTIFACTS_ROOT = join(evidenceRoot, "artifacts");
-  process.env.AASPAI_GATEWAY_CONTROL_URL = gateway.controlUrl;
-  process.env.AASPAI_GATEWAY_CONTROL_TOKEN = controlToken;
-  process.env.DAYTONA_SNAPSHOT = snapshot;
-  delete process.env.AASPAI_HOST_AUTH_PATH;
 
   const handle = getDefaultDb();
   runMigrations(handle);
   const store = new ExecutionStore(handle.db);
   const baseCommit = await git(["rev-parse", "HEAD"]);
+  const createdAt = new Date().toISOString();
+  await handle.db.insert(companyProfiles).values({
+    organizationId,
+    description: zedblock ? "ZedBlock autonomous growth company" : "Real company acceptance",
+    lifecycleStatus: "active",
+    ceoAgentId: "agent/ceo",
+    createdAt,
+    updatedAt: createdAt,
+  });
   const goal = await store.createGoal({
     organizationId,
     title: zedblock
@@ -411,6 +379,16 @@ async function main(): Promise<void> {
     goalId: goal.id,
     title: zedblock ? "ZedBlock growth company" : "Real company acceptance",
   });
+  if (simulated) {
+    await new CompanyCommandService(handle.db).execute({
+      type: "appoint_project_manager",
+      organizationId,
+      actorId: "agent/ceo",
+      idempotencyKey: `simulation-manager:${runId}`,
+      projectId: project.id,
+      agentId: "agent/ceo",
+    });
+  }
   const repository = await store.createRepository({
     organizationId,
     projectId: project.id,
@@ -433,6 +411,57 @@ async function main(): Promise<void> {
     sourceType: "real-company-acceptance",
     idempotencyKey: `real-company:${targetName}:${runId}`,
   });
+  const simulationActions = [
+    ...companyAction.actions.map((action) => ({ ...action, projectId: project.id })),
+    {
+      type: "create_milestone",
+      projectId: project.id,
+      title: "Validate the first operating outcome",
+      outcome: "One evidence-backed research report is completed",
+      sequence: 1,
+      acceptance: { reports: 1 },
+    },
+    {
+      type: "define_and_start_process",
+      projectId: project.id,
+      milestoneSequence: 1,
+      definition: {
+        id: "process/simulation-research",
+        organizationId,
+        revision: 1,
+        contentHash: "simulation-research-v1",
+        name: "Simulation research",
+        description: "Exercise a bounded company process without a model call.",
+        steps: [
+          {
+            id: "step/research",
+            agent: employeeAgentId,
+            routingRule: null,
+            dependsOn: [],
+            prompt: "Produce one simulated research report.",
+            skills: [],
+            tools: [],
+            workKind: "general",
+            deliveryMode: "none",
+            timeoutMs: 60_000,
+            maxAttempts: 2,
+            acceptanceCriteria: "A report is durably recorded.",
+            failureAction: "escalate",
+            approvalPolicy: {},
+          },
+        ],
+        maxDurationMs: 300_000,
+        maxAttempts: 3,
+        createdAt,
+      },
+      policy: {},
+    },
+  ];
+  const parentDescription = simulated
+    ? `Exercise every company control through the deterministic simulator.\nAASPAI_SIMULATION_COMPANY_ACTIONS=${JSON.stringify(simulationActions)}`
+    : zedblock
+      ? "Act as CEO of zedblock.com. First load and follow the company-operator skill. Hire the Growth Director through the structured company-action result and delegate the real lead-research, campaign, and sales-pipeline assignment. Your job ends after returning the structured action; do not execute the employee assignment. Never simulate outreach, a prospect reply, or a closed client."
+      : "First load and follow the company-operator skill. Hire the required specialist through the structured company-action result and delegate the evidence assignment. Do not simulate any action.";
   const parent = await store.createWorkItem({
     organizationId,
     goalId: goal.id,
@@ -440,16 +469,23 @@ async function main(): Promise<void> {
     repositoryId: repository.id,
     workflowRunId: workflow.id,
     title: zedblock ? "Staff and operate ZedBlock growth" : "Hire and delegate with real tools",
-    description: zedblock
-      ? "Act as CEO of zedblock.com. First load and follow the company-operator skill. Hire the Growth Director through the structured company-action result and delegate the real lead-research, campaign, and sales-pipeline assignment. Your job ends after returning the structured action; do not execute the employee assignment. Never simulate outreach, a prospect reply, or a closed client."
-      : "First load and follow the company-operator skill. Hire the required specialist through the structured company-action result and delegate the evidence assignment. Do not simulate any action.",
+    description: parentDescription,
     status: "ready",
     definitionRevisionId: revision.id,
     sourceCommitSha: baseCommit,
-    maxAttempts: 1,
+    maxAttempts: 3,
     idempotencyKey: `parent:${runId}`,
     workKind: "general",
     deliveryMode: "none",
+    metadata: {
+      requiredCompanyActions: simulated
+        ? [
+            { type: "create_milestone", projectId: project.id },
+            { type: "define_and_start_process", projectId: project.id },
+            { type: "hire_and_delegate", projectId: project.id },
+          ]
+        : [{ type: "hire_and_delegate" }],
+    },
   });
 
   daemon = new WorkerDaemon({
@@ -471,7 +507,7 @@ async function main(): Promise<void> {
     agentId: "agent/ceo",
     payloadJson: JSON.stringify({
       prompt: parent.description,
-      adapter: "opencode_cli",
+      adapter,
       sessionId: initialSessionId,
       workItemId: parent.id,
       workflowRunId: workflow.id,
@@ -487,24 +523,127 @@ async function main(): Promise<void> {
     organizationId,
     wakeupId: initialWakeupId,
     agentId: "agent/ceo",
-    adapter: "opencode_cli",
+    adapter,
     runtimeJson: "{}",
     prompt: parent.description,
     configJson: "{}",
     status: "queued",
   });
-  const workItems = await waitForEmployee(store, workflow.id);
+  const workItems = await waitForEmployee(store, goal.id, parent.id);
+  const simulationProcess = simulated ? await waitForSimulatedProcess(store, goal.id) : null;
+  const completedParent = workItems.find((item) => item.id === parent.id);
   const child = workItems.find((item) => item.id !== parent.id);
+  assert(completedParent, "Completed CEO work disappeared");
   assert(child, "Delegated child work was not created");
+  const managerCallback = await waitForManagerCallback(store, goal.id, child.id);
+  const callbackDescendants = (await store.listWorkItems(organizationId, goal.id)).filter(
+    (item) => item.parentWorkItemId === managerCallback.id,
+  );
+  assert(
+    callbackDescendants.length === 0,
+    "Manager callback repeated completed work instead of stopping",
+  );
   const attempts = await handle.db
     .select()
     .from(agentAttempts)
-    .where(eq(agentAttempts.workflowRunId, workflow.id));
-  const ceoAttempt = attempts.find((attempt) => attempt.agentId === "agent/ceo");
-  const employeeAttempt = attempts.find((attempt) => attempt.agentId === employeeAgentId);
+    .where(eq(agentAttempts.organizationId, organizationId));
+  const latestAttemptFor = (workItemId: string) =>
+    attempts
+      .filter((attempt) => attempt.workItemId === workItemId && attempt.role === "maker")
+      .sort((left, right) => right.attemptNumber - left.attemptNumber)[0];
+  const ceoAttempt = latestAttemptFor(parent.id);
+  const employeeAttempt = latestAttemptFor(child.id);
+  const managerCallbackAttempts = attempts
+    .filter((attempt) => attempt.workItemId === managerCallback.id && attempt.role === "maker")
+    .sort((left, right) => left.attemptNumber - right.attemptNumber);
+  const initialManagerCallbackAttempt = managerCallbackAttempts[0];
+  const managerCallbackAttempt = managerCallbackAttempts.at(-1);
+  const passedVerification = (
+    await handle.db
+      .select()
+      .from(executionVerifications)
+      .where(eq(executionVerifications.workItemId, child.id))
+  ).find((verification) => verification.status === "passed");
+  const checkerAttempt = attempts.find(
+    (attempt) => attempt.role === "checker" && attempt.verificationId === passedVerification?.id,
+  );
   assert(ceoAttempt?.status === "succeeded", "CEO attempt did not succeed");
   assert(employeeAttempt?.status === "succeeded", "Employee attempt did not succeed");
+  assert(checkerAttempt?.status === "succeeded", "Independent checker did not succeed");
+  assert(managerCallbackAttempt?.status === "succeeded", "Manager callback did not succeed");
+  assert(initialManagerCallbackAttempt, "Initial manager callback attempt was not recorded");
+  assert(
+    completedParent.assignedAgentId === "agent/ceo",
+    "CEO claim did not persist work ownership",
+  );
   assert(employeeAttempt.workItemId === child.id, "Employee did not own delegated work");
+  assert(
+    child.claimedByAttemptId === employeeAttempt.id && Boolean(child.claimedAt),
+    "Delegated work was not atomically claimed by its employee attempt",
+  );
+  assert(
+    employeeAttempt.parentAttemptId === ceoAttempt.id,
+    "Employee attempt lost its manager attempt lineage",
+  );
+  assert(
+    managerCallbackAttempt.parentAttemptId === employeeAttempt.id,
+    "Manager callback lost its employee attempt lineage",
+  );
+  assert(
+    checkerAttempt.parentAttemptId === employeeAttempt.id,
+    "Checker lost its maker attempt lineage",
+  );
+
+  const ceoHarnessSession = ceoAttempt.harnessSessionId
+    ? await store.getHarnessSession(ceoAttempt.harnessSessionId)
+    : null;
+  const employeeHarnessSession = employeeAttempt.harnessSessionId
+    ? await store.getHarnessSession(employeeAttempt.harnessSessionId)
+    : null;
+  const managerCallbackHarnessSession = managerCallbackAttempt.harnessSessionId
+    ? await store.getHarnessSession(managerCallbackAttempt.harnessSessionId)
+    : null;
+  const checkerHarnessSession = checkerAttempt.harnessSessionId
+    ? await store.getHarnessSession(checkerAttempt.harnessSessionId)
+    : null;
+  const initialManagerCallbackHarnessSession = initialManagerCallbackAttempt.harnessSessionId
+    ? await store.getHarnessSession(initialManagerCallbackAttempt.harnessSessionId)
+    : null;
+  assert(ceoHarnessSession?.sessionId, "CEO provider session was not recorded");
+  assert(
+    employeeHarnessSession?.parentSessionId === ceoHarnessSession.id,
+    "Employee session is not linked to the manager session",
+  );
+  assert(
+    initialManagerCallbackHarnessSession?.parentSessionId === ceoHarnessSession.id,
+    "Initial manager callback is not linked to the original manager session",
+  );
+  const callbackMetadata = managerCallback.metadata.delegationCallback as
+    | Record<string, unknown>
+    | undefined;
+  assert(
+    callbackMetadata?.resumeSessionId === ceoHarnessSession.sessionId,
+    "Manager callback did not select the original provider session",
+  );
+  const managerWorkspace =
+    typeof callbackMetadata?.managerWorkspaceId === "string"
+      ? await store.getWorkspace(callbackMetadata.managerWorkspaceId)
+      : null;
+  const callbackRuntime = JSON.parse(managerCallbackHarnessSession?.runtimeJson ?? "{}") as {
+    cwd?: unknown;
+  };
+  assert(
+    managerWorkspace?.attemptId === ceoAttempt.id &&
+      typeof callbackRuntime.cwd === "string" &&
+      resolve(callbackRuntime.cwd) === resolve(managerWorkspace.path),
+    "Manager callback did not reuse the exact manager workspace",
+  );
+  if (!simulated) {
+    assert(
+      managerCallbackHarnessSession?.sessionId === ceoHarnessSession.sessionId,
+      "Real manager callback did not resume the original provider session",
+    );
+  }
 
   const ceoEvents = ceoAttempt.harnessSessionId
     ? await store.listHarnessSessionEvents(ceoAttempt.harnessSessionId)
@@ -512,13 +651,31 @@ async function main(): Promise<void> {
   const employeeEvents = employeeAttempt.harnessSessionId
     ? await store.listHarnessSessionEvents(employeeAttempt.harnessSessionId)
     : [];
-  assert(provesSkill(ceoEvents, "company-operator"), "CEO session does not prove real skill use");
-  assert(provesTool(ceoEvents, "bash"), "CEO session does not prove real tool use");
-  assert(
-    provesSkill(employeeEvents, employeeSkill),
-    "Employee session does not prove real skill use",
-  );
-  assert(provesTool(employeeEvents, "bash"), "Employee session does not prove real bash-tool use");
+  const managerCallbackEvents = managerCallbackAttempt.harnessSessionId
+    ? await store.listHarnessSessionEvents(managerCallbackAttempt.harnessSessionId)
+    : [];
+  const checkerEvents = checkerAttempt.harnessSessionId
+    ? await store.listHarnessSessionEvents(checkerAttempt.harnessSessionId)
+    : [];
+  if (!simulated) {
+    assert(provesSkill(ceoEvents, "company-operator"), "CEO session does not prove real skill use");
+    assert(provesTool(ceoEvents, "company_action"), "CEO session does not prove typed action use");
+    assert(
+      provesSkill(employeeEvents, employeeSkill),
+      "Employee session does not prove real skill use",
+    );
+    assert(
+      provesTool(employeeEvents, "bash"),
+      "Employee session does not prove real bash-tool use",
+    );
+    assert(provesTool(checkerEvents, "bash"), "Checker session does not prove real tool use");
+    for (const session of [ceoHarnessSession, employeeHarnessSession, checkerHarnessSession]) {
+      const resultJson = JSON.parse(session?.resultJson ?? "{}") as {
+        toolsInvoked?: unknown[];
+      };
+      assert(resultJson.toolsInvoked?.length, "Session tool summary omitted native tool use");
+    }
+  }
 
   const employeeOutputs = await handle.db
     .select()
@@ -540,30 +697,63 @@ async function main(): Promise<void> {
     .where(eq(delegations.workItemId, child.id));
   assert(hired.length === 1, "Hired employee was not registered");
   assert(durableDelegations.length === 1, "Delegation was not persisted");
+  const durableWorkflowRuns = await handle.db
+    .select()
+    .from(workflowRuns)
+    .where(eq(workflowRuns.organizationId, organizationId));
+  assert(
+    durableWorkflowRuns.every(
+      (run) => run.status !== "succeeded" || Boolean(run.startedAt && run.finishedAt),
+    ),
+    "Completed workflow omitted lifecycle timestamps",
+  );
   assert(
     (await stat(join(agentsDir, employeeSlug, "AGENT.md"))).isFile(),
     "Hired employee definition was not materialized",
   );
 
-  const runtimeKind = targetName === "docker" ? "docker" : "sandbox";
-  for (const attempt of [ceoAttempt, employeeAttempt]) {
-    const events = await store.listEvents(attempt.id);
-    assert(
-      events.some(
-        (event) =>
-          event.type === "harness.session.completed" &&
-          (event.payload.runtimeIdentity as { kind?: unknown } | undefined)?.kind === runtimeKind,
-      ),
-      `${attempt.agentId} did not execute in the selected ${runtimeKind} runtime`,
-    );
+  if (!simulated) {
+    for (const attempt of [ceoAttempt, employeeAttempt]) {
+      const events = await store.listEvents(attempt.id);
+      assert(
+        events.some(
+          (event) =>
+            event.type === "harness.session.completed" &&
+            (event.payload.runtimeIdentity as { kind?: unknown } | undefined)?.kind === "local",
+        ),
+        `${attempt.agentId} did not execute in the selected local runtime`,
+      );
+    }
   }
-  const gatewayAudit = await fetch(`${gateway.controlUrl}/audit`, {
-    headers: { authorization: `Bearer ${controlToken}` },
-  }).then((response) => response.json() as Promise<Record<string, number>>);
-  assert(gatewayAudit.issued === 2, `expected two credentials, got ${gatewayAudit.issued}`);
-  assert(gatewayAudit.revoked === 2, `expected two revocations, got ${gatewayAudit.revoked}`);
-  assert((gatewayAudit.proxied ?? 0) > 0, "Real provider traffic was not proxied");
-
+  const timelines = await Promise.all(
+    [ceoAttempt, employeeAttempt, checkerAttempt, managerCallbackAttempt].map(async (attempt) => ({
+      attemptId: attempt.id,
+      agentId: attempt.agentId,
+      events: observeExecution({
+        executionEvents: (await store.listEvents(attempt.id)).map((event) => ({
+          id: event.id,
+          seq: event.seq,
+          ts: event.ts,
+          type: event.type,
+          payload: event.payload,
+        })),
+        sessionEvents: (attempt.id === ceoAttempt.id
+          ? ceoEvents
+          : attempt.id === employeeAttempt.id
+            ? employeeEvents
+            : attempt.id === checkerAttempt.id
+              ? checkerEvents
+              : managerCallbackEvents
+        ).map((event) => ({
+          id: event.id,
+          seq: event.seq,
+          ts: event.ts,
+          kind: event.kind,
+          payload: JSON.parse(event.payloadJson) as Record<string, unknown>,
+        })),
+      }),
+    })),
+  );
   const result = {
     status: "passed",
     target: targetName,
@@ -573,17 +763,31 @@ async function main(): Promise<void> {
     workflowRunId: workflow.id,
     parentWorkItemId: parent.id,
     employeeWorkItemId: child.id,
+    managerCallbackWorkItemId: managerCallback.id,
+    processWorkflowRunId: simulationProcess?.id ?? null,
     ceoAttemptId: ceoAttempt.id,
     employeeAttemptId: employeeAttempt.id,
+    checkerAttemptId: checkerAttempt.id,
+    managerCallbackAttemptId: managerCallbackAttempt.id,
     ceoSessionId: ceoAttempt.harnessSessionId,
     employeeSessionId: employeeAttempt.harnessSessionId,
+    checkerSessionId: checkerAttempt.harnessSessionId,
+    managerCallbackSessionId: managerCallbackAttempt.harnessSessionId,
     scenario: scenarioName,
     hiredAgentId: employeeAgentId,
-    gatewayAudit,
     ceoSessionEventCount: ceoEvents.length,
     employeeSessionEventCount: employeeEvents.length,
+    checkerSessionEventCount: checkerEvents.length,
+    managerCallbackSessionEventCount: managerCallbackEvents.length,
+    companyEventCount: timelines
+      .flatMap((timeline) => timeline.events)
+      .filter((event) => event.lane === "company").length,
+    workEventCount: timelines
+      .flatMap((timeline) => timeline.events)
+      .filter((event) => event.lane === "work").length,
     evidenceRoot,
   };
+  await writeFile(join(evidenceRoot, "TIMELINE.json"), `${JSON.stringify(timelines, null, 2)}\n`);
   await writeFile(join(evidenceRoot, "SUMMARY.json"), `${JSON.stringify(result, null, 2)}\n`);
   await writeFile(
     join(evidenceRoot, "RESULT.md"),
@@ -604,6 +808,4 @@ main()
   })
   .finally(async () => {
     await daemon?.stop().catch(() => undefined);
-    gatewayProcess?.kill();
-    await gatewaySandbox?.delete(120).catch(() => undefined);
   });

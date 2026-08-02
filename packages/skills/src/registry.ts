@@ -148,10 +148,12 @@ export class SkillRegistry {
 
     for (const skill of skills) {
       try {
+        const runtimeSkill =
+          opts.adapterType === "opencode_cli" ? { ...skill, name: skill.key } : skill;
         const skillDir = containedPath(useSymlink ? cacheBase : targetBase, skill.key, "skill key");
         await rm(skillDir, { recursive: true, force: true });
         await mkdir(skillDir, { recursive: true });
-        await writeSkillFile(join(skillDir, "SKILL.md"), skill);
+        await writeSkillFile(join(skillDir, "SKILL.md"), runtimeSkill);
         for (const file of skill.files) {
           if (verifySha256 && file.sha256) {
             const actual = sha256HexSync(file.content);
@@ -199,7 +201,7 @@ export class SkillRegistry {
           try {
             await rm(agentsDir, { recursive: true, force: true });
             await mkdir(agentsDir, { recursive: true });
-            await writeSkillFile(join(agentsDir, "SKILL.md"), skill);
+            await writeSkillFile(join(agentsDir, "SKILL.md"), runtimeSkill);
             for (const file of skill.files) {
               if (verifySha256 && file.sha256) {
                 const actual = sha256HexSync(file.content);

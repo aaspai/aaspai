@@ -7,6 +7,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { KnowledgeReview } from "@/components/knowledge-review";
+import { ProcessImprovementEvaluate } from "@/components/process-improvement-evaluate";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getKnowledgeSnapshot, isAaspaiWorkspace, workspaceRoot } from "@/lib/aaspai";
@@ -48,7 +49,10 @@ export default async function KnowledgePage() {
             knowledge never bypasses Git review.
           </p>
         </div>
-        <Badge variant="outline">{snapshot.organizationId ?? "no company"}</Badge>
+        <div className="flex items-center gap-2">
+          {snapshot.organizationId && <ProcessImprovementEvaluate />}
+          <Badge variant="outline">{snapshot.organizationId ?? "no company"}</Badge>
+        </div>
       </header>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

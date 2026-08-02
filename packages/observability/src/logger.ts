@@ -43,6 +43,10 @@ function readMinLevel(): number {
 
 const MIN_LEVEL = readMinLevel();
 let runtimeMinLevel: number | null = null;
+const unavailableOutputs = new WeakSet<NodeJS.WriteStream>();
+for (const output of [process.stdout, process.stderr]) {
+  output.on("error", () => unavailableOutputs.add(output));
+}
 
 function emit(level: LogLevel, bindings: LogContext, msg: string, ctx?: LogContext): void {
   const min = runtimeMinLevel ?? MIN_LEVEL;
@@ -55,11 +59,8 @@ function emit(level: LogLevel, bindings: LogContext, msg: string, ctx?: LogConte
     ...(ctx ?? {}),
   };
   const line = JSON.stringify(record);
-  if (level === "error" || level === "fatal") {
-    process.stderr.write(`${line}\n`);
-  } else {
-    process.stdout.write(`${line}\n`);
-  }
+  const output = level === "error" || level === "fatal" ? process.stderr : process.stdout;
+  if (!unavailableOutputs.has(output) && !output.destroyed) output.write(`${line}\n`);
 }
 
 function makeLogger(bindings: LogContext): Logger {

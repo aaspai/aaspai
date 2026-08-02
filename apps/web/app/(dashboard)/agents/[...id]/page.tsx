@@ -27,7 +27,7 @@ const ROLE_LABEL: Record<string, string> = {
   qa: "QA",
   devops: "DevOps",
   researcher: "Researcher",
-  operator: "Operator",
+  operator: "Manager",
   general: "Generalist",
 };
 

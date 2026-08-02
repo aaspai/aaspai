@@ -2,11 +2,15 @@ import { createHash } from "node:crypto";
 import {
   and,
   authorityEdges,
+  autonomyProposals,
   eq,
+  executionApprovals,
+  executionEscalations,
   executionGovernanceEvents,
   executionWorkItems,
   gt,
   inArray,
+  knowledgeProposals,
   loopOutputs,
   type SqliteDb,
   serviceAgents,
@@ -43,6 +47,21 @@ export interface LoopReadiness {
   eligibleFor: "L2" | "L3" | null;
   retire: boolean;
   reasons: string[];
+}
+
+export interface HumanInboxItem {
+  id: string;
+  kind:
+    | "approval"
+    | "manager_escalation"
+    | "escalation"
+    | "autonomy_proposal"
+    | "knowledge_proposal";
+  status: string;
+  title: string;
+  detail: string;
+  createdAt: string;
+  targetId: string | null;
 }
 
 /**
@@ -312,10 +331,95 @@ export class OperationalGovernanceService {
     };
   }
 
-  async getHumanInbox(organizationId: string) {
-    return (await new CompanyControlPlaneService(this.db).listEscalations(organizationId)).filter(
-      (item) => item.status === "open" || item.status === "acknowledged",
-    );
+  async getHumanInbox(organizationId: string): Promise<HumanInboxItem[]> {
+    const [approvals, managerEscalations, escalations, autonomy, knowledge] = await Promise.all([
+      this.db
+        .select()
+        .from(executionApprovals)
+        .where(
+          and(
+            eq(executionApprovals.organizationId, organizationId),
+            eq(executionApprovals.status, "requested"),
+          ),
+        ),
+      this.db
+        .select()
+        .from(executionEscalations)
+        .where(
+          and(
+            eq(executionEscalations.organizationId, organizationId),
+            eq(executionEscalations.status, "open"),
+          ),
+        ),
+      new CompanyControlPlaneService(this.db).listEscalations(organizationId),
+      this.db
+        .select()
+        .from(autonomyProposals)
+        .where(
+          and(
+            eq(autonomyProposals.organizationId, organizationId),
+            eq(autonomyProposals.status, "proposed"),
+          ),
+        ),
+      this.db
+        .select()
+        .from(knowledgeProposals)
+        .where(
+          and(
+            eq(knowledgeProposals.organizationId, organizationId),
+            eq(knowledgeProposals.status, "proposed"),
+          ),
+        ),
+    ]);
+    return [
+      ...approvals.map((row) => ({
+        id: row.id,
+        kind: "approval" as const,
+        status: row.status,
+        title: "Execution approval",
+        detail: row.reason,
+        createdAt: row.requestedAt,
+        targetId: row.workItemId,
+      })),
+      ...managerEscalations.map((row) => ({
+        id: row.id,
+        kind: "manager_escalation" as const,
+        status: row.status,
+        title: "Manager escalation",
+        detail: row.reason,
+        createdAt: row.createdAt,
+        targetId: row.targetId,
+      })),
+      ...escalations
+        .filter((row) => row.status === "open" || row.status === "acknowledged")
+        .map((row) => ({
+          id: row.id,
+          kind: "escalation" as const,
+          status: row.status,
+          title: `${row.subjectType} escalation`,
+          detail: row.reason,
+          createdAt: row.createdAt,
+          targetId: row.subjectId,
+        })),
+      ...autonomy.map((row) => ({
+        id: row.id,
+        kind: "autonomy_proposal" as const,
+        status: row.status,
+        title: "Autonomy proposal",
+        detail: row.rationale,
+        createdAt: row.createdAt,
+        targetId: row.targetId,
+      })),
+      ...knowledge.map((row) => ({
+        id: row.id,
+        kind: "knowledge_proposal" as const,
+        status: row.status,
+        title: "Knowledge proposal",
+        detail: row.summary,
+        createdAt: row.createdAt,
+        targetId: row.targetPath,
+      })),
+    ].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
   async getWeeklyDigest(organizationId: string) {

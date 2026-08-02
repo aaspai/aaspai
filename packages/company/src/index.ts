@@ -31,6 +31,7 @@ import {
 } from "@aaspai/db";
 import type { GitRepository, PullRequestProvider } from "@aaspai/git";
 
+export { CompanyCommandError, CompanyCommandService } from "./command-service";
 export {
   CompanyControlPlaneError,
   CompanyControlPlaneService,
@@ -38,12 +39,19 @@ export {
   type CompanyWorkItemPort,
   type DelegateWorkInput,
 } from "./control-plane";
+export { CompanyFullExportService } from "./full-export";
 export {
   type FileAgentRelation,
+  type HumanInboxItem,
   type LoopMetrics,
   type LoopReadiness,
   OperationalGovernanceService,
 } from "./operational-governance";
+export {
+  type ProcessImprovementEvaluation,
+  ProcessImprovementService,
+} from "./process-improvement";
+export { StrategicReadModelService } from "./strategic";
 
 export interface CreateDepartmentInput {
   organizationId: string;

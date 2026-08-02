@@ -237,6 +237,7 @@ export const wakeupSchema = z
     requestedByActorId: identifierSchema.optional(),
     requestedByActorType: z.enum(["user", "agent", "system"]).optional(),
     claimedAt: isoTimestampSchema.nullable().optional(),
+    heartbeatAt: isoTimestampSchema.nullable().optional(),
     finishedAt: isoTimestampSchema.nullable().optional(),
     sessionId: identifierSchema.nullable().optional(),
     error: z.string().max(8_192).optional(),

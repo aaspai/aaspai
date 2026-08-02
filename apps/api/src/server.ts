@@ -43,6 +43,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerLoopRoutes } from "./routes/loops.js";
 import { registerProviderRoutes } from "./routes/providers.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
+import { registerStrategicRoutes } from "./routes/strategic.js";
 
 const log = getLogger("api.server");
 
@@ -83,6 +84,7 @@ export function createApiApp(
     git: options.git,
     pullRequests: options.pullRequestProvider,
   });
+  registerStrategicRoutes(app, { authVerifier: options.authVerifier });
   return app;
 }
 

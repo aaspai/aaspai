@@ -4,12 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { enforceRuntimeToolPolicy } from "../src/harness-runner";
 
 describe("runtime tool policy", () => {
-  it("fails closed for approvals and adapters without native allowlist enforcement", () => {
+  it("fails closed for approvals and incomplete Codex native bundles", () => {
     expect(() =>
       enforceRuntimeToolPolicy("claude_local", {}, profile([native("Bash", true)])),
     ).toThrow(/no runtime approval broker/);
     expect(() => enforceRuntimeToolPolicy("codex_local", {}, profile([native("shell")]))).toThrow(
-      /cannot enforce/,
+      /complete sandboxed native tool bundle/,
     );
     expect(() =>
       enforceRuntimeToolPolicy(
@@ -36,6 +36,16 @@ describe("runtime tool policy", () => {
     await expect(claude.tools?.invoke("echo", {}, {})).resolves.toBe("echo");
     await expect(claude.tools?.invoke("write", {}, {})).rejects.toThrow(/denied/);
     expect(invoke).toHaveBeenCalledTimes(1);
+
+    const codex = enforceRuntimeToolPolicy(
+      "codex_local",
+      {},
+      profile(["apply_patch", "shell", "web_search", "view_image"].map((name) => native(name))),
+    );
+    expect(codex.adapterConfig).toMatchObject({
+      sandbox: "workspace-write",
+      approvalMode: "never",
+    });
 
     const opencode = enforceRuntimeToolPolicy("opencode_cli", {}, resolved);
     expect(opencode.adapterConfig).toMatchObject({

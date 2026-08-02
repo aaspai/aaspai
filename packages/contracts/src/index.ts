@@ -18,3 +18,4 @@ export * from "./phase2";
 export * from "./primitives";
 export * from "./profile";
 export * from "./runtime";
+export * from "./strategic";

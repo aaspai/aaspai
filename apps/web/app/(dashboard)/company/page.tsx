@@ -9,9 +9,16 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { DecisionActions, GiveDirection } from "@/components/company-actions";
+import { CompanyControlActions } from "@/components/company-control-actions";
+import { PortfolioProposalForm } from "@/components/portfolio-proposal-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { getCompanyOverview, getLatestAgentBriefing, isAaspaiWorkspace } from "@/lib/aaspai";
+import {
+  getCompanyOverview,
+  getLatestAgentBriefing,
+  getStrategicSummary,
+  isAaspaiWorkspace,
+} from "@/lib/aaspai";
 import { currentUser } from "@/lib/local-auth";
 import { formatRelative } from "@/lib/utils";
 import { readFrontendOnboarding } from "@/lib/workspace-bootstrap";
@@ -20,11 +27,12 @@ export const dynamic = "force-dynamic";
 
 export default async function CompanyPage() {
   if (!isAaspaiWorkspace()) return <p>No company workspace is configured.</p>;
-  const [overview, user, onboarding, briefing] = await Promise.all([
+  const [overview, user, onboarding, briefing, strategic] = await Promise.all([
     getCompanyOverview(),
     currentUser(),
     readFrontendOnboarding(),
     getLatestAgentBriefing("agent/ceo"),
+    getStrategicSummary(),
   ]);
   const goal = overview.goals[0];
   const work = overview.workItems.filter((item) => item.goalId === goal?.id);
@@ -46,8 +54,25 @@ export default async function CompanyPage() {
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{onboarding?.ceoAgenda}</p>
         </div>
-        <p className="hidden text-sm text-muted-foreground sm:block">{today}</p>
+        <div className="flex items-center gap-3">
+          <p className="hidden text-sm text-muted-foreground sm:block">{today}</p>
+          {strategic?.profile && (
+            <CompanyControlActions lifecycleStatus={strategic.profile.lifecycleStatus} />
+          )}
+        </div>
       </header>
+
+      {strategic?.profile?.lifecycleStatus === "discovery" && (
+        <section className="rounded-xl border bg-card p-5">
+          <h2 className="text-base font-semibold">CEO discovery review</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Record the evidence-backed portfolio recommendation before founder activation.
+          </p>
+          <div className="mt-4">
+            <PortfolioProposalForm goalId={strategic.objectives[0]?.id} />
+          </div>
+        </section>
+      )}
 
       <section className="rounded-xl border bg-card p-5">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-center">
@@ -55,8 +80,12 @@ export default async function CompanyPage() {
             <CheckCircle2 className="mt-0.5 h-7 w-7 shrink-0" />
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg font-semibold">The company is running.</h2>
-                <Badge variant="secondary">{pending.length ? "Needs you" : "On track"}</Badge>
+                <h2 className="text-lg font-semibold">
+                  {strategic?.profile?.lifecycleStatus === "active"
+                    ? "The company is running."
+                    : "Company plan ready for review."}
+                </h2>
+                <Badge variant="secondary">{strategic?.profile?.lifecycleStatus ?? "draft"}</Badge>
               </div>
               <p className="mt-1 max-w-xl text-sm text-muted-foreground">
                 {onboarding?.ceoAgenda ?? "The CEO is operating from the founder mandate."}

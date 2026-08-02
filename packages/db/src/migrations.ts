@@ -51,6 +51,7 @@ const SQLITE_STATEMENTS = [
     requested_by_actor_id TEXT,
     requested_by_actor_type TEXT,
     claimed_at TEXT,
+    heartbeat_at TEXT,
     finished_at TEXT,
     session_id TEXT,
     error TEXT
@@ -131,6 +132,145 @@ const SQLITE_STATEMENTS = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS company_profiles (
+    organization_id TEXT PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    lifecycle_status TEXT NOT NULL DEFAULT 'draft',
+    active_definition_revision_id TEXT,
+    ceo_agent_id TEXT,
+    operator_agent_id TEXT,
+    timezone TEXT NOT NULL DEFAULT 'UTC',
+    policy_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS company_control_events (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    correlation_id TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+  )`,
+  `CREATE INDEX IF NOT EXISTS company_control_events_org_time_idx
+    ON company_control_events (organization_id, occurred_at)`,
+  `CREATE INDEX IF NOT EXISTS company_control_events_correlation_idx
+    ON company_control_events (organization_id, correlation_id)`,
+  `CREATE INDEX IF NOT EXISTS company_profiles_lifecycle_idx
+    ON company_profiles (lifecycle_status)`,
+  `CREATE TABLE IF NOT EXISTS project_objectives (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    goal_id TEXT NOT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    contribution_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS project_objectives_project_idx
+    ON project_objectives (organization_id, project_id)`,
+  `CREATE INDEX IF NOT EXISTS project_objectives_goal_idx
+    ON project_objectives (organization_id, goal_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS project_objectives_primary_uniq
+    ON project_objectives (organization_id, project_id) WHERE is_primary = 1`,
+  `CREATE TABLE IF NOT EXISTS objective_measurements (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    goal_id TEXT NOT NULL,
+    metric_key TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    unit TEXT,
+    observed_at TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    recorded_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS objective_measurements_goal_metric_idx
+    ON objective_measurements (organization_id, goal_id, metric_key, observed_at)`,
+  `CREATE TABLE IF NOT EXISTS project_assignments (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    allocation_percent REAL NOT NULL DEFAULT 100,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS project_assignments_project_status_idx
+    ON project_assignments (organization_id, project_id, status)`,
+  `CREATE INDEX IF NOT EXISTS project_assignments_agent_status_idx
+    ON project_assignments (organization_id, agent_id, status)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS project_assignments_active_manager_uniq
+    ON project_assignments (organization_id, project_id)
+    WHERE role = 'manager' AND status = 'active'`,
+  `CREATE TABLE IF NOT EXISTS milestones (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    outcome TEXT NOT NULL DEFAULT '',
+    owner_agent_id TEXT,
+    sequence INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    acceptance_json TEXT NOT NULL DEFAULT '{}',
+    target_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS milestones_project_sequence_uniq
+    ON milestones (organization_id, project_id, sequence)`,
+  `CREATE INDEX IF NOT EXISTS milestones_project_status_idx
+    ON milestones (organization_id, project_id, status)`,
+  `CREATE TABLE IF NOT EXISTS process_bindings (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    process_definition_id TEXT NOT NULL,
+    process_revision INTEGER NOT NULL DEFAULT 1,
+    owner_agent_id TEXT NOT NULL,
+    loop_id TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    performance_json TEXT NOT NULL DEFAULT '{}',
+    policy_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS process_bindings_project_status_idx
+    ON process_bindings (organization_id, project_id, status)`,
+  `CREATE INDEX IF NOT EXISTS process_bindings_definition_idx
+    ON process_bindings (organization_id, process_definition_id, process_revision)`,
+  `CREATE TABLE IF NOT EXISTS threads (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS threads_entity_idx
+    ON threads (organization_id, entity_type, entity_id)`,
+  `CREATE TABLE IF NOT EXISTS thread_messages (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS thread_messages_thread_idx
+    ON thread_messages (organization_id, thread_id, created_at)`,
   `CREATE TABLE IF NOT EXISTS repositories (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,
@@ -248,6 +388,7 @@ const SQLITE_STATEMENTS = [
     attempt_number INTEGER NOT NULL DEFAULT 1,
     timeout_ms INTEGER,
     cancel_requested_at TEXT,
+    heartbeat_at TEXT,
     started_at TEXT,
     finished_at TEXT,
     error TEXT,
@@ -745,8 +886,80 @@ const SQLITE_STATEMENTS = [
  */
 const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
   {
+    check: "SELECT 1 FROM pragma_table_info('goals') WHERE name = 'priority'",
+    sql: "ALTER TABLE goals ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('goals') WHERE name = 'horizon'",
+    sql: "ALTER TABLE goals ADD COLUMN horizon TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('goals') WHERE name = 'success_criteria_json'",
+    sql: "ALTER TABLE goals ADD COLUMN success_criteria_json TEXT NOT NULL DEFAULT '[]'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('goals') WHERE name = 'target_at'",
+    sql: "ALTER TABLE goals ADD COLUMN target_at TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('goals') WHERE name = 'review_cadence'",
+    sql: "ALTER TABLE goals ADD COLUMN review_cadence TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('goals') WHERE name = 'owner_agent_id'",
+    sql: "ALTER TABLE goals ADD COLUMN owner_agent_id TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('projects') WHERE name = 'manager_agent_id'",
+    sql: "ALTER TABLE projects ADD COLUMN manager_agent_id TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('projects') WHERE name = 'budget_json'",
+    sql: "ALTER TABLE projects ADD COLUMN budget_json TEXT NOT NULL DEFAULT '{}'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('projects') WHERE name = 'risk_level'",
+    sql: "ALTER TABLE projects ADD COLUMN risk_level TEXT NOT NULL DEFAULT 'medium'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('projects') WHERE name = 'review_cadence'",
+    sql: "ALTER TABLE projects ADD COLUMN review_cadence TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('projects') WHERE name = 'health_status'",
+    sql: "ALTER TABLE projects ADD COLUMN health_status TEXT NOT NULL DEFAULT 'healthy'",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('projects') WHERE name = 'success_criteria_json'",
+    sql: "ALTER TABLE projects ADD COLUMN success_criteria_json TEXT NOT NULL DEFAULT '[]'",
+  },
+  {
     check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'workflow_run_id'",
     sql: "ALTER TABLE execution_work_items ADD COLUMN workflow_run_id TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'milestone_id'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN milestone_id TEXT",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'process_binding_id'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN process_binding_id TEXT",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'parent_work_item_id'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN parent_work_item_id TEXT",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'assigned_agent_id'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN assigned_agent_id TEXT",
+  },
+  {
+    check:
+      "SELECT 1 FROM pragma_table_info('execution_work_items') WHERE name = 'alignment_rationale'",
+    sql: "ALTER TABLE execution_work_items ADD COLUMN alignment_rationale TEXT NOT NULL DEFAULT ''",
   },
   {
     check: "SELECT 1 FROM pragma_table_info('workflow_runs') WHERE name = 'source_type'",
@@ -857,6 +1070,14 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
     sql: "ALTER TABLE agent_attempts ADD COLUMN verification_id TEXT",
   },
   {
+    check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'heartbeat_at'",
+    sql: "ALTER TABLE agent_attempts ADD COLUMN heartbeat_at TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('wakeups') WHERE name = 'heartbeat_at'",
+    sql: "ALTER TABLE wakeups ADD COLUMN heartbeat_at TEXT",
+  },
+  {
     check: "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'agent_id'",
     sql: "ALTER TABLE execution_plans ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'unknown'",
   },
@@ -895,6 +1116,14 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
 // assigns sequence numbers from 1, so zero is an unambiguous marker for old
 // rows that need to be ordered by their original autoincrement id.
 const DATA_NORMALIZATION = [
+  `INSERT INTO project_objectives
+    (id, organization_id, project_id, goal_id, is_primary, contribution_json, created_at, updated_at)
+   SELECT 'po_legacy_' || p.id, p.organization_id, p.id, p.goal_id, 1, '{}', p.created_at, p.updated_at
+   FROM projects p
+   WHERE NOT EXISTS (
+     SELECT 1 FROM project_objectives po
+     WHERE po.organization_id = p.organization_id AND po.project_id = p.id
+   )`,
   "UPDATE session_events SET seq = id WHERE seq = 0",
   `UPDATE execution_work_items
     SET status = 'blocked',
