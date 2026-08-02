@@ -20,6 +20,24 @@ describe("runProcess cancellation", () => {
     expect(result.signal).toBeDefined();
   });
 
+  it.runIf(process.platform === "win32")(
+    "terminates an aborted process tree that inherits stdout",
+    async () => {
+      const controller = new AbortController();
+      const promise = runProcess({
+        command: process.execPath,
+        args: [
+          "-e",
+          "require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},30000)'],{stdio:'inherit'});setInterval(()=>{},30000)",
+        ],
+        signal: controller.signal,
+      });
+      setTimeout(() => controller.abort(), 30).unref();
+
+      await expect(promise).resolves.toMatchObject({ timedOut: false });
+    },
+  );
+
   it.runIf(process.platform === "win32")("runs an npm cmd shim without a shell", async () => {
     const directory = join(tmpdir(), `aaspai-shim-${process.pid}`);
     await mkdir(join(directory, "package"), { recursive: true });

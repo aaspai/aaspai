@@ -311,8 +311,14 @@ The release gate is the real ZedBlock run completing with durable evidence for e
 
 The deterministic orchestration gate now passes through the real scheduler, worker, workspace, company commands, delegation, process, independent verification, and manager roll-up paths:
 
-- Evidence: [simulation result](../workspace/company-simulation/acceptance/simulation/2026-08-01T05-54-41-882Z-50177640/RESULT.md)
-- Timeline: [classified timeline](../workspace/company-simulation/acceptance/simulation/2026-08-01T05-54-41-882Z-50177640/TIMELINE.json)
+- Evidence: [simulation result](../workspace/company-simulation/acceptance/simulation/2026-08-02T04-58-52-014Z-b471e396/RESULT.md)
+- Timeline: [classified timeline](../workspace/company-simulation/acceptance/simulation/2026-08-02T04-58-52-014Z-b471e396/TIMELINE.json)
 - Current observability/control study: [AASPAI central observability and control](AASPAI-CENTRAL-OBSERVABILITY-AND-CONTROL-2026-08-01.md)
 
 This clears the deterministic system gate. It does not replace the required fresh real OpenCode ZedBlock run or the pending central PostgreSQL/OTLP telemetry service.
+
+## 2026-08-01 real local OpenCode status
+
+The real local ZedBlock run has now been executed. It proved CEO typed delegation, separate employee execution, native public-web research, evidence-policy enforcement, stalled-process interruption, provider-session persistence, and retry routing. It did not reach verified employee completion and therefore remains a failed acceptance.
+
+Detailed evidence, root causes, implemented fixes, and remaining release blockers are recorded in [Real OpenCode ZedBlock validation](REAL-OPENCODE-ZEDBLOCK-VALIDATION-2026-08-01.md).

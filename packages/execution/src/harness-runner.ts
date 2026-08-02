@@ -112,6 +112,7 @@ export class HarnessExecutionPlanRunner {
     let rawOutputSeq = 0;
     let persistenceFailure: Error | undefined;
     let actualRuntimeIdentity: AdapterExecutionResult["runtimeIdentity"];
+    let observedProviderSessionId: string | undefined;
     let lastProgressAt = Date.now();
     let stalled = false;
     const runController = new AbortController();
@@ -238,7 +239,17 @@ export class HarnessExecutionPlanRunner {
             if (!line) continue;
             if (stream === "stdout") {
               try {
-                const parsed = JSON.parse(line) as { kind?: string } & Record<string, unknown>;
+                const parsed = JSON.parse(line) as {
+                  kind?: string;
+                  sessionID?: unknown;
+                } & Record<string, unknown>;
+                if (
+                  typeof parsed.sessionID === "string" &&
+                  parsed.sessionID !== observedProviderSessionId
+                ) {
+                  observedProviderSessionId = parsed.sessionID;
+                  await this.store.setHarnessSessionProviderIdentity(session.id, parsed.sessionID);
+                }
                 const canonicalKinds = new Set([
                   "assistant",
                   "thinking",
@@ -335,7 +346,7 @@ export class HarnessExecutionPlanRunner {
       type: "harness.session.completed",
       payload: {
         harnessSessionId: session.id,
-        providerSessionId: result.sessionId ?? null,
+        providerSessionId: result.sessionId ?? observedProviderSessionId ?? null,
         status,
         exitCode: result.exitCode,
         runtimeIdentity: result.runtimeIdentity ?? null,

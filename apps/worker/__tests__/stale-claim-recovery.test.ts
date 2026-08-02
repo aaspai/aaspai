@@ -109,6 +109,192 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
 
     await teardownDb(tmpDir);
   });
+
+  it("queues a failed attempt with its provider session and verification feedback", async () => {
+    const { tmpDir, wakeupsTable, handle } = await setupDb();
+    const wakeupId = `wup_${randomUUID()}`;
+    await (handle.db.insert(wakeupsTable) as { values: (v: unknown) => Promise<unknown> }).values({
+      id: wakeupId,
+      organizationId: "org_test",
+      loopId: "loop/company-control/org_test",
+      source: "system",
+      agentId: "agent/manager",
+      reason: "execute delegated work",
+      payloadJson: JSON.stringify({ prompt: "Build the sales playbook" }),
+      status: "completed",
+      requestedAt: new Date().toISOString(),
+      idempotencyKey: randomUUID(),
+    });
+    const rows = await (
+      handle.db.select().from(wakeupsTable) as { all: () => Promise<Record<string, unknown>[]> }
+    ).all();
+    const source = rows.find((row) => row.id === wakeupId);
+    const { WorkerDaemon } = await import("../src/daemon.js");
+    const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
+    await (
+      daemon as unknown as {
+        queueRetryWakeup(
+          wakeup: Record<string, unknown>,
+          request: Record<string, unknown>,
+          attemptNumber: number,
+          retry: { resumeSessionId?: string; failure?: string },
+        ): Promise<void>;
+      }
+    ).queueRetryWakeup(
+      source ?? {},
+      {
+        prompt: "Build the sales playbook",
+        workItemId: "work_test",
+        workflowRunId: "run_test",
+      },
+      2,
+      {
+        resumeSessionId: "provider_session_123",
+        failure: "Unsupported commercial or security claim in sales-playbook.md",
+      },
+    );
+
+    const queued = (
+      await (
+        handle.db.select().from(wakeupsTable) as { all: () => Promise<Record<string, unknown>[]> }
+      ).all()
+    ).find((row) => row.triggerDetail === "attempt-retry");
+    const payload = JSON.parse(String(queued?.payloadJson)) as Record<string, unknown>;
+    expect(payload.resumeSessionId).toBe("provider_session_123");
+    expect(payload.prompt).toContain("previous attempt did not pass execution verification");
+    expect(payload.prompt).toContain("Unsupported commercial or security claim");
+
+    await teardownDb(tmpDir);
+  });
+
+  it("requeues lost delegated work with the persisted provider session", async () => {
+    const { tmpDir, wakeupsTable, handle } = await setupDb();
+    const { agentAttempts, eq, sessionEvents } = await import("@aaspai/db");
+    const { ExecutionStore } = await import("@aaspai/execution");
+    const store = new ExecutionStore(handle.db as never);
+    const goal = await store.createGoal({ organizationId: "org_test", title: "Grow" });
+    const project = await store.createProject({
+      organizationId: "org_test",
+      goalId: goal.id,
+      title: "Growth",
+    });
+    const repository = await store.createRepository({
+      organizationId: "org_test",
+      projectId: project.id,
+      purpose: "project",
+      provider: "local",
+      localPath: tmpDir,
+    });
+    const revision = await store.createDefinitionRevision({
+      organizationId: "org_test",
+      repositoryId: repository.id,
+      commitSha: "abcdef1",
+      sourcePath: tmpDir,
+      contentHash: "hash",
+    });
+    const run = await store.createWorkflowRun({
+      organizationId: "org_test",
+      goalId: goal.id,
+      definitionRevisionId: revision.id,
+      idempotencyKey: "run:recovery",
+    });
+    const work = await store.createWorkItem({
+      organizationId: "org_test",
+      goalId: goal.id,
+      projectId: project.id,
+      repositoryId: repository.id,
+      workflowRunId: run.id,
+      title: "Delegated work",
+      definitionRevisionId: revision.id,
+      idempotencyKey: "work:recovery",
+      maxAttempts: 3,
+      status: "ready",
+    });
+    const attempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: run.id,
+      workItemId: work.id,
+      agentId: "agent/manager",
+      harness: "opencode_cli",
+    });
+    await store.claimWorkItem(work.id, attempt.id);
+    await store.transitionAttempt(attempt.id, "preparing");
+    await store.transitionAttempt(attempt.id, "running");
+    const session = await store.createHarnessSession({
+      organizationId: "org_test",
+      agentId: "agent/manager",
+      adapter: "opencode_cli",
+      prompt: "Build it",
+    });
+    await store.linkHarnessSession(attempt.id, session.id);
+    await store.setHarnessSessionProviderIdentity(session.id, "provider_session_123");
+    await store.appendHarnessSessionEvent({
+      sessionId: session.id,
+      kind: "tool_result",
+      payload: { tool: "bash" },
+      seq: 1,
+    });
+    const staleAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    const db = handle.db as unknown as {
+      update(table: unknown): {
+        set(value: unknown): { where(condition: unknown): Promise<unknown> };
+      };
+    };
+    await db
+      .update(agentAttempts)
+      .set({ startedAt: staleAt })
+      .where(eq(agentAttempts.id, attempt.id));
+    const wakeupId = `wup_${randomUUID()}`;
+    await (handle.db.insert(wakeupsTable) as { values: (v: unknown) => Promise<unknown> }).values({
+      id: wakeupId,
+      organizationId: "org_test",
+      loopId: "loop/company-control/org_test",
+      source: "system",
+      agentId: "agent/manager",
+      reason: "delegated work",
+      payloadJson: JSON.stringify({
+        prompt: "Build it",
+        workItemId: work.id,
+        workflowRunId: run.id,
+      }),
+      status: "claimed",
+      claimedAt: staleAt,
+      requestedAt: staleAt,
+      idempotencyKey: randomUUID(),
+    });
+
+    const { WorkerDaemon } = await import("../src/daemon.js");
+    const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
+    await (daemon as unknown as { recoverStaleClaims(): Promise<void> }).recoverStaleClaims();
+
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "running" });
+    const activeWake = (
+      await (
+        handle.db.select().from(wakeupsTable) as { all: () => Promise<Record<string, unknown>[]> }
+      ).all()
+    ).find((row) => row.id === wakeupId);
+    expect(activeWake?.status).toBe("claimed");
+
+    await db
+      .update(sessionEvents)
+      .set({ ts: staleAt })
+      .where(eq(sessionEvents.sessionId, session.id));
+    await (daemon as unknown as { recoverStaleClaims(): Promise<void> }).recoverStaleClaims();
+
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "lost" });
+    await expect(store.getWorkItem(work.id)).resolves.toMatchObject({ status: "ready" });
+    const recovered = (
+      await (
+        handle.db.select().from(wakeupsTable) as { all: () => Promise<Record<string, unknown>[]> }
+      ).all()
+    ).find((row) => row.id === wakeupId);
+    expect(recovered?.status).toBe("queued");
+    expect(JSON.parse(String(recovered?.payloadJson))).toMatchObject({
+      resumeSessionId: "provider_session_123",
+    });
+
+    await teardownDb(tmpDir);
+  });
 });
 
 describe("WorkerDaemon claimAndRun failure path (issue #2)", () => {

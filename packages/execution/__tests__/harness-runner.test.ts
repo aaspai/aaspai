@@ -108,6 +108,10 @@ describe("HarnessExecutionPlanRunner", () => {
       },
       ephemeralEnv: { AASPAI_ATTEMPT_TOKEN: "short-lived-test-token" },
       onExecuted: async () => {
+        const runningAttempt = await store.getAttempt(attemptId);
+        await expect(
+          store.getHarnessSession(runningAttempt?.harnessSessionId ?? "missing"),
+        ).resolves.toMatchObject({ sessionId: "oc_fixture" });
         const seen = await import("node:fs/promises").then((fs) =>
           fs.readFile(path.join(workspace.path, "environment-seen.json"), "utf8"),
         );

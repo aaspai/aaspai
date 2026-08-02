@@ -680,6 +680,7 @@ async function runOpencodeCli(
   if (config.logLevel) args.push("--log-level", config.logLevel);
   if (config.printLogs) args.push("--print-logs");
   if (config.workingDir) args.push("--dir", config.workingDir);
+  else if (options.resumeSessionId && !config.attachServer) args.push("--dir", cwd);
   if (config.attachServer) args.push("--attach", config.attachServer);
   for (const a of config.attachments) args.push("--file", a);
   if (options.resumeSessionId) {
@@ -2587,7 +2588,7 @@ export const opencodeCli: ServerAdapterModule = {
     if (Buffer.byteLength(cliResult.text, "utf8") > MAX_RESULT_TEXT_BYTES) {
       throw new Error("opencode response exceeds the 1 MiB result limit");
     }
-    const sessionId = cliResult.sessionId ?? shortId("oc");
+    const sessionId = cliResult.sessionId ?? runtimeSessionId ?? shortId("oc");
     return {
       protocolVersion: HARNESS_PROTOCOL_VERSION,
       sessionId,

@@ -44,6 +44,7 @@ import {
   companyProfiles,
   definitionRevisions,
   executionOperatorRuns,
+  executionWorkItems,
   getDefaultDb,
   loops,
   milestones,
@@ -106,6 +107,7 @@ const log = getLogger("worker.daemon");
 
 const DEFAULT_TICK_INTERVAL_MS = 60_000;
 const DEFAULT_WAKEUP_POLL_INTERVAL_MS = 5_000;
+const STALE_CLAIM_MS = 5 * 60_000;
 
 function hiredAgentTools(tools: AgentConfig["tools"], role: HireAndDelegateAction["role"]) {
   const source = tools && typeof tools === "object" ? (tools as Record<string, unknown>) : {};
@@ -198,6 +200,11 @@ function safeJsonParse(s: string | null): unknown {
   } catch {
     return null;
   }
+}
+
+function retryPrompt(prompt: string | undefined, failure: string | undefined): string | undefined {
+  if (!failure) return prompt;
+  return `${prompt ?? "Continue the assigned work."}\n\nThe previous attempt did not pass execution verification: ${failure}. Correct that issue in the current workspace, preserve supported work, and do not repeat unsupported claims.`;
 }
 
 const ARTIFACT_KINDS = new Set([
@@ -372,6 +379,7 @@ export class WorkerDaemon {
   private pollHandle: NodeJS.Timeout | null = null;
   private pollInFlight = false;
   private inFlightWork: Promise<void> | null = null;
+  private lastRecoveryAt = 0;
   private shuttingDown = false;
   private running = false;
   private startedAt: string | null = null;
@@ -618,6 +626,7 @@ export class WorkerDaemon {
     }
     this.pollInFlight = true;
     try {
+      if (Date.now() - this.lastRecoveryAt >= STALE_CLAIM_MS) await this.recoverStaleClaims();
       await this.enqueueDueManagerRuns();
       const handle = getDefaultDb();
       const queued = await handle.db
@@ -859,10 +868,19 @@ export class WorkerDaemon {
         const harnessSession = result.attempt.harnessSessionId
           ? await this.executionStore.getHarnessSession(result.attempt.harnessSessionId)
           : null;
+        const resumeSessionId =
+          harnessSession?.sessionId &&
+          (result.attempt.status === "timed_out" ||
+            harnessSession.errorCode === "evidence_persistence_failed")
+            ? harnessSession.sessionId
+            : undefined;
         await this.queueRetryWakeup(wakeupRow, request, result.attempt.attemptNumber + 1, {
-          ...(result.attempt.status === "timed_out" && harnessSession?.sessionId
-            ? { resumeSessionId: harnessSession.sessionId }
-            : {}),
+          ...(resumeSessionId ? { resumeSessionId } : {}),
+          ...(harnessSession?.errorMessage
+            ? { failure: harnessSession.errorMessage }
+            : harnessSession?.errorCode
+              ? { failure: harnessSession.errorCode }
+              : {}),
         });
       }
       await this.finishWakeup(wakeupId, request.sessionId ?? result.attempt.harnessSessionId);
@@ -1008,7 +1026,7 @@ export class WorkerDaemon {
       sessionId?: string;
     },
     attemptNumber: number,
-    retry: { resumeSessionId?: string },
+    retry: { resumeSessionId?: string; failure?: string },
   ): Promise<void> {
     const agentId = wakeup.agentId;
     if (!request.workItemId || !request.workflowRunId || !agentId) return;
@@ -1032,7 +1050,8 @@ export class WorkerDaemon {
           payloadJson: JSON.stringify({
             ...request,
             sessionId,
-            ...retry,
+            ...(retry.resumeSessionId ? { resumeSessionId: retry.resumeSessionId } : {}),
+            prompt: retryPrompt(request.prompt, retry.failure),
           }),
           status: "queued",
           idempotencyKey: `retry:${request.workItemId}:${attemptNumber}`,
@@ -2420,7 +2439,7 @@ Use typed actions instead of merely describing company changes. In OpenCode call
 
     const workspaceRoot = await realpath(input.workspacePath);
     let artifactBytes = 0;
-    for (const declaration of artifactDeclarations) {
+    for (const declaration of successful ? artifactDeclarations : []) {
       if (isAbsolute(declaration.path)) throw new Error("Declared artifact path must be relative");
       const source = await realpath(resolve(workspaceRoot, declaration.path));
       const safePath = relative(workspaceRoot, source);
@@ -2589,13 +2608,12 @@ Use typed actions instead of merely describing company changes. In OpenCode call
   }
 
   private async recoverStaleClaims(): Promise<void> {
+    this.lastRecoveryAt = Date.now();
     const handle = getDefaultDb();
-    const staleMs = 5 * 60_000;
+    const execution = new ExecutionStore(handle.db);
+    const staleMs = STALE_CLAIM_MS;
     const cutoff = new Date(Date.now() - staleMs).toISOString();
-    const lostAttempts = await new ExecutionStore(handle.db).reconcileLostAttempts(
-      cutoff,
-      this.organizationId,
-    );
+    const lostAttempts = await execution.reconcileLostAttempts(cutoff, this.organizationId);
     if (lostAttempts > 0) log.warn("reconciled lost execution attempts", { lostAttempts, staleMs });
     const stale = await handle.db
       .select()
@@ -2611,6 +2629,69 @@ Use typed actions instead of merely describing company changes. In OpenCode call
     for (const row of stale) {
       if (!row.claimedAt) continue;
       if (row.claimedAt > cutoff) continue;
+      const payload = (safeJsonParse(row.payloadJson) ?? {}) as Record<string, unknown>;
+      if (typeof payload.workItemId === "string") {
+        const workItem = await execution.getWorkItem(payload.workItemId);
+        const [claim] = await handle.db
+          .select({ claimedByAttemptId: executionWorkItems.claimedByAttemptId })
+          .from(executionWorkItems)
+          .where(eq(executionWorkItems.id, payload.workItemId))
+          .limit(1);
+        const currentAttempt = claim?.claimedByAttemptId
+          ? await execution.getAttempt(claim.claimedByAttemptId)
+          : null;
+        const lost = (await execution.listAttemptsForWorkItem(payload.workItemId))
+          .filter((attempt) => attempt.status === "lost")
+          .at(-1);
+        if (
+          workItem &&
+          lost &&
+          claim?.claimedByAttemptId === lost.id &&
+          lost.attemptNumber < workItem.maxAttempts
+        ) {
+          const providerSession = lost.harnessSessionId
+            ? await execution.getHarnessSession(lost.harnessSessionId)
+            : null;
+          await execution.updateWorkItemStatus(workItem.id, "ready", {
+            retryAfter: new Date().toISOString(),
+          });
+          await handle.db
+            .update(wakeupsTable)
+            .set({
+              status: "queued",
+              claimedAt: null,
+              finishedAt: null,
+              error: null,
+              reason: `Resume lost attempt ${lost.attemptNumber} for ${workItem.id}`,
+              payloadJson: JSON.stringify({
+                ...payload,
+                ...(providerSession?.sessionId
+                  ? { resumeSessionId: providerSession.sessionId }
+                  : {}),
+                prompt: retryPrompt(
+                  typeof payload.prompt === "string" ? payload.prompt : undefined,
+                  providerSession?.errorMessage ??
+                    providerSession?.errorCode ??
+                    "The worker stopped before the attempt reached a terminal result",
+                ),
+              }),
+            } as never)
+            .where(eq(wakeupsTable.id, row.id));
+          recovered++;
+          continue;
+        }
+        if (workItem?.status === "completed") {
+          await this.finishWakeup(row.id, currentAttempt?.harnessSessionId);
+          recovered++;
+          continue;
+        }
+        if (
+          currentAttempt &&
+          ["queued", "preparing", "running", "cancelling"].includes(currentAttempt.status)
+        ) {
+          continue;
+        }
+      }
       await this.markFailed(row.id, "stale claim: worker died before completing wakeup");
       recovered++;
     }

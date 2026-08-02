@@ -2517,6 +2517,24 @@ export class ExecutionStore {
     return rows[0] ?? null;
   }
 
+  async setHarnessSessionProviderIdentity(
+    harnessSessionId: string,
+    providerSessionId: string,
+  ): Promise<void> {
+    await this.db
+      .update(harnessSessions)
+      .set({
+        sessionId: providerSessionId,
+        sessionDisplayId: providerSessionId.slice(0, 12),
+      })
+      .where(
+        and(
+          eq(harnessSessions.id, harnessSessionId),
+          or(isNull(harnessSessions.sessionId), eq(harnessSessions.sessionId, providerSessionId)),
+        ),
+      );
+  }
+
   async appendHarnessSessionEvent(input: {
     sessionId: string;
     ts?: string;
@@ -2549,10 +2567,16 @@ export class ExecutionStore {
     const finishedAt = now();
     const current = await this.getHarnessSession(sessionId);
     const startedAtMs = current?.startedAt ? Date.parse(current.startedAt) : Date.now();
+    const providerSessionId = result.sessionId ?? current?.sessionId ?? null;
+    const sessionDisplayId =
+      result.sessionDisplayId ??
+      current?.sessionDisplayId ??
+      providerSessionId?.slice(0, 12) ??
+      null;
     const normalized = {
-      sessionId: result.sessionId ?? sessionId,
+      sessionId: providerSessionId ?? sessionId,
       sessionParams: result.sessionParams,
-      sessionDisplayId: result.sessionDisplayId,
+      sessionDisplayId,
       status,
       exitCode: result.exitCode,
       usage: result.usage,
@@ -2568,9 +2592,9 @@ export class ExecutionStore {
         status,
         finishedAt,
         durationMs: Math.max(0, Date.parse(finishedAt) - startedAtMs),
-        sessionId: result.sessionId ?? null,
+        sessionId: providerSessionId,
         sessionParamsJson: result.sessionParams ? JSON.stringify(result.sessionParams) : null,
-        sessionDisplayId: result.sessionDisplayId ?? null,
+        sessionDisplayId,
         resultJson: JSON.stringify(normalized),
         usageJson: result.usage ? JSON.stringify(result.usage) : null,
         costUsd: result.costUsd ?? null,
@@ -2649,9 +2673,22 @@ export class ExecutionStore {
             )
           : inArray(agentAttempts.status, ["preparing", "running"]),
       );
-    const stale = candidates.filter(
-      (attempt) => (attempt.startedAt ?? attempt.createdAt) <= cutoff,
-    );
+    const stale: typeof candidates = [];
+    for (const attempt of candidates) {
+      let lastActivity = attempt.startedAt ?? attempt.createdAt;
+      if (attempt.harnessSessionId) {
+        // ponytail: active attempts are few; replace the per-attempt lookup with
+        // a grouped query if worker concurrency makes recovery measurable.
+        const [latest] = await this.db
+          .select({ ts: harnessSessionEvents.ts })
+          .from(harnessSessionEvents)
+          .where(eq(harnessSessionEvents.sessionId, attempt.harnessSessionId))
+          .orderBy(desc(harnessSessionEvents.ts))
+          .limit(1);
+        if (latest?.ts && latest.ts > lastActivity) lastActivity = latest.ts;
+      }
+      if (lastActivity <= cutoff) stale.push(attempt);
+    }
     for (const attempt of stale) {
       await this.db
         .update(agentAttempts)

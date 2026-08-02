@@ -121,7 +121,13 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
     let closed = false;
     const terminate = (signalName: NodeJS.Signals): void => {
       try {
-        if (process.platform !== "win32" && child.pid !== undefined) {
+        if (process.platform === "win32" && child.pid !== undefined) {
+          const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+          killer.unref();
+        } else if (child.pid !== undefined) {
           process.kill(-child.pid, signalName);
         } else {
           child.kill(signalName);
@@ -212,7 +218,7 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
 
       const finishedAt = new Date();
       const result: RunProcessResult = {
-        exitCode: code,
+        exitCode: stopReason !== null ? null : code,
         signal: signal ?? (stopReason !== null ? "SIGTERM" : undefined),
         timedOut,
         stdout: stdoutChunks.join(""),

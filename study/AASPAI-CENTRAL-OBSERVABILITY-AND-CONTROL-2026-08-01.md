@@ -2,7 +2,7 @@
 
 Date: 2026-08-01
 
-Status: local execution observer and deterministic company simulator implemented; central PostgreSQL/OTLP phase remains.
+Status: local execution observer and deterministic company simulator implemented; real OpenCode run partially validated and failed before verified employee completion; central PostgreSQL/OTLP phase remains.
 
 ## Decision
 
@@ -120,7 +120,7 @@ This is intentionally a test-only deterministic instruction. It makes expensive 
 
 Latest passing evidence:
 
-- Run: `workspace/company-simulation/acceptance/simulation/2026-08-01T05-54-41-882Z-50177640`
+- Run: `workspace/company-simulation/acceptance/simulation/2026-08-02T04-58-52-014Z-b471e396`
 - CEO and delegated employee used separate sessions and attempts.
 - Company controls: hire/delegate, milestone, define/start process.
 - Six company lifecycle events were recorded.
@@ -215,12 +215,14 @@ Still missing from the dashboard:
 
 ### P1: real-agent release proof
 
-The deterministic path is now green. A fresh real OpenCode ZedBlock run is still required to prove:
+The deterministic path is green. The first real local OpenCode ZedBlock run is documented in [Real OpenCode ZedBlock validation](REAL-OPENCODE-ZEDBLOCK-VALIDATION-2026-08-01.md). It proved typed CEO delegation, separate employee execution, native web research, safety rejection, stalled-process interruption, provider identity retention, and recovery routing. It failed before verified employee completion.
+
+A fresh real OpenCode ZedBlock run is still required to prove:
 
 - native skill and company tool invocation;
 - real public-web research through available native/MCP tools;
 - no false citation rejection;
-- long-running progress supervision and interrupt/resume behavior;
+- successful work continuation after long-running progress supervision and interrupt/resume;
 - final artifact verification and manager continuation.
 
 Daytona should be tested after the local native-CLI run passes. Credentials must be supplied through environment/runtime configuration and must never be written to plans, telemetry, artifacts, or this repository.

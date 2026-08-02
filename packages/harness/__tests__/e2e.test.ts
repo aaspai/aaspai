@@ -623,9 +623,21 @@ describe("e2e: opencode_cli driver", () => {
         fork: false,
       });
       // The fake's argv dump proves the adapter forwarded --session.
-      const argvDump = readFileSync(dumpFile, "utf8");
-      expect(argvDump).toContain("--session");
-      expect(argvDump).toContain(sessionId);
+      const argv = JSON.parse(readFileSync(dumpFile, "utf8")) as string[];
+      expect(argv).toContain("--session");
+      expect(argv).toContain(sessionId);
+      expect(argv).toContain("--dir");
+      expect(argv).toContain(cwd);
+
+      const noEventIdentity = await opencodeCli.execute({
+        ...buildAdapterContext({
+          prompt: "z <e2e:response:no-id> <e2e:no_session>",
+          cwd,
+          runId: `run_resume_no_id_${Date.now()}`,
+        }),
+        runtime: { sessionId, sessionParams: { resume: true } },
+      } as never);
+      expect(noEventIdentity.sessionId).toBe(sessionId);
     } finally {
       delete process.env.AASPAI_FAKE_OPENCODE_DUMP_ARGV;
       rmRf(cwd);

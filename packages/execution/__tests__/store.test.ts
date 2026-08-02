@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { DbHandle } from "@aaspai/db";
-import { createDb, runMigrations } from "@aaspai/db";
+import { agentAttempts, createDb, eq, runMigrations } from "@aaspai/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExecutionStore } from "../src/store";
 
@@ -310,5 +310,67 @@ describe("ExecutionStore", () => {
       store.reconcileLostAttempts(new Date(Date.now() + 60_000).toISOString()),
     ).resolves.toBe(1);
     await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "lost" });
+  });
+
+  it("uses the latest persisted session activity when reconciling long attempts", async () => {
+    const attempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_active",
+      workItemId: "work_active",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+      id: "attempt_active",
+    });
+    await store.transitionAttempt(attempt.id, "preparing");
+    await store.transitionAttempt(attempt.id, "running");
+    await handle.db
+      .update(agentAttempts)
+      .set({ startedAt: new Date(Date.now() - 10 * 60_000).toISOString() })
+      .where(eq(agentAttempts.id, attempt.id));
+    const session = await store.createHarnessSession({
+      organizationId: "org_test",
+      agentId: "agent_test",
+      adapter: "dry_run_local",
+      prompt: "long work",
+    });
+    await store.linkHarnessSession(attempt.id, session.id);
+    await store.appendHarnessSessionEvent({
+      sessionId: session.id,
+      kind: "tool_result",
+      payload: { tool: "bash" },
+      seq: 1,
+    });
+
+    await expect(
+      store.reconcileLostAttempts(new Date(Date.now() - 5 * 60_000).toISOString()),
+    ).resolves.toBe(0);
+    await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "running" });
+  });
+
+  it("preserves an early provider session identity when completion has none", async () => {
+    const session = await store.createHarnessSession({
+      organizationId: "org_test",
+      agentId: "agent_test",
+      adapter: "dry_run_local",
+      prompt: "long work",
+    });
+    await store.setHarnessSessionProviderIdentity(session.id, "provider_session_123");
+    await store.completeHarnessSession(
+      session.id,
+      {
+        protocolVersion: 1,
+        exitCode: 1,
+        timedOut: false,
+        usageBasis: "per_run",
+        clearSession: false,
+        summary: "interrupted",
+      },
+      "failed",
+    );
+
+    await expect(store.getHarnessSession(session.id)).resolves.toMatchObject({
+      sessionId: "provider_session_123",
+      sessionDisplayId: "provider_ses",
+    });
   });
 });
