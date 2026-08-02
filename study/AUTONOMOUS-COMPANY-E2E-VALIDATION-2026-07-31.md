@@ -1,5 +1,7 @@
 # Autonomous Company End-to-End Validation
 
+> Current status: the hardened local OpenCode acceptance passed on 2026-08-02. See [Autonomous company: current state and next development gate](./AUTONOMOUS-COMPANY-CURRENT-STATE-2026-08-02.md). The historical release gates below are retained as validation history.
+
 Date: 2026-07-31  
 Branch: `test/autonomous-company-e2e`  
 Baseline commit: `6f93aa0` (`feat: complete autonomous company orchestration baseline`)
@@ -49,11 +51,9 @@ The runtime contract is now explicit: AaspAI never calls an LLM provider API dir
   - CEO and employee attempts both completed with local runtime identities;
   - reports, tool events, raw output, usage, artifacts, and state transitions were durable.
 
-Passing evidence:
+Passing local evidence (runtime files are intentionally excluded from Git):
 
-- [Result](../workspace/company-real/acceptance/local/2026-07-31T07-59-34-213Z-63fd8926/RESULT.md)
-- [Summary](../workspace/company-real/acceptance/local/2026-07-31T07-59-34-213Z-63fd8926/SUMMARY.json)
-- `workspace/company-real/acceptance/local/2026-07-31T07-59-34-213Z-63fd8926/state.db`
+- `workspace/company-real/acceptance/local/2026-07-31T07-59-34-213Z-63fd8926`
 
 ### Release gate still open
 
@@ -196,11 +196,9 @@ CEO session
 - Employee artifacts: `0`
 - Final test result: `Employee work did not complete within six minutes`
 
-Run evidence:
+Local run evidence (runtime files are intentionally excluded from Git):
 
-- [Result](../workspace/company-real/zedblock/docker/2026-07-31T05-43-33-176Z-fc774caa/RESULT.md)
-- [CEO result JSON](../workspace/company-real/zedblock/docker/2026-07-31T05-43-33-176Z-fc774caa/artifacts/attempt_cb71ec33-b58f-40cc-b1fa-392ff05654f8/result.json)
-- `workspace/company-real/zedblock/docker/2026-07-31T05-43-33-176Z-fc774caa/state.db`
+- `workspace/company-real/zedblock/docker/2026-07-31T05-43-33-176Z-fc774caa`
 
 ## Confirmed orchestration defect
 
@@ -311,8 +309,7 @@ The release gate is the real ZedBlock run completing with durable evidence for e
 
 The deterministic orchestration gate now passes through the real scheduler, worker, workspace, company commands, delegation, process, independent verification, and manager roll-up paths:
 
-- Evidence: [simulation result](../workspace/company-simulation/acceptance/simulation/2026-08-02T08-51-19-723Z-551f19b6/RESULT.md)
-- Timeline: [classified timeline](../workspace/company-simulation/acceptance/simulation/2026-08-02T08-51-19-723Z-551f19b6/TIMELINE.json)
+- Local evidence directory: `workspace/company-simulation/acceptance/simulation/2026-08-02T08-51-19-723Z-551f19b6` (runtime files are intentionally excluded from Git).
 - Current observability/control study: [AASPAI central observability and control](AASPAI-CENTRAL-OBSERVABILITY-AND-CONTROL-2026-08-01.md)
 
 This clears the deterministic system gate. It does not replace the required fresh real OpenCode ZedBlock run or the pending central PostgreSQL/OTLP telemetry service.

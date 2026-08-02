@@ -1,8 +1,10 @@
 # AASPAI central observability and control study
 
+> Current implementation note: local execution overview, live attempt inspection, system/company/task-work lanes, SSE refresh, interrupt, artifacts, and recovery controls are implemented. The separate PostgreSQL/OTLP telemetry platform in this document remains a future phase. See [Autonomous company: current state and next development gate](./AUTONOMOUS-COMPANY-CURRENT-STATE-2026-08-02.md).
+
 Date: 2026-08-01
 
-Status: local execution observer and deterministic company simulator implemented; real OpenCode run partially validated and failed before verified employee completion; central PostgreSQL/OTLP phase remains.
+Status: local execution observer, deterministic simulation, and the local OpenCode orchestration kernel are validated; the central PostgreSQL/OTLP phase remains.
 
 ## Decision
 
@@ -157,11 +159,9 @@ The following are release gates, not prompt suggestions:
 
 ## Remaining production gaps
 
-### P0: synchronous company-tool results
+### Resolved locally: synchronous company-tool results
 
-The CLI plugin currently collects structured actions and AASPAI applies them after the CLI exits. The attempt timeline proves the effect, but the agent cannot inspect the actual effect IDs during that same tool turn.
-
-The next control-plane change should make `company_action` a host-executed tool broker call:
+Local Codex/OpenCode runs now invoke `company_action` through an authenticated, attempt-scoped loopback broker:
 
 ```text
 CLI tool call
@@ -172,11 +172,11 @@ CLI tool call
   -> return actual IDs to the same CLI session
 ```
 
-This is required before agents can reliably chain several dependent company mutations in one reasoning turn.
+The broker validates manager identity, applies the transaction synchronously, records the durable effect, and returns actual IDs in the same tool turn. Docker, SSH, and Daytona still need the equivalent central HTTPS bridge before remote agents can use company controls.
 
-### P0: manager callback into the same provider session
+### Resolved locally: manager callback into the same provider session
 
-Delegated work already creates separate employee execution and queues a manager continuation. The continuation is durable, but it is not yet proven to reopen the original manager provider session and inject a completion notification containing the child evidence.
+The local acceptance now proves the complete sleep/resume path:
 
 Required acceptance:
 
@@ -184,7 +184,9 @@ Required acceptance:
 - child completes independently;
 - a completion wakeup references parent session and child evidence;
 - the manager resumes the same provider session ID;
-- the manager decides the next milestone action from verified child state.
+- the manager receives verified child evidence and can decide the next action.
+
+Each callback has a new durable session row while resuming the exact original provider-native manager conversation. Remote runtime parity remains open.
 
 ### P0: central telemetry service
 
@@ -213,28 +215,19 @@ Still missing from the dashboard:
 - token/cost time series across attempts;
 - retention failure reporting.
 
-### P1: real-agent release proof
+### P1: full product and runtime release proof
 
-The deterministic path is green. Two real local OpenCode ZedBlock runs are documented in [Real OpenCode ZedBlock validation](REAL-OPENCODE-ZEDBLOCK-VALIDATION-2026-08-01.md). They prove typed CEO delegation, separate employee execution, native web research, artifact creation, safety rejection, stalled-process interruption, provider identity retention, and recovery routing. They still fail before verified employee completion; the latest run ended on provider errors after the citation correction request.
+The deterministic path and a bounded real local OpenCode acceptance are green. The real run proves native skill/company-tool invocation, separate employee and checker execution, durable artifacts, independent verification, and exact manager-session continuation.
 
-A fresh real OpenCode ZedBlock run is still required to prove:
-
-- native skill and company tool invocation;
-- real public-web research through available native/MCP tools;
-- no false citation rejection;
-- successful work continuation after long-running progress supervision and interrupt/resume;
-- final artifact verification and manager continuation.
-
-Daytona should be tested after the local native-CLI run passes. Credentials must be supplied through environment/runtime configuration and must never be written to plans, telemetry, artifacts, or this repository.
+The release matrix still needs the actual web onboarding-to-operation journey, a realistic multi-project ZedBlock run with public-web citations, recurring cycles, real Codex, worker-restart cases, and Docker/SSH/Daytona company-control parity. Credentials must be supplied through ephemeral environment/runtime configuration and must never be written to plans, telemetry, artifacts, or this repository.
 
 ## Recommended next implementation order
 
-1. Prove same-provider-session manager callback in simulation.
-2. Replace post-exit company action application with the authenticated host tool broker.
-3. Run one full local OpenCode ZedBlock acceptance and fix only discrepancies from simulation.
-4. Add PostgreSQL normalized telemetry ingestion with worker fallback.
-5. Add native OTLP enrichment and backfill.
-6. Add fleet/alerts/logs/traces UI.
-7. Run Daytona and restart/recovery acceptance.
+1. Prove the real web onboarding-to-operation journey.
+2. Run a realistic multi-project ZedBlock cycle with managers, employees, citations, verification, and founder approval.
+3. Prove recurring cycles, budgets, stop conditions, and reporting.
+4. Add secure Docker/SSH/Daytona company-control parity and restart acceptance.
+5. Add PostgreSQL normalized telemetry ingestion with worker fallback.
+6. Add native OTLP enrichment, backfill, fleet/alerts/logs/traces UI, and retention.
 
 This order keeps company correctness dependent on the execution database and verified state, not on whether the telemetry service or dashboard is available.
