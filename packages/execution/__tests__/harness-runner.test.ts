@@ -59,6 +59,12 @@ describe("HarnessExecutionPlanRunner", () => {
         adapterType: "codex_local",
         adapterConfig: { command: process.execPath },
       },
+      onExecuted: async () => {
+        const runningAttempt = await store.getAttempt(attemptId);
+        await expect(
+          store.getHarnessSession(runningAttempt?.harnessSessionId ?? "missing"),
+        ).resolves.toMatchObject({ sessionId: "thread_fixture" });
+      },
     });
 
     expect(result.exitCode, JSON.stringify(result)).toBe(0);
@@ -81,6 +87,37 @@ describe("HarnessExecutionPlanRunner", () => {
     ]);
   });
 
+  it("fails when a required Codex resume creates a different provider thread", async () => {
+    const attemptId = "attempt_codex_resume_drift";
+    const workspace = await makeAttemptAndWorkspace(attemptId, "codex_local");
+    const fixture = path.join(workspace.path, "exec");
+    await writeFile(
+      fixture,
+      [
+        "const emit = (value) => console.log(JSON.stringify(value));",
+        'emit({ type: "thread.started", thread_id: "thread_drifted" });',
+        'emit({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 1 } });',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await new HarnessExecutionPlanRunner(store).run({
+      plan: planFor(attemptId, "codex_local"),
+      workspace: { ...workspace, attemptId: "attempt_original_manager" },
+      allowWorkspaceReuse: true,
+      resumeSessionId: "thread_required",
+      agent: {
+        id: "agent_codex",
+        name: "Codex fixture",
+        adapterType: "codex_local",
+        adapterConfig: { command: process.execPath },
+      },
+    });
+
+    expect(result).toMatchObject({ exitCode: 1, errorCode: "session_resume_mismatch" });
+    await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "failed" });
+  });
+
   it("runs opencode_cli in the assigned workspace and preserves its provider session ID", async () => {
     const attemptId = "attempt_opencode_fixture";
     const workspace = await makeAttemptAndWorkspace(attemptId, "opencode_cli");
@@ -90,6 +127,7 @@ describe("HarnessExecutionPlanRunner", () => {
       "require('node:fs').writeFileSync('environment-seen.json', JSON.stringify({token:process.env.AASPAI_ATTEMPT_TOKEN,secret:process.env.AASPAI_TEST_WORKER_SECRET,path:Boolean(process.env.PATH ?? process.env.Path)}));",
       'emit({ type: "session.created", sessionID: "oc_fixture" });',
       'emit({ type: "text", sessionID: "oc_fixture", part: { type: "text", text: `cwd=${process.cwd()}` } });',
+      'emit({ type: "text", sessionID: "oc_fixture", part: { type: "text", text: `token=${process.env.AASPAI_ATTEMPT_TOKEN}` } });',
       'emit({ type: "step_finish", sessionID: "oc_fixture", part: { tokens: { input: 3, output: 4 }, cost: 0 } });',
     ].join("\n");
     const result = await new HarnessExecutionPlanRunner(store).run({
@@ -127,11 +165,52 @@ describe("HarnessExecutionPlanRunner", () => {
     const attempt = await store.getAttempt(attemptId);
     const session = await store.getHarnessSession(attempt?.harnessSessionId ?? "missing");
     expect(session).toMatchObject({ adapter: "opencode_cli", sessionId: "oc_fixture" });
+    expect(JSON.stringify(session)).not.toContain("short-lived-test-token");
     const events = await handle.db
       .select()
       .from(sessionEvents)
       .where(eq(sessionEvents.sessionId, attempt?.harnessSessionId ?? "missing"));
     expect(events.some((event) => event.payloadJson.includes("assigned-workspace"))).toBe(true);
+    expect(events.every((event) => !event.payloadJson.includes("short-lived-test-token"))).toBe(
+      true,
+    );
+    expect(
+      (await store.listRawOutputs(attemptId)).every(
+        (row) => !row.chunk.includes("short-lived-test-token"),
+      ),
+    ).toBe(true);
+    expect(result.summary).not.toContain("short-lived-test-token");
+  });
+
+  it("fails when a required manager resume silently creates a new provider session", async () => {
+    const attemptId = "attempt_opencode_resume_drift";
+    const workspace = await makeAttemptAndWorkspace(attemptId, "opencode_cli");
+    const fixtureCode = [
+      "const emit = (value) => console.log(JSON.stringify(value));",
+      'emit({ type: "session.created", sessionID: "oc_drifted" });',
+      'emit({ type: "text", sessionID: "oc_drifted", part: { type: "text", text: "done" } });',
+      'emit({ type: "step_finish", sessionID: "oc_drifted", part: { tokens: { input: 1, output: 1 }, cost: 0 } });',
+    ].join("\n");
+
+    const result = await new HarnessExecutionPlanRunner(store).run({
+      plan: planFor(attemptId, "opencode_cli"),
+      workspace: { ...workspace, attemptId: "attempt_original_manager" },
+      allowWorkspaceReuse: true,
+      resumeSessionId: "oc_required",
+      agent: {
+        id: "agent_opencode",
+        name: "OpenCode fixture",
+        adapterType: "opencode_cli",
+        adapterConfig: {
+          model: "fixture/model",
+          command: process.execPath,
+          commandArgs: ["-e", fixtureCode],
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ exitCode: 1, errorCode: "session_resume_mismatch" });
+    await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "failed" });
   });
 
   it("fails the attempt when restored output cannot be persisted", async () => {
@@ -202,7 +281,12 @@ describe("HarnessExecutionPlanRunner", () => {
       organizationId: "org_test",
       workflowRunId: `run_${attemptId}`,
       workItemId: `work_${attemptId}`,
-      agentId: `agent_${harness}`,
+      agentId:
+        harness === "codex_local"
+          ? "agent_codex"
+          : harness === "opencode_cli"
+            ? "agent_opencode"
+            : `agent_${harness}`,
       harness,
       id: attemptId,
     });

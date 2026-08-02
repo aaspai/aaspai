@@ -4,15 +4,67 @@ import { type ProcessDefinition, processDefinitionSchema } from "@aaspai/contrac
 export const COMPANY_ACTION_TOOL_SOURCE = `import { tool } from "@opencode-ai/plugin";
 
 export default tool({
-  description: "Submit company actions. Supported types: hire_and_delegate {agentId,title,role,description,workTitle,workDescription,projectId,projectRole}; create_milestone {projectId,title,outcome,sequence,acceptance}; define_and_start_process {projectId,milestoneSequence?,definition,loopId?,policy?}.",
+  description: "Submit exactly one company action per call. Supported types: hire_and_delegate {agentId,title,role,description,workTitle,workDescription,projectId,projectRole}; create_milestone {projectId,title,outcome,sequence,acceptance}; define_and_start_process {projectId,milestoneSequence,definition,loopId?,policy?}.",
   args: {
     payload: tool.schema.string().max(65536).describe('JSON object: {"actions":[...]}'),
   },
-  async execute({ payload }) {
+  async execute({ payload }, context) {
     JSON.parse(payload);
-    return "Company action submitted.";
+    const url = process.env.AASPAI_COMPANY_BROKER_URL;
+    const token = process.env.AASPAI_COMPANY_BROKER_TOKEN;
+    const organizationId = process.env.AASPAI_COMPANY_ORGANIZATION_ID;
+    const attemptId = process.env.AASPAI_COMPANY_ATTEMPT_ID;
+    const agentId = process.env.AASPAI_COMPANY_AGENT_ID;
+    if (!url || !token || !organizationId || !attemptId || !agentId) {
+      throw new Error("AASPAI company control broker is unavailable for this run");
+    }
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer " + token,
+        "content-type": "application/json",
+        "x-aaspai-organization-id": organizationId,
+        "x-aaspai-attempt-id": attemptId,
+        "x-aaspai-agent-id": agentId,
+        "x-aaspai-provider-session-id": context.sessionID,
+      },
+      body: payload,
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result?.message ?? result?.error ?? "Company action failed");
+    }
+    return JSON.stringify(result);
   },
 });
+`;
+
+export const CODEX_COMPANY_ACTION_CLIENT_SOURCE = `const chunks = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const payload = Buffer.concat(chunks).toString("utf8");
+JSON.parse(payload);
+const url = process.env.AASPAI_COMPANY_BROKER_URL;
+const token = process.env.AASPAI_COMPANY_BROKER_TOKEN;
+const organizationId = process.env.AASPAI_COMPANY_ORGANIZATION_ID;
+const attemptId = process.env.AASPAI_COMPANY_ATTEMPT_ID;
+const agentId = process.env.AASPAI_COMPANY_AGENT_ID;
+if (!url || !token || !organizationId || !attemptId || !agentId) {
+  throw new Error("AASPAI company control broker is unavailable for this run");
+}
+const response = await fetch(url, {
+  method: "POST",
+  headers: {
+    authorization: "Bearer " + token,
+    "content-type": "application/json",
+    "x-aaspai-organization-id": organizationId,
+    "x-aaspai-attempt-id": attemptId,
+    "x-aaspai-agent-id": agentId,
+  },
+  body: payload,
+});
+const result = await response.json();
+if (!response.ok) throw new Error(result?.message ?? result?.error ?? "Company action failed");
+process.stdout.write(JSON.stringify(result));
 `;
 
 const ROLES = new Set([
@@ -72,7 +124,7 @@ export interface CreateMilestoneAction {
 export interface DefineAndStartProcessAction {
   type: "define_and_start_process";
   projectId: string;
-  milestoneSequence?: number;
+  milestoneSequence: number;
   definition: ProcessDefinition;
   loopId?: string;
   policy?: Record<string, unknown>;
@@ -159,9 +211,43 @@ export function requiresCommercialEvidence(
 function parseCompanyActions(values: unknown[]): CompanyAction[] {
   const actions: CompanyAction[] = [];
   for (const action of values) {
-    if (isHireAndDelegateAction(action)) actions.push(action);
-    else if (isCreateMilestoneAction(action)) actions.push(action);
-    else if (isDefineAndStartProcessAction(action)) actions.push(action);
+    if (isHireAndDelegateAction(action)) {
+      actions.push({
+        type: action.type,
+        agentId: action.agentId,
+        title: action.title,
+        role: action.role,
+        description: action.description,
+        workTitle: action.workTitle,
+        workDescription: action.workDescription,
+        ...(action.projectId === undefined ? {} : { projectId: action.projectId }),
+        ...(action.projectRole === undefined ? {} : { projectRole: action.projectRole }),
+        ...(action.skillKeys === undefined ? {} : { skillKeys: action.skillKeys }),
+        ...(action.artifactPaths === undefined ? {} : { artifactPaths: action.artifactPaths }),
+        ...(action.citationPaths === undefined ? {} : { citationPaths: action.citationPaths }),
+        ...(action.commercialClaimPaths === undefined
+          ? {}
+          : { commercialClaimPaths: action.commercialClaimPaths }),
+      });
+    } else if (isCreateMilestoneAction(action)) {
+      actions.push({
+        type: action.type,
+        projectId: action.projectId,
+        title: action.title,
+        outcome: action.outcome,
+        sequence: action.sequence,
+        acceptance: action.acceptance,
+      });
+    } else if (isDefineAndStartProcessAction(action)) {
+      actions.push({
+        type: action.type,
+        projectId: action.projectId,
+        milestoneSequence: action.milestoneSequence,
+        definition: action.definition,
+        ...(action.loopId === undefined ? {} : { loopId: action.loopId }),
+        ...(action.policy === undefined ? {} : { policy: action.policy }),
+      });
+    }
   }
   return actions;
 }
@@ -256,8 +342,8 @@ function isDefineAndStartProcessAction(value: unknown): value is DefineAndStartP
   return (
     value.type === "define_and_start_process" &&
     isIdentifier(value.projectId) &&
-    (value.milestoneSequence === undefined ||
-      (Number.isInteger(value.milestoneSequence) && Number(value.milestoneSequence) >= 0)) &&
+    Number.isInteger(value.milestoneSequence) &&
+    Number(value.milestoneSequence) >= 0 &&
     processDefinitionSchema.safeParse(value.definition).success &&
     (value.loopId === undefined || isIdentifier(value.loopId)) &&
     (value.policy === undefined || isRecord(value.policy))

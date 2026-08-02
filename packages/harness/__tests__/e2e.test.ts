@@ -637,7 +637,7 @@ describe("e2e: opencode_cli driver", () => {
         }),
         runtime: { sessionId, sessionParams: { resume: true } },
       } as never);
-      expect(noEventIdentity.sessionId).toBe(sessionId);
+      expect(noEventIdentity.sessionId).not.toBe(sessionId);
     } finally {
       delete process.env.AASPAI_FAKE_OPENCODE_DUMP_ARGV;
       rmRf(cwd);
@@ -1081,6 +1081,41 @@ describe("e2e: opencode_cli driver", () => {
     expect(tools.length).toBe(1);
     expect(tools[0]!.name).toBe("bash");
     expect((result.resultJson as { toolEventCount: number }).toolEventCount).toBe(1);
+    rmRf(cwd);
+  });
+
+  it("carries the provider session onto canonical tool events that omit it", async () => {
+    const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
+    const cwd = makeScratchDir("tool-session-");
+    const updates: unknown[] = [];
+    const logs: string[] = [];
+    const ctx = buildAdapterContext({
+      prompt: "hi <e2e:session:ses_tool_sticky> <e2e:tool-no-session> <e2e:response:OK>",
+      cwd,
+      runId: `run_tool_session_${Date.now()}`,
+      onLog: (stream, chunk) => {
+        if (stream === "stdout") logs.push(...chunk.split(/\r?\n/).filter(Boolean));
+      },
+      onRuntimeProgress: (update: unknown) => {
+        updates.push(update);
+      },
+    });
+
+    await opencodeCli.execute(ctx);
+
+    expect(
+      updates.find(
+        (update) =>
+          typeof update === "object" &&
+          update !== null &&
+          (update as { kind?: string }).kind === "tool_event",
+      ),
+    ).toMatchObject({ sessionId: "ses_tool_sticky", name: "bash" });
+    expect(
+      logs
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((line) => ["tool_call", "tool_result"].includes(String(line.kind))),
+    ).toMatchObject({ sessionID: "ses_tool_sticky", name: "bash" });
     rmRf(cwd);
   });
 
@@ -1596,7 +1631,7 @@ describe("e2e: opencode_cli driver", () => {
     // The dispatcher was called with the right tool name + some input.
     expect(invoked.length).toBe(1);
     expect(invoked[0]!.name).toBe("bash");
-    // resultJson tracks which tools we asked the dispatcher to invoke.
+    // resultJson tracks native tool use whether or not AASPAI dispatches it.
     const rj = result.resultJson as { toolsInvoked: string[]; toolEventCount: number };
     expect(rj.toolsInvoked).toEqual(["bash"]);
     expect(rj.toolEventCount).toBe(1);
@@ -1636,7 +1671,7 @@ describe("e2e: opencode_cli driver", () => {
     rmRf(cwd);
   });
 
-  it("does not call the dispatcher when ctx.tools is not provided", async () => {
+  it("records native tool use when ctx.tools is not provided", async () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const cwd = makeScratchDir("no-dispatch-");
     const ctx = buildAdapterContext({
@@ -1647,7 +1682,7 @@ describe("e2e: opencode_cli driver", () => {
     // No ctx.tools set.
     const result = await opencodeCli.execute(ctx);
     const rj = result.resultJson as { toolsInvoked: string[] };
-    expect(rj.toolsInvoked).toEqual([]);
+    expect(rj.toolsInvoked).toEqual(["bash"]);
     rmRf(cwd);
   });
 

@@ -843,6 +843,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "assistant",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             text: chunk,
             delta: true,
           })}\n`,
@@ -851,7 +852,7 @@ async function runOpencodeCli(
         emitProgress({
           kind: "text_delta",
           ts: new Date().toISOString(),
-          sessionId: ev.sessionID,
+          sessionId,
           text: chunk,
         });
       } else if (
@@ -865,6 +866,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "thinking",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             text: ev.part.text,
             delta: true,
           })}\n`,
@@ -872,7 +874,7 @@ async function runOpencodeCli(
         emitProgress({
           kind: "thinking_delta",
           ts: new Date().toISOString(),
-          sessionId: ev.sessionID,
+          sessionId,
           text: ev.part.text,
         });
       } else if (ev.type === "tool_use" || ev.type === "tool") {
@@ -886,6 +888,11 @@ async function runOpencodeCli(
           ev.part?.state?.input ??
           {};
         const toolKey = `${callId ?? "no-id"}:${toolName}`;
+        const firstToolEvent = !toolsDispatched.has(toolKey);
+        if (firstToolEvent) {
+          toolsDispatched.add(toolKey);
+          toolsInvoked.push(toolName);
+        }
         if (
           toolName === "company_action" &&
           status === "completed" &&
@@ -911,6 +918,7 @@ async function runOpencodeCli(
                 ? "tool_result"
                 : "tool_call",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             name: toolName,
             id: callId,
             status: status as "started" | "completed" | "failed" | "cancelled",
@@ -921,7 +929,7 @@ async function runOpencodeCli(
         emitProgress({
           kind: "tool_event",
           ts: new Date().toISOString(),
-          sessionId: ev.sessionID,
+          sessionId,
           name: toolName,
           id: callId,
           status,
@@ -934,17 +942,15 @@ async function runOpencodeCli(
         // dispatcher gets the call even if the CLI reports the
         // tool as already-completed. Each tool is dispatched at
         // most once per run (deduped by callId+name).
-        if (options.tools && !toolsDispatched.has(`${callId ?? "no-id"}:${toolName}`)) {
-          toolsDispatched.add(`${callId ?? "no-id"}:${toolName}`);
+        if (options.tools && firstToolEvent) {
           // Fire-and-forget — the opencode CLI continues its own
           // tool loop, so the dispatcher result is advisory. The
           // session layer (or a future "approval" gate) decides
           // whether to short-circuit.
-          toolsInvoked.push(toolName);
           void options.tools
             .invoke(toolName, toolInput, {
               callId,
-              sessionId: ev.sessionID,
+              sessionId,
             })
             .then((output) => {
               emitLog(
@@ -952,6 +958,7 @@ async function runOpencodeCli(
                 `${JSON.stringify({
                   kind: "tool_result",
                   ts: new Date().toISOString(),
+                  sessionID: sessionId,
                   name: toolName,
                   id: callId,
                   status: "completed",
@@ -961,7 +968,7 @@ async function runOpencodeCli(
               emitProgress({
                 kind: "tool_event",
                 ts: new Date().toISOString(),
-                sessionId: ev.sessionID,
+                sessionId,
                 name: toolName,
                 id: callId,
                 status: "completed",
@@ -974,6 +981,7 @@ async function runOpencodeCli(
                 `${JSON.stringify({
                   kind: "tool_result",
                   ts: new Date().toISOString(),
+                  sessionID: sessionId,
                   name: toolName,
                   id: callId,
                   status: "failed",
@@ -1007,6 +1015,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "result",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             summary: textParts.join("").slice(0, 200),
             tokens,
             cost,
@@ -1029,6 +1038,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "init",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             event: "error",
             errorMessage: msg,
           })}\n`,
@@ -1039,6 +1049,7 @@ async function runOpencodeCli(
           `${JSON.stringify({
             kind: "init",
             ts: new Date().toISOString(),
+            sessionID: sessionId,
             event: ev.type,
           })}\n`,
         );
@@ -1169,6 +1180,11 @@ async function runOpencodeThroughRuntime(input: {
         event.part?.state?.input ??
         {};
       const toolKey = `${callId}:${toolName}`;
+      const firstToolEvent = !toolsDispatched.has(toolKey);
+      if (firstToolEvent) {
+        toolsDispatched.add(toolKey);
+        toolsInvoked.push(toolName);
+      }
       const status = String(event.part?.state?.status ?? "started");
       if (
         toolName === "company_action" &&
@@ -1187,14 +1203,12 @@ async function runOpencodeThroughRuntime(input: {
             error instanceof Error ? error.message : "company_action input is invalid";
         }
       }
-      if (input.tools && !toolsDispatched.has(`${callId}:${toolName}`)) {
-        toolsDispatched.add(`${callId}:${toolName}`);
-        toolsInvoked.push(toolName);
+      if (input.tools && firstToolEvent) {
         pendingTools = pendingTools.then(async () => {
           try {
             const output = await input.tools?.invoke(toolName, toolInput, {
               callId,
-              sessionId: event.sessionID,
+              sessionId,
             });
             await input.onLog?.(
               "stdout",
@@ -2588,7 +2602,7 @@ export const opencodeCli: ServerAdapterModule = {
     if (Buffer.byteLength(cliResult.text, "utf8") > MAX_RESULT_TEXT_BYTES) {
       throw new Error("opencode response exceeds the 1 MiB result limit");
     }
-    const sessionId = cliResult.sessionId ?? runtimeSessionId ?? shortId("oc");
+    const sessionId = cliResult.sessionId ?? shortId("oc");
     return {
       protocolVersion: HARNESS_PROTOCOL_VERSION,
       sessionId,

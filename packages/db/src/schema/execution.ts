@@ -251,6 +251,7 @@ export const agentAttempts = sqliteTable(
     attemptNumber: integer("attempt_number").notNull().default(1),
     timeoutMs: integer("timeout_ms"),
     cancelRequestedAt: text("cancel_requested_at"),
+    heartbeatAt: text("heartbeat_at"),
     startedAt: text("started_at"),
     finishedAt: text("finished_at"),
     error: text("error"),

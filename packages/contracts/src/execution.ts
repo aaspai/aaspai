@@ -174,6 +174,8 @@ export const executionWorkItemSchema = z
       .nullable()
       .default(null),
     branchName: z.string().trim().max(256).nullable().default(null),
+    claimedByAttemptId: identifierSchema.nullable().default(null),
+    claimedAt: isoTimestampSchema.nullable().default(null),
     priority: z.number().int().min(-100_000).max(100_000).default(0),
     deadlineAt: isoTimestampSchema.nullable().default(null),
     maxAttempts: positiveIntegerSchema.default(1),
@@ -279,6 +281,7 @@ export const agentAttemptSchema = z
     attemptNumber: positiveIntegerSchema.default(1),
     timeoutMs: positiveIntegerSchema.nullable().default(null),
     cancelRequestedAt: isoTimestampSchema.nullable().default(null),
+    heartbeatAt: isoTimestampSchema.nullable().default(null),
     startedAt: isoTimestampSchema.nullable().default(null),
     finishedAt: isoTimestampSchema.nullable().default(null),
     error: z.string().max(16_384).nullable().default(null),

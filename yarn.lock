@@ -433,6 +433,7 @@ __metadata:
     tailwind-merge: "npm:^2.5.5"
     tailwindcss: "npm:^3.4.17"
     tailwindcss-animate: "npm:^1.0.7"
+    tsx: "npm:^4.16.2"
     typescript: "npm:^5.8.3"
     zod: "npm:^4.3.6"
   languageName: unknown

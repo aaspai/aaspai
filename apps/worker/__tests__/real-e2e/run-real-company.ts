@@ -268,6 +268,29 @@ async function waitForEmployee(store: ExecutionStore, goalId: string, parentWork
   }
 }
 
+async function waitForManagerCallback(
+  store: ExecutionStore,
+  goalId: string,
+  employeeWorkItemId: string,
+) {
+  while (true) {
+    const items = await store.listWorkItems(organizationId, goalId);
+    const callback = items.find(
+      (item) =>
+        item.parentWorkItemId === employeeWorkItemId &&
+        item.assignedAgentId === "agent/ceo" &&
+        Boolean(item.metadata.delegationCallback),
+    );
+    if (callback?.status === "completed") return callback;
+    if (callback && ["failed", "blocked", "cancelled"].includes(callback.status)) {
+      throw new Error(
+        `Manager callback ${callback.id} ended as ${callback.status}: ${callback.blockedReason}`,
+      );
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 500));
+  }
+}
+
 async function waitForSimulatedProcess(store: ExecutionStore, goalId: string) {
   while (true) {
     const runs = await getDefaultDb()
@@ -450,7 +473,7 @@ async function main(): Promise<void> {
     status: "ready",
     definitionRevisionId: revision.id,
     sourceCommitSha: baseCommit,
-    maxAttempts: 1,
+    maxAttempts: 3,
     idempotencyKey: `parent:${runId}`,
     workKind: "general",
     deliveryMode: "none",
@@ -508,23 +531,131 @@ async function main(): Promise<void> {
   });
   const workItems = await waitForEmployee(store, goal.id, parent.id);
   const simulationProcess = simulated ? await waitForSimulatedProcess(store, goal.id) : null;
+  const completedParent = workItems.find((item) => item.id === parent.id);
   const child = workItems.find((item) => item.id !== parent.id);
+  assert(completedParent, "Completed CEO work disappeared");
   assert(child, "Delegated child work was not created");
+  const managerCallback = await waitForManagerCallback(store, goal.id, child.id);
+  const callbackDescendants = (await store.listWorkItems(organizationId, goal.id)).filter(
+    (item) => item.parentWorkItemId === managerCallback.id,
+  );
+  assert(
+    callbackDescendants.length === 0,
+    "Manager callback repeated completed work instead of stopping",
+  );
   const attempts = await handle.db
     .select()
     .from(agentAttempts)
     .where(eq(agentAttempts.organizationId, organizationId));
-  const ceoAttempt = attempts.find((attempt) => attempt.workItemId === parent.id);
-  const employeeAttempt = attempts.find((attempt) => attempt.workItemId === child.id);
+  const latestAttemptFor = (workItemId: string) =>
+    attempts
+      .filter((attempt) => attempt.workItemId === workItemId && attempt.role === "maker")
+      .sort((left, right) => right.attemptNumber - left.attemptNumber)[0];
+  const ceoAttempt = latestAttemptFor(parent.id);
+  const employeeAttempt = latestAttemptFor(child.id);
+  const managerCallbackAttempts = attempts
+    .filter((attempt) => attempt.workItemId === managerCallback.id && attempt.role === "maker")
+    .sort((left, right) => left.attemptNumber - right.attemptNumber);
+  const initialManagerCallbackAttempt = managerCallbackAttempts[0];
+  const managerCallbackAttempt = managerCallbackAttempts.at(-1);
+  const passedVerification = (
+    await handle.db
+      .select()
+      .from(executionVerifications)
+      .where(eq(executionVerifications.workItemId, child.id))
+  ).find((verification) => verification.status === "passed");
+  const checkerAttempt = attempts.find(
+    (attempt) => attempt.role === "checker" && attempt.verificationId === passedVerification?.id,
+  );
   assert(ceoAttempt?.status === "succeeded", "CEO attempt did not succeed");
   assert(employeeAttempt?.status === "succeeded", "Employee attempt did not succeed");
+  assert(checkerAttempt?.status === "succeeded", "Independent checker did not succeed");
+  assert(managerCallbackAttempt?.status === "succeeded", "Manager callback did not succeed");
+  assert(initialManagerCallbackAttempt, "Initial manager callback attempt was not recorded");
+  assert(
+    completedParent.assignedAgentId === "agent/ceo",
+    "CEO claim did not persist work ownership",
+  );
   assert(employeeAttempt.workItemId === child.id, "Employee did not own delegated work");
+  assert(
+    child.claimedByAttemptId === employeeAttempt.id && Boolean(child.claimedAt),
+    "Delegated work was not atomically claimed by its employee attempt",
+  );
+  assert(
+    employeeAttempt.parentAttemptId === ceoAttempt.id,
+    "Employee attempt lost its manager attempt lineage",
+  );
+  assert(
+    managerCallbackAttempt.parentAttemptId === employeeAttempt.id,
+    "Manager callback lost its employee attempt lineage",
+  );
+  assert(
+    checkerAttempt.parentAttemptId === employeeAttempt.id,
+    "Checker lost its maker attempt lineage",
+  );
+
+  const ceoHarnessSession = ceoAttempt.harnessSessionId
+    ? await store.getHarnessSession(ceoAttempt.harnessSessionId)
+    : null;
+  const employeeHarnessSession = employeeAttempt.harnessSessionId
+    ? await store.getHarnessSession(employeeAttempt.harnessSessionId)
+    : null;
+  const managerCallbackHarnessSession = managerCallbackAttempt.harnessSessionId
+    ? await store.getHarnessSession(managerCallbackAttempt.harnessSessionId)
+    : null;
+  const checkerHarnessSession = checkerAttempt.harnessSessionId
+    ? await store.getHarnessSession(checkerAttempt.harnessSessionId)
+    : null;
+  const initialManagerCallbackHarnessSession = initialManagerCallbackAttempt.harnessSessionId
+    ? await store.getHarnessSession(initialManagerCallbackAttempt.harnessSessionId)
+    : null;
+  assert(ceoHarnessSession?.sessionId, "CEO provider session was not recorded");
+  assert(
+    employeeHarnessSession?.parentSessionId === ceoHarnessSession.id,
+    "Employee session is not linked to the manager session",
+  );
+  assert(
+    initialManagerCallbackHarnessSession?.parentSessionId === ceoHarnessSession.id,
+    "Initial manager callback is not linked to the original manager session",
+  );
+  const callbackMetadata = managerCallback.metadata.delegationCallback as
+    | Record<string, unknown>
+    | undefined;
+  assert(
+    callbackMetadata?.resumeSessionId === ceoHarnessSession.sessionId,
+    "Manager callback did not select the original provider session",
+  );
+  const managerWorkspace =
+    typeof callbackMetadata?.managerWorkspaceId === "string"
+      ? await store.getWorkspace(callbackMetadata.managerWorkspaceId)
+      : null;
+  const callbackRuntime = JSON.parse(managerCallbackHarnessSession?.runtimeJson ?? "{}") as {
+    cwd?: unknown;
+  };
+  assert(
+    managerWorkspace?.attemptId === ceoAttempt.id &&
+      typeof callbackRuntime.cwd === "string" &&
+      resolve(callbackRuntime.cwd) === resolve(managerWorkspace.path),
+    "Manager callback did not reuse the exact manager workspace",
+  );
+  if (!simulated) {
+    assert(
+      managerCallbackHarnessSession?.sessionId === ceoHarnessSession.sessionId,
+      "Real manager callback did not resume the original provider session",
+    );
+  }
 
   const ceoEvents = ceoAttempt.harnessSessionId
     ? await store.listHarnessSessionEvents(ceoAttempt.harnessSessionId)
     : [];
   const employeeEvents = employeeAttempt.harnessSessionId
     ? await store.listHarnessSessionEvents(employeeAttempt.harnessSessionId)
+    : [];
+  const managerCallbackEvents = managerCallbackAttempt.harnessSessionId
+    ? await store.listHarnessSessionEvents(managerCallbackAttempt.harnessSessionId)
+    : [];
+  const checkerEvents = checkerAttempt.harnessSessionId
+    ? await store.listHarnessSessionEvents(checkerAttempt.harnessSessionId)
     : [];
   if (!simulated) {
     assert(provesSkill(ceoEvents, "company-operator"), "CEO session does not prove real skill use");
@@ -537,6 +668,13 @@ async function main(): Promise<void> {
       provesTool(employeeEvents, "bash"),
       "Employee session does not prove real bash-tool use",
     );
+    assert(provesTool(checkerEvents, "bash"), "Checker session does not prove real tool use");
+    for (const session of [ceoHarnessSession, employeeHarnessSession, checkerHarnessSession]) {
+      const resultJson = JSON.parse(session?.resultJson ?? "{}") as {
+        toolsInvoked?: unknown[];
+      };
+      assert(resultJson.toolsInvoked?.length, "Session tool summary omitted native tool use");
+    }
   }
 
   const employeeOutputs = await handle.db
@@ -559,6 +697,16 @@ async function main(): Promise<void> {
     .where(eq(delegations.workItemId, child.id));
   assert(hired.length === 1, "Hired employee was not registered");
   assert(durableDelegations.length === 1, "Delegation was not persisted");
+  const durableWorkflowRuns = await handle.db
+    .select()
+    .from(workflowRuns)
+    .where(eq(workflowRuns.organizationId, organizationId));
+  assert(
+    durableWorkflowRuns.every(
+      (run) => run.status !== "succeeded" || Boolean(run.startedAt && run.finishedAt),
+    ),
+    "Completed workflow omitted lifecycle timestamps",
+  );
   assert(
     (await stat(join(agentsDir, employeeSlug, "AGENT.md"))).isFile(),
     "Hired employee definition was not materialized",
@@ -578,7 +726,7 @@ async function main(): Promise<void> {
     }
   }
   const timelines = await Promise.all(
-    [ceoAttempt, employeeAttempt].map(async (attempt) => ({
+    [ceoAttempt, employeeAttempt, checkerAttempt, managerCallbackAttempt].map(async (attempt) => ({
       attemptId: attempt.id,
       agentId: attempt.agentId,
       events: observeExecution({
@@ -589,15 +737,20 @@ async function main(): Promise<void> {
           type: event.type,
           payload: event.payload,
         })),
-        sessionEvents: (attempt.agentId === "agent/ceo" ? ceoEvents : employeeEvents).map(
-          (event) => ({
-            id: event.id,
-            seq: event.seq,
-            ts: event.ts,
-            kind: event.kind,
-            payload: JSON.parse(event.payloadJson) as Record<string, unknown>,
-          }),
-        ),
+        sessionEvents: (attempt.id === ceoAttempt.id
+          ? ceoEvents
+          : attempt.id === employeeAttempt.id
+            ? employeeEvents
+            : attempt.id === checkerAttempt.id
+              ? checkerEvents
+              : managerCallbackEvents
+        ).map((event) => ({
+          id: event.id,
+          seq: event.seq,
+          ts: event.ts,
+          kind: event.kind,
+          payload: JSON.parse(event.payloadJson) as Record<string, unknown>,
+        })),
       }),
     })),
   );
@@ -610,15 +763,22 @@ async function main(): Promise<void> {
     workflowRunId: workflow.id,
     parentWorkItemId: parent.id,
     employeeWorkItemId: child.id,
+    managerCallbackWorkItemId: managerCallback.id,
     processWorkflowRunId: simulationProcess?.id ?? null,
     ceoAttemptId: ceoAttempt.id,
     employeeAttemptId: employeeAttempt.id,
+    checkerAttemptId: checkerAttempt.id,
+    managerCallbackAttemptId: managerCallbackAttempt.id,
     ceoSessionId: ceoAttempt.harnessSessionId,
     employeeSessionId: employeeAttempt.harnessSessionId,
+    checkerSessionId: checkerAttempt.harnessSessionId,
+    managerCallbackSessionId: managerCallbackAttempt.harnessSessionId,
     scenario: scenarioName,
     hiredAgentId: employeeAgentId,
     ceoSessionEventCount: ceoEvents.length,
     employeeSessionEventCount: employeeEvents.length,
+    checkerSessionEventCount: checkerEvents.length,
+    managerCallbackSessionEventCount: managerCallbackEvents.length,
     companyEventCount: timelines
       .flatMap((timeline) => timeline.events)
       .filter((event) => event.lane === "company").length,

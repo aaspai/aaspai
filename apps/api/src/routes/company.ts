@@ -14,7 +14,6 @@ import {
   executionOperatorRuns,
   getDefaultDb,
   isNull,
-  lt,
   wakeups,
 } from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
@@ -357,7 +356,9 @@ export function registerCompanyRoutes(
     const auth = await authenticate(c, options.authVerifier, "read");
     if ("response" in auth) return auth.response;
     const db = getDefaultDb().db;
-    const [queuedWakeups, claimedWakeups, activeLeases, runs] = await Promise.all([
+    const cutoff = new Date(Date.now() - 5 * 60_000).toISOString();
+    const store = new ExecutionStore(db);
+    const [queuedWakeups, staleClaimedWakeups, activeLeases, runs] = await Promise.all([
       db
         .select({ id: wakeups.id })
         .from(wakeups)
@@ -367,15 +368,7 @@ export function registerCompanyRoutes(
             eq(wakeups.status, "queued"),
           ),
         ),
-      db
-        .select({ id: wakeups.id, claimedAt: wakeups.claimedAt })
-        .from(wakeups)
-        .where(
-          and(
-            eq(wakeups.organizationId, auth.principal.organizationId),
-            eq(wakeups.status, "claimed"),
-          ),
-        ),
+      store.countStaleClaimedWakeups(cutoff, auth.principal.organizationId),
       db
         .select({ id: executionOperatorLeases.id, expiresAt: executionOperatorLeases.expiresAt })
         .from(executionOperatorLeases)
@@ -394,9 +387,7 @@ export function registerCompanyRoutes(
     return c.json({
       data: {
         queuedWakeups: queuedWakeups.length,
-        staleClaimedWakeups: claimedWakeups.filter(
-          (row) => row.claimedAt && row.claimedAt < new Date(Date.now() - 5 * 60_000).toISOString(),
-        ).length,
+        staleClaimedWakeups,
         expiredManagerLeases: activeLeases.filter((row) => row.expiresAt < now).length,
         blockedManagerRuns: runs.filter(
           (row) => row.status === "blocked" || row.status === "failed",
@@ -411,23 +402,13 @@ export function registerCompanyRoutes(
     const db = getDefaultDb().db;
     const cutoff = new Date(Date.now() - 5 * 60_000).toISOString();
     try {
-      const [lostAttempts, releasedLocks, reclaimedWakeups] = await Promise.all([
-        new ExecutionStore(db).reconcileLostAttempts(cutoff, auth.principal.organizationId),
-        new ExecutionStore(db).reconcileExpiredLocks(undefined, auth.principal.organizationId),
-        db
-          .update(wakeups)
-          .set({ status: "queued", claimedAt: null, error: "requeued by recovery" })
-          .where(
-            and(
-              eq(wakeups.organizationId, auth.principal.organizationId),
-              eq(wakeups.status, "claimed"),
-              lt(wakeups.claimedAt, cutoff),
-            ),
-          )
-          .returning({ id: wakeups.id }),
+      const store = new ExecutionStore(db);
+      const [lostAttempts, releasedLocks] = await Promise.all([
+        store.reconcileLostAttempts(cutoff, auth.principal.organizationId),
+        store.reconcileExpiredLocks(undefined, auth.principal.organizationId),
       ]);
       return c.json({
-        data: { lostAttempts, releasedLocks, reclaimedWakeups: reclaimedWakeups.length },
+        data: { lostAttempts, releasedLocks, reclaimedWakeups: 0 },
       });
     } catch (error) {
       return companyError(c, error);

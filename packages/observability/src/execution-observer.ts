@@ -15,7 +15,7 @@ export interface ObservedExecutionEvent {
 
 export const COMPANY_TOOL_CATALOG = Object.freeze({
   company_action: {
-    description: "Submit one or more governed company changes",
+    description: "Submit one governed company change",
     effects: ["validate authority", "apply durable company state", "record governance evidence"],
   },
   create_milestone: {

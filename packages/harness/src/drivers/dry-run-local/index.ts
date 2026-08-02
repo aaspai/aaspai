@@ -308,7 +308,7 @@ export const dryRunLocal: ServerAdapterModule = {
           ].join("\n")
         : synthesizeResponse(prompt, systemPrompt, role);
 
-    const sessionId = shortId("dry");
+    const sessionId = ctx.runtime.sessionId ?? shortId("dry");
 
     // Stream the response as a single assistant message via onLog so the
     // UI / session_events table see the same shape they'd see for a
@@ -331,7 +331,13 @@ export const dryRunLocal: ServerAdapterModule = {
       protocolVersion: HARNESS_PROTOCOL_VERSION,
       sessionId,
       sessionDisplayId: sessionId.slice(0, SHORT_ID_LEN + 4),
-      sessionParams: { dryRun: true, prompt, response, role },
+      sessionParams: {
+        dryRun: true,
+        prompt,
+        response,
+        role,
+        resume: Boolean(ctx.runtime.sessionId),
+      },
       exitCode: 0,
       timedOut: false,
       usage: {

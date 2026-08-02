@@ -223,6 +223,7 @@ describe("SkillRegistry.materialize()", () => {
       const skillDir = join(cwd, ".opencode_cli", "skills", "qa-acceptance");
       const { existsSync, readFileSync } = await import("node:fs");
       expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
+      expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).toContain("name: qa-acceptance");
       expect(readFileSync(join(skillDir, "checklist.md"), "utf8")).toContain("Pass");
     } finally {
       await rm(root, { recursive: true, force: true });

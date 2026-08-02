@@ -51,6 +51,7 @@ const SQLITE_STATEMENTS = [
     requested_by_actor_id TEXT,
     requested_by_actor_type TEXT,
     claimed_at TEXT,
+    heartbeat_at TEXT,
     finished_at TEXT,
     session_id TEXT,
     error TEXT
@@ -387,6 +388,7 @@ const SQLITE_STATEMENTS = [
     attempt_number INTEGER NOT NULL DEFAULT 1,
     timeout_ms INTEGER,
     cancel_requested_at TEXT,
+    heartbeat_at TEXT,
     started_at TEXT,
     finished_at TEXT,
     error TEXT,
@@ -1066,6 +1068,14 @@ const SCHEMA_EVOLUTION: Array<{ check: string; sql: string }> = [
   {
     check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'verification_id'",
     sql: "ALTER TABLE agent_attempts ADD COLUMN verification_id TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('agent_attempts') WHERE name = 'heartbeat_at'",
+    sql: "ALTER TABLE agent_attempts ADD COLUMN heartbeat_at TEXT",
+  },
+  {
+    check: "SELECT 1 FROM pragma_table_info('wakeups') WHERE name = 'heartbeat_at'",
+    sql: "ALTER TABLE wakeups ADD COLUMN heartbeat_at TEXT",
   },
   {
     check: "SELECT 1 FROM pragma_table_info('execution_plans') WHERE name = 'agent_id'",

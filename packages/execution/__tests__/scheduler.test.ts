@@ -174,6 +174,87 @@ describe("DependencyScheduler", () => {
     expect(attempts).toHaveLength(1);
   });
 
+  it("does not return another agent's active attempt to a losing dispatcher", async () => {
+    const fixture = await createFixture(store);
+    const item = await createItem(store, fixture, "Owned race", "owned-race");
+    await store.createAttempt({
+      organizationId: fixture.organizationId,
+      workflowRunId: fixture.run.id,
+      workItemId: item.id,
+      agentId: "agent_winner",
+      harness: "dry_run_local",
+    });
+
+    await expect(
+      store.dispatchWorkItem({
+        workflowRunId: fixture.run.id,
+        workItemId: item.id,
+        agentId: "agent_loser",
+        harness: "dry_run_local",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("rejects claims and dispatches through a different workflow", async () => {
+    const fixture = await createFixture(store);
+    const item = await createItem(store, fixture, "Workflow owned", "workflow-owned");
+    await store.assignWorkItemToWorkflow(item.id, fixture.run.id);
+    const otherRun = await store.createWorkflowRun({
+      organizationId: fixture.organizationId,
+      goalId: fixture.goal.id,
+      definitionRevisionId: fixture.revision.id,
+      idempotencyKey: `run:other:${randomUUID()}`,
+    });
+    const wrongAttempt = await store.createAttempt({
+      organizationId: fixture.organizationId,
+      workflowRunId: otherRun.id,
+      workItemId: item.id,
+      agentId: "agent_wrong_workflow",
+      harness: "dry_run_local",
+    });
+
+    await expect(store.claimWorkItem(item.id, wrongAttempt.id)).resolves.toBe(false);
+    await expect(
+      store.dispatchWorkItem({
+        workflowRunId: otherRun.id,
+        workItemId: item.id,
+        agentId: "agent_wrong_workflow",
+        harness: "dry_run_local",
+      }),
+    ).resolves.toBeNull();
+    await expect(store.getWorkItem(item.id)).resolves.toMatchObject({
+      workflowRunId: fixture.run.id,
+      claimedByAttemptId: null,
+    });
+  });
+
+  it("rejects claims and dispatches through another organization's workflow", async () => {
+    const fixture = await createFixture(store);
+    const foreign = await createFixture(store, "org_scheduler_foreign");
+    const item = await createItem(store, fixture, "Company owned", "company-owned");
+    const crossOrganizationAttempt = await store.createAttempt({
+      organizationId: fixture.organizationId,
+      workflowRunId: foreign.run.id,
+      workItemId: item.id,
+      agentId: "agent_cross_organization",
+      harness: "dry_run_local",
+    });
+
+    await expect(store.claimWorkItem(item.id, crossOrganizationAttempt.id)).resolves.toBe(false);
+    await expect(
+      store.dispatchWorkItem({
+        workflowRunId: foreign.run.id,
+        workItemId: item.id,
+        agentId: "agent_cross_organization",
+        harness: "dry_run_local",
+      }),
+    ).resolves.toBeNull();
+    await expect(store.getWorkItem(item.id)).resolves.toMatchObject({
+      workflowRunId: null,
+      claimedByAttemptId: null,
+    });
+  });
+
   it("does not dispatch two loop items onto the same branch concurrently", async () => {
     const fixture = await createFixture(store);
     const first = await createItem(store, fixture, "First branch change", "branch-first", {
@@ -204,8 +285,7 @@ describe("DependencyScheduler", () => {
   });
 });
 
-async function createFixture(store: ExecutionStore) {
-  const organizationId = "org_scheduler";
+async function createFixture(store: ExecutionStore, organizationId = "org_scheduler") {
   const goal = await store.createGoal({ organizationId, title: "Scheduler goal" });
   const project = await store.createProject({
     organizationId,

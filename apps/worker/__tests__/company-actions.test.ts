@@ -1,11 +1,66 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODEX_COMPANY_ACTION_CLIENT_SOURCE,
+  COMPANY_ACTION_TOOL_SOURCE,
   companyActionPayload,
   companyActions,
   missingRequiredCompanyActions,
 } from "../src/company-actions.js";
 
 describe("company actions", () => {
+  it("keeps Codex company payloads out of shell arguments", () => {
+    expect(CODEX_COMPANY_ACTION_CLIENT_SOURCE).toContain("process.stdin");
+    expect(CODEX_COMPANY_ACTION_CLIENT_SOURCE).not.toContain("process.argv");
+  });
+
+  it("sends OpenCode's provider session identity with company mutations", () => {
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain("async execute({ payload }, context)");
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain(
+      '"x-aaspai-provider-session-id": context.sessionID',
+    );
+  });
+
+  it("requires a persisted milestone sequence when starting a process", () => {
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain("milestoneSequence,definition");
+    const action = {
+      type: "define_and_start_process",
+      projectId: "project/growth",
+      milestoneSequence: 1,
+      definition: {
+        id: "process/growth",
+        organizationId: "org/test",
+        revision: 1,
+        contentHash: "growth-v1",
+        name: "Growth loop",
+        description: "Run the smallest growth loop.",
+        steps: [
+          {
+            id: "step/research",
+            agent: "agent/researcher",
+            dependsOn: [],
+            prompt: "Research one segment.",
+            skills: [],
+            tools: [],
+            workKind: "general",
+            deliveryMode: "none",
+            timeoutMs: 60_000,
+            maxAttempts: 1,
+            acceptanceCriteria: "Evidence is persisted.",
+            failureAction: "escalate",
+            approvalPolicy: {},
+          },
+        ],
+        maxDurationMs: 300_000,
+        maxAttempts: 1,
+        createdAt: "2026-08-02T00:00:00.000Z",
+      },
+    };
+    expect(companyActionPayload({ actions: [action] })).toEqual([action]);
+    const missingSequence = { ...action } as Record<string, unknown>;
+    delete missingSequence.milestoneSequence;
+    expect(() => companyActionPayload({ actions: [missingSequence] })).toThrow("invalid");
+  });
+
   it("accepts a typed final-line action from a CLI without custom tools", () => {
     const payload = {
       actions: [

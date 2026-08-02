@@ -67,6 +67,7 @@ export const wakeups = sqliteTable(
     requestedByActorId: text("requested_by_actor_id"),
     requestedByActorType: text("requested_by_actor_type"), // user | agent | system
     claimedAt: text("claimed_at"),
+    heartbeatAt: text("heartbeat_at"),
     finishedAt: text("finished_at"),
     sessionId: text("session_id"),
     error: text("error"),

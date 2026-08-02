@@ -34,8 +34,13 @@ export interface ExecuteHarnessPlanInput {
   agent?: HarnessAgentInput;
   profile?: ResolvedAgentProfile;
   durableSessionId?: string;
+  /** Durable lineage for a fresh row replacing a previously used session. */
+  parentSessionId?: string;
+  wakeupId?: string;
   /** Provider-native session ID to continue after a stalled CLI attempt. */
   resumeSessionId?: string;
+  /** Reuse the retained manager-session workspace for a callback turn. */
+  allowWorkspaceReuse?: boolean;
   signal?: AbortSignal;
   /** Runtime-only credentials. Never persisted in the plan or session config. */
   ephemeralEnv?: Record<string, string>;
@@ -93,6 +98,12 @@ export class HarnessExecutionPlanRunner {
         };
     const adapterConfig = policy.adapterConfig;
     const stuckAfterMs = resolveStuckAfterMs(adapterConfig);
+    const ephemeralSecrets = Object.entries(input.ephemeralEnv ?? {})
+      .filter(
+        ([key, value]) => /(?:token|secret|password|credential|api[_-]?key)/i.test(key) && value,
+      )
+      .map(([, value]) => value);
+    const redactEphemeral = (value: string) => redactValues(value, ephemeralSecrets);
     const session = await this.store.createHarnessSession({
       id: input.durableSessionId,
       organizationId: input.plan.organizationId,
@@ -101,8 +112,15 @@ export class HarnessExecutionPlanRunner {
       prompt: input.plan.prompt,
       runtime: { cwd: input.workspace.path },
       config: adapterConfig,
+      parentSessionId: input.parentSessionId,
+      wakeupId: input.wakeupId,
     });
     await this.store.linkHarnessSession(input.plan.attemptId, session.id);
+    const requestedSessionId =
+      input.resumeSessionId ??
+      agent.resumeSessionId ??
+      session.inheritedProviderSessionId ??
+      undefined;
     const currentAttempt = await this.store.getAttempt(input.plan.attemptId);
     if (currentAttempt?.status === "queued") {
       await this.store.transitionAttempt(input.plan.attemptId, "preparing");
@@ -173,9 +191,9 @@ export class HarnessExecutionPlanRunner {
           adapterConfig,
         },
         runtime: {
-          sessionId: input.resumeSessionId ?? agent.resumeSessionId,
+          sessionId: requestedSessionId,
           sessionParams: {
-            resume: Boolean(input.resumeSessionId ?? agent.resumeSessionId),
+            resume: Boolean(requestedSessionId),
             fork: agent.forkSession === true,
           },
           runtimeIdentity: {
@@ -212,19 +230,20 @@ export class HarnessExecutionPlanRunner {
                 : (input.plan.timeoutMs ?? options.timeoutMs),
               onLog: async (stream, chunk) => {
                 lastProgressAt = Date.now();
+                const safeChunk = redactEphemeral(chunk);
                 try {
                   await this.store.appendRawOutput({
                     organizationId: input.plan.organizationId,
                     attemptId: input.plan.attemptId,
                     ts: new Date().toISOString(),
                     stream,
-                    chunk,
+                    chunk: safeChunk,
                     seq: ++rawOutputSeq,
                   });
                 } catch (error) {
                   persistenceFailure = error instanceof Error ? error : new Error(String(error));
                 }
-                await options.onLog?.(stream, chunk);
+                await options.onLog?.(stream, safeChunk);
               },
             });
             assertRuntimeIdentity(input.plan.target, input.workspace.path, result.runtimeIdentity);
@@ -235,20 +254,28 @@ export class HarnessExecutionPlanRunner {
         signal: runController.signal,
         onLog: async (stream, chunk) => {
           lastProgressAt = Date.now();
-          for (const line of chunk.split(/\r?\n/)) {
+          for (const line of redactEphemeral(chunk).split(/\r?\n/)) {
             if (!line) continue;
             if (stream === "stdout") {
               try {
                 const parsed = JSON.parse(line) as {
                   kind?: string;
                   sessionID?: unknown;
+                  sessionId?: unknown;
+                  thread_id?: unknown;
+                  session_id?: unknown;
                 } & Record<string, unknown>;
-                if (
-                  typeof parsed.sessionID === "string" &&
-                  parsed.sessionID !== observedProviderSessionId
-                ) {
-                  observedProviderSessionId = parsed.sessionID;
-                  await this.store.setHarnessSessionProviderIdentity(session.id, parsed.sessionID);
+                const providerSessionId = [
+                  parsed.sessionID,
+                  parsed.sessionId,
+                  parsed.thread_id,
+                  parsed.session_id,
+                ].find(
+                  (value): value is string => typeof value === "string" && value.trim().length > 0,
+                );
+                if (providerSessionId && providerSessionId !== observedProviderSessionId) {
+                  observedProviderSessionId = providerSessionId;
+                  await this.store.setHarnessSessionProviderIdentity(session.id, providerSessionId);
                 }
                 const canonicalKinds = new Set([
                   "assistant",
@@ -290,6 +317,26 @@ export class HarnessExecutionPlanRunner {
     } finally {
       clearInterval(watchdog);
       input.signal?.removeEventListener("abort", abortForCancellation);
+    }
+
+    result = redactResult(result, ephemeralSecrets);
+
+    if (
+      result.exitCode === 0 &&
+      requestedSessionId &&
+      agent.forkSession !== true &&
+      result.sessionId !== requestedSessionId
+    ) {
+      result = {
+        ...result,
+        exitCode: 1,
+        errorCode: "session_resume_mismatch",
+        errorFamily: "internal",
+        errorMessage: result.sessionId
+          ? `Provider resumed ${result.sessionId} instead of ${requestedSessionId}`
+          : `Provider did not report the required resumed session ${requestedSessionId}`,
+        summary: "Provider did not continue the required manager session",
+      };
     }
 
     if (stalled) {
@@ -371,13 +418,39 @@ export class HarnessExecutionPlanRunner {
   }
 
   private assertWorkspace(input: ExecuteHarnessPlanInput): void {
-    if (input.workspace.attemptId !== input.plan.attemptId) {
+    if (!input.allowWorkspaceReuse && input.workspace.attemptId !== input.plan.attemptId) {
       throw new Error("Execution plan and workspace attempt IDs must match");
     }
     if (input.workspace.status !== "ready") {
       throw new Error(`Execution workspace is not ready: ${input.workspace.status}`);
     }
   }
+}
+
+function redactValues(value: string, secrets: readonly string[]): string {
+  return secrets.reduce(
+    (redacted, secret) =>
+      secret.length >= 8 ? redacted.replaceAll(secret, "[REDACTED]") : redacted,
+    value,
+  );
+}
+
+function redactResult(
+  result: AdapterExecutionResult,
+  secrets: readonly string[],
+): AdapterExecutionResult {
+  if (secrets.length === 0) return result;
+  const redact = (value: unknown): unknown => {
+    if (typeof value === "string") return redactValues(value, secrets);
+    if (Array.isArray(value)) return value.map(redact);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, redact(item)]),
+      );
+    }
+    return value;
+  };
+  return redact(result) as AdapterExecutionResult;
 }
 
 const MANAGED_ENV_BASELINE_KEYS = [

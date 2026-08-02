@@ -1,4 +1,4 @@
-import { agentAttempts, and, eq, getDefaultDb, lt, runMigrations, wakeups } from "@aaspai/db";
+import { eq, getDefaultDb, runMigrations, wakeups } from "@aaspai/db";
 import { ExecutionStore } from "@aaspai/execution";
 import { NextResponse } from "next/server";
 import { ensureWorkspaceEnv } from "@/lib/aaspai";
@@ -15,20 +15,12 @@ export async function GET() {
     .select()
     .from(wakeups)
     .where(eq(wakeups.organizationId, user.organizationId));
-  const attempts = await handle.db
-    .select()
-    .from(agentAttempts)
-    .where(eq(agentAttempts.organizationId, user.organizationId));
+  const store = new ExecutionStore(handle.db);
   return NextResponse.json({
     data: {
       queuedWakeups: rows.filter((row) => row.status === "queued").length,
-      staleClaimedWakeups: rows.filter(
-        (row) => row.status === "claimed" && row.claimedAt && row.claimedAt < cutoff,
-      ).length,
-      staleAttempts: attempts.filter(
-        (row) =>
-          ["running", "queued"].includes(row.status) && row.startedAt && row.startedAt < cutoff,
-      ).length,
+      staleClaimedWakeups: await store.countStaleClaimedWakeups(cutoff, user.organizationId),
+      staleAttempts: await store.countStaleAttempts(cutoff, user.organizationId),
     },
   });
 }
@@ -41,22 +33,11 @@ export async function POST() {
   runMigrations(handle);
   const cutoff = new Date(Date.now() - 5 * 60_000).toISOString();
   const store = new ExecutionStore(handle.db);
-  const [lostAttempts, releasedLocks, reclaimed] = await Promise.all([
+  const [lostAttempts, releasedLocks] = await Promise.all([
     store.reconcileLostAttempts(cutoff, user.organizationId),
     store.reconcileExpiredLocks(undefined, user.organizationId),
-    handle.db
-      .update(wakeups)
-      .set({ status: "queued", claimedAt: null, error: "requeued by recovery" })
-      .where(
-        and(
-          eq(wakeups.organizationId, user.organizationId),
-          eq(wakeups.status, "claimed"),
-          lt(wakeups.claimedAt, cutoff),
-        ),
-      )
-      .returning({ id: wakeups.id }),
   ]);
   return NextResponse.json({
-    data: { lostAttempts, releasedLocks, reclaimedWakeups: reclaimed.length },
+    data: { lostAttempts, releasedLocks, reclaimedWakeups: 0 },
   });
 }
