@@ -212,7 +212,7 @@ interface ResolvedConfig {
   pureEnv: boolean;
 }
 
-function resolveConfig(ctx: AdapterExecutionContext): ResolvedConfig {
+function resolveConfig(ctx: { config: unknown }): ResolvedConfig {
   const cfg = (ctx.config as Record<string, unknown>) ?? {};
   const shareModeRaw = asString(cfg.shareMode);
   const shareMode =
@@ -1549,6 +1549,7 @@ export function stopOpencodeServe(workspaceKey: string): void {
 
 export async function runOpencodeHelloProbe(opts: {
   cli?: string;
+  commandArgs?: string[];
   model?: string;
   cwd?: string;
   expectedReply?: string;
@@ -1561,6 +1562,7 @@ export async function runOpencodeHelloProbe(opts: {
     const child = spawn(
       cli,
       [
+        ...(opts.commandArgs ?? []),
         "run",
         "--format",
         "json",
@@ -1632,11 +1634,15 @@ export async function runOpencodeHelloProbe(opts: {
   });
 }
 
-export async function listOpencodeModels(opts: { cli?: string; cwd?: string }): Promise<string[]> {
+export async function listOpencodeModels(opts: {
+  cli?: string;
+  commandArgs?: string[];
+  cwd?: string;
+}): Promise<string[]> {
   const cli = await resolveOpencodeBinary(opts.cli);
   try {
     const { stdout } = await new Promise<{ stdout: string; stderr: string }>((res, rej) => {
-      const p = spawn(cli, ["models"], {
+      const p = spawn(cli, [...(opts.commandArgs ?? []), "models"], {
         cwd: opts.cwd ?? process.cwd(),
         env: { ...process.env },
         stdio: ["ignore", "pipe", "pipe"],
@@ -2672,7 +2678,8 @@ export const opencodeCli: ServerAdapterModule = {
       },
     };
   },
-  async testEnvironment() {
+  async testEnvironment(ctx) {
+    const config = resolveConfig(ctx);
     const checks: Array<{
       name: string;
       level: "info" | "warn" | "error";
@@ -2684,8 +2691,8 @@ export const opencodeCli: ServerAdapterModule = {
       const { execFile } = await import("node:child_process");
       const { promisify } = await import("node:util");
       const exec = promisify(execFile);
-      const cli = await resolveOpencodeBinary(process.env.OPENCODE_CLI);
-      const { stdout } = await exec(cli, ["--version"]);
+      const cli = await resolveOpencodeBinary(config.command);
+      const { stdout } = await exec(cli, [...config.commandArgs, "--version"], { cwd: ctx.cwd });
       checks.push({ name: "opencode_cli", level: "info", message: `${cli} ${stdout.trim()}` });
     } catch (err) {
       checks.push({
@@ -2722,7 +2729,11 @@ export const opencodeCli: ServerAdapterModule = {
     }
     // 3. models list
     try {
-      const models = await listOpencodeModels({});
+      const models = await listOpencodeModels({
+        cli: config.command,
+        commandArgs: config.commandArgs,
+        cwd: ctx.cwd,
+      });
       if (models.length > 0) {
         checks.push({
           name: "opencode_cli.models",
@@ -2749,7 +2760,12 @@ export const opencodeCli: ServerAdapterModule = {
     const allInfo = checks.every((c) => c.level === "info");
     if (allInfo) {
       try {
-        const probe = await runOpencodeHelloProbe({});
+        const probe = await runOpencodeHelloProbe({
+          cli: config.command,
+          commandArgs: config.commandArgs,
+          model: config.model,
+          cwd: ctx.cwd,
+        });
         checks.push({
           name: "opencode_cli.hello",
           level: probe.ok ? "info" : "warn",

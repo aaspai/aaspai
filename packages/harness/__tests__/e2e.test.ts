@@ -871,27 +871,22 @@ describe("e2e: opencode_cli driver", () => {
 
   it("testEnvironment reports a pass for the fake CLI and surfaces the resolved path", async () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
-    // The fake CLI's `--version` returns Node's version (since we
-    // invoke it as `node fake-opencode.cjs --version`). The test
-    // Environment check just needs to confirm the binary spawned
-    // successfully and reported something. The check message format
-    // is `${cli} ${stdout}` so we assert on the binary path itself
-    // (which is whatever config.command points at) and the
-    // presence of a non-empty version string.
-    const result = await opencodeCli.testEnvironment({
-      config: {
-        command: process.execPath,
-        commandArgs: [FAKE_OPENCODE_CJS],
-        model: "opencode-go/mimo-v2.5",
-      },
-    });
+    const authPath = join(scratchDir, "environment-auth.json");
+    writeFileSync(authPath, JSON.stringify({ fake: { type: "api", key: "test" } }), "utf8");
+    const result = await withEnv({ OPENCODE_AUTH_PATH: authPath }, () =>
+      opencodeCli.testEnvironment({
+        config: {
+          command: process.execPath,
+          commandArgs: [FAKE_OPENCODE_CJS],
+          model: "opencode-go/mimo-v2.5",
+        },
+      }),
+    );
     expect(result.ok).toBe(true);
     expect(result.checks.length).toBeGreaterThan(0);
     const first = result.checks[0]!;
     expect(first.level).toBe("info");
-    // The message contains the resolved binary path and the fake
-    // CLI's --version output (which is the Node version since the
-    // fake delegates to its own argv).
+    expect(first.message).toContain(process.execPath);
     expect(first.message).toMatch(/v\d+\.\d+\.\d+|version/i);
   });
 

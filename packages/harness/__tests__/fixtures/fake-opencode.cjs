@@ -279,6 +279,11 @@ function runHang() {
 }
 
 async function main() {
+  if (process.argv.includes("--version")) {
+    process.stdout.write(`${process.version}\n`);
+    return;
+  }
+
   // Honor the AASPAI_FAKE_OPENCODE env var as an explicit override
   // for the prompt — useful when the test wants to drive behavior
   // without polluting the user-visible prompt.
