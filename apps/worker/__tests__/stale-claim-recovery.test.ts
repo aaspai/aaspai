@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -164,6 +165,39 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     expect(payload.prompt).toContain("previous attempt did not pass execution verification");
     expect(payload.prompt).toContain("Unsupported commercial or security claim");
 
+    await (
+      daemon as unknown as {
+        queueRetryWakeup(
+          wakeup: Record<string, unknown>,
+          request: Record<string, unknown>,
+          attemptNumber: number,
+          retry: { resumeSessionId?: string; failure?: string },
+        ): Promise<void>;
+      }
+    ).queueRetryWakeup(
+      source ?? {},
+      {
+        prompt: "Build the sales playbook",
+        workItemId: "work_test",
+        workflowRunId: "run_test",
+        resumeSessionId: "broken_provider_session",
+      },
+      3,
+      { failure: "Provider session failed" },
+    );
+    const freshPayload = JSON.parse(
+      String(
+        (
+          await (
+            handle.db.select().from(wakeupsTable) as {
+              all: () => Promise<Record<string, unknown>[]>;
+            }
+          ).all()
+        ).find((row) => row.idempotencyKey === "retry:work_test:3")?.payloadJson,
+      ),
+    ) as Record<string, unknown>;
+    expect(freshPayload.resumeSessionId).toBeUndefined();
+
     await teardownDb(tmpDir);
   });
 
@@ -292,6 +326,54 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     expect(JSON.parse(String(recovered?.payloadJson))).toMatchObject({
       resumeSessionId: "provider_session_123",
     });
+
+    const artifactRoot = join(tmpDir, "artifacts");
+    process.env.AASPAI_ARTIFACTS_ROOT = artifactRoot;
+    const failedWorkspace = join(tmpDir, "failed-workspace");
+    await mkdir(join(failedWorkspace, "growth"), { recursive: true });
+    await writeFile(
+      join(failedWorkspace, "growth", "lead-list.md"),
+      "Lead: https://example.test\n",
+      "utf8",
+    );
+    const lostAttempt = await store.getAttempt(attempt.id);
+    const currentWork = await store.getWorkItem(work.id);
+    expect(lostAttempt).not.toBeNull();
+    expect(currentWork).not.toBeNull();
+    await (
+      daemon as unknown as {
+        persistAttemptOutput(input: Record<string, unknown>): Promise<void>;
+      }
+    ).persistAttemptOutput({
+      result: { exitCode: 1, timedOut: true },
+      attempt: lostAttempt,
+      workItem: currentWork,
+      workspacePath: failedWorkspace,
+      sourceCommit: "abcdef1",
+      branchName: `disposable/${attempt.id}`,
+      repositoryWork: false,
+    });
+    const retryAttempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: run.id,
+      workItemId: work.id,
+      agentId: "agent/manager",
+      harness: "opencode_cli",
+      attemptNumber: 2,
+    });
+    const retryWorkspace = join(tmpDir, "retry-workspace");
+    await mkdir(retryWorkspace, { recursive: true });
+    await (
+      daemon as unknown as {
+        restorePreviousAttemptArtifacts(
+          attempt: typeof retryAttempt,
+          workspacePath: string,
+        ): Promise<void>;
+      }
+    ).restorePreviousAttemptArtifacts(retryAttempt, retryWorkspace);
+    await expect(readFile(join(retryWorkspace, "growth", "lead-list.md"), "utf8")).resolves.toBe(
+      "Lead: https://example.test\n",
+    );
 
     await teardownDb(tmpDir);
   });

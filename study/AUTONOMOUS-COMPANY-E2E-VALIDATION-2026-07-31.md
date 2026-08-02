@@ -311,11 +311,15 @@ The release gate is the real ZedBlock run completing with durable evidence for e
 
 The deterministic orchestration gate now passes through the real scheduler, worker, workspace, company commands, delegation, process, independent verification, and manager roll-up paths:
 
-- Evidence: [simulation result](../workspace/company-simulation/acceptance/simulation/2026-08-02T04-58-52-014Z-b471e396/RESULT.md)
-- Timeline: [classified timeline](../workspace/company-simulation/acceptance/simulation/2026-08-02T04-58-52-014Z-b471e396/TIMELINE.json)
+- Evidence: [simulation result](../workspace/company-simulation/acceptance/simulation/2026-08-02T08-51-19-723Z-551f19b6/RESULT.md)
+- Timeline: [classified timeline](../workspace/company-simulation/acceptance/simulation/2026-08-02T08-51-19-723Z-551f19b6/TIMELINE.json)
 - Current observability/control study: [AASPAI central observability and control](AASPAI-CENTRAL-OBSERVABILITY-AND-CONTROL-2026-08-01.md)
 
 This clears the deterministic system gate. It does not replace the required fresh real OpenCode ZedBlock run or the pending central PostgreSQL/OTLP telemetry service.
+
+## 2026-08-02 real local OpenCode status
+
+The fresh run at `workspace/company-real/zedblock/local/2026-08-02T05-09-01-901Z-18ae9e59` again proved typed CEO delegation and separate native employee execution. The employee researched public sites and created the growth files, but verification rejected missing per-lead HTTP citations. OpenCode then returned provider errors during correction. AASPAI incorrectly reused that broken provider session once; retry construction now clears stale provider IDs and the regression proves the next attempt starts fresh.
 
 ## 2026-08-01 real local OpenCode status
 

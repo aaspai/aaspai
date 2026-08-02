@@ -1024,6 +1024,7 @@ export class WorkerDaemon {
       workItemId?: string;
       workflowRunId?: string;
       sessionId?: string;
+      resumeSessionId?: string;
     },
     attemptNumber: number,
     retry: { resumeSessionId?: string; failure?: string },
@@ -1037,6 +1038,13 @@ export class WorkerDaemon {
     const sessionId = `sess_retry_${suffix}`;
     const wakeupId = `wake_retry_${suffix}`;
     const requestedAt = new Date().toISOString();
+    const retryPayload = {
+      ...request,
+      sessionId,
+      prompt: retryPrompt(request.prompt, retry.failure),
+    };
+    delete retryPayload.resumeSessionId;
+    if (retry.resumeSessionId) retryPayload.resumeSessionId = retry.resumeSessionId;
     getDefaultDb().db.transaction((tx) => {
       tx.insert(wakeupsTable)
         .values({
@@ -1047,12 +1055,7 @@ export class WorkerDaemon {
           triggerDetail: "attempt-retry",
           reason: `Retry ${attemptNumber} for ${request.workItemId}`,
           agentId,
-          payloadJson: JSON.stringify({
-            ...request,
-            sessionId,
-            ...(retry.resumeSessionId ? { resumeSessionId: retry.resumeSessionId } : {}),
-            prompt: retryPrompt(request.prompt, retry.failure),
-          }),
+          payloadJson: JSON.stringify(retryPayload),
           status: "queued",
           idempotencyKey: `retry:${request.workItemId}:${attemptNumber}`,
           requestedAt,
@@ -1069,7 +1072,7 @@ export class WorkerDaemon {
           agentId,
           adapter: request.adapter ?? "dry_run_local",
           runtimeJson: JSON.stringify(request.runtime ?? {}),
-          prompt: request.prompt ?? `Retry ${request.workItemId}`,
+          prompt: retryPayload.prompt ?? `Retry ${request.workItemId}`,
           configJson: "{}",
           status: "queued",
           ...(request.sessionId ? { parentSessionId: request.sessionId } : {}),
@@ -1600,6 +1603,9 @@ export class WorkerDaemon {
     const workspacePath = workspace.path;
     const materializedPaths: string[] = [];
     try {
+      if (!repositoryWork && input.attempt.role === "maker" && input.attempt.attemptNumber > 1) {
+        await this.restorePreviousAttemptArtifacts(input.attempt, workspacePath);
+      }
       const scriptedSkills = profile.skills.filter((entry) =>
         entry.skill.files.some((file) => file.kind === "script"),
       );
@@ -2373,7 +2379,7 @@ Use typed actions instead of merely describing company changes. In OpenCode call
       });
       throw new Error(`post-run policy denied changes: ${policyDecision.reason}`);
     }
-    if (successful && input.attempt.role === "maker") {
+    if (successful && input.attempt.role === "maker" && input.repositoryWork) {
       await validateEvidencePolicy(
         input.workspacePath,
         input.workItem.metadata,
@@ -2439,9 +2445,13 @@ Use typed actions instead of merely describing company changes. In OpenCode call
 
     const workspaceRoot = await realpath(input.workspacePath);
     let artifactBytes = 0;
-    for (const declaration of successful ? artifactDeclarations : []) {
+    for (const declaration of artifactDeclarations) {
       if (isAbsolute(declaration.path)) throw new Error("Declared artifact path must be relative");
-      const source = await realpath(resolve(workspaceRoot, declaration.path));
+      const source = await realpath(resolve(workspaceRoot, declaration.path)).catch(() => null);
+      if (!source) {
+        if (successful) throw new Error(`Declared artifact does not exist: ${declaration.path}`);
+        continue;
+      }
       const safePath = relative(workspaceRoot, source);
       if (!safePath || safePath.startsWith("..") || isAbsolute(safePath)) {
         throw new Error(`Declared artifact escapes the workspace: ${declaration.path}`);
@@ -2467,6 +2477,13 @@ Use typed actions instead of merely describing company changes. In OpenCode call
         declaration.mediaType,
       );
     }
+    if (successful && input.attempt.role === "maker" && !input.repositoryWork) {
+      await validateEvidencePolicy(
+        input.workspacePath,
+        input.workItem.metadata,
+        artifactDeclarations.map((artifact) => artifact.path),
+      );
+    }
     if (commit) {
       await this.executionStore.recordDeliveryCommit(
         input.workItem.id,
@@ -2474,6 +2491,53 @@ Use typed actions instead of merely describing company changes. In OpenCode call
         commit,
         input.branchName,
       );
+    }
+  }
+
+  private async restorePreviousAttemptArtifacts(
+    attempt: AgentAttempt,
+    workspacePath: string,
+  ): Promise<void> {
+    const priorAttempts = (await this.executionStore.listAttemptsForWorkItem(attempt.workItemId))
+      .filter((candidate) => candidate.attemptNumber < attempt.attemptNumber)
+      .reverse();
+    const workspaceRoot = await realpath(workspacePath);
+    for (const prior of priorAttempts) {
+      const declaredRoot = resolve(
+        process.env.AASPAI_ARTIFACTS_ROOT ?? join(".aaspai", "artifacts"),
+        prior.id,
+        "files",
+      );
+      const artifactRoot = await realpath(declaredRoot).catch(() => null);
+      if (!artifactRoot) continue;
+      let restored = 0;
+      for (const artifact of await this.executionStore.listArtifacts(prior.id)) {
+        const source = await realpath(artifact.path).catch(() => null);
+        if (!source) continue;
+        const scoped = relative(artifactRoot, source);
+        if (!scoped || scoped.startsWith("..") || isAbsolute(scoped)) continue;
+        const destination = resolve(workspaceRoot, scoped);
+        const destinationScope = relative(workspaceRoot, destination);
+        if (
+          !destinationScope ||
+          destinationScope.startsWith("..") ||
+          isAbsolute(destinationScope)
+        ) {
+          throw new Error(`Retry artifact escapes the workspace: ${artifact.path}`);
+        }
+        await mkdir(dirname(destination), { recursive: true });
+        await copyFile(source, destination);
+        restored++;
+      }
+      if (restored > 0) {
+        log.info("restored prior attempt artifacts", {
+          workItemId: attempt.workItemId,
+          attemptId: attempt.id,
+          sourceAttemptId: prior.id,
+          restored,
+        });
+        return;
+      }
     }
   }
 

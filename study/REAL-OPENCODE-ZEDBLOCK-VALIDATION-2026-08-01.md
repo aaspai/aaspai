@@ -47,6 +47,16 @@ Organization:
 
 Attempts 4 through 7 were controlled recovery probes after the original three-attempt acceptance had ended. The work item's retry ceiling was raised only inside this disposable evidence database to test recovery behavior.
 
+## Fresh validation after the fixes
+
+Run:
+
+`workspace/company-real/zedblock/local/2026-08-02T05-09-01-901Z-18ae9e59`
+
+The CEO again succeeded, used the typed company action, and delegated to a separate Growth Director session and workspace. The employee produced 78 native OpenCode events, researched real public sites with `bash`/`curl`, and created the declared growth files. The evidence gate reported that every lead did not contain an HTTP citation. The command transcript appears to show a public URL in each headed lead section, but the then-current failure path released those files before persisting them, so the exact final bytes cannot be audited. The correction resume reached OpenCode, but the provider returned `Unexpected server error` twice.
+
+This run exposed and fixed one additional AASPAI bug: after the first provider error, the old `resumeSessionId` remained in the retry request, so the final retry reused the broken provider session. Retry construction now removes any prior provider ID and adds it back only when the current terminal cause is eligible for resume. The regression proves a provider failure forces a fresh session.
+
 ## Root causes and fixes
 
 ### Worker death and stale recovery
@@ -79,7 +89,7 @@ Fixes:
 
 - attach the exact verification/provider failure to the retry prompt;
 - resume the provider session for stalls and evidence corrections;
-- fall back to a fresh session when the provider session itself returns `opencode_cli_failed`.
+- clear stale retry payload state and fall back to a fresh session when the provider session itself returns `opencode_cli_failed`.
 
 The evidence gate was not weakened.
 
@@ -89,7 +99,9 @@ Output persistence required every final declared artifact even when the CLI fail
 
 Fix:
 
-- failed runs persist their terminal result and transcript without requiring final deliverables.
+- failed runs persist their terminal result and transcript without requiring missing final deliverables;
+- any declared files that do exist are persisted even when the attempt fails or stalls;
+- a new retry workspace restores the newest prior durable work files while retaining separate attempt, session, and runtime identities.
 
 ### OpenCode resume was directory-bound
 
@@ -114,9 +126,9 @@ The system is not yet allowed to claim a fully autonomous real-company pass. The
 
 Remaining release blockers:
 
-1. Run a fresh real local OpenCode acceptance with the adapter fixes and obtain verified employee artifacts.
+1. Obtain a real local OpenCode run whose corrected employee artifacts pass verification; the 2026-08-02 run reached artifact creation but ended on provider errors after the citation correction request.
 2. Prove the manager completion callback reopens the original manager provider session with child evidence.
-3. Preserve or transfer partial workspace files across a stalled-session retry. OpenCode history now resumes in the new workspace, but an interrupted attempt's unpersisted files are still released.
+3. Prove failed/stalled declared-artifact carry-over in a fresh real run. The automated gate now persists existing partial files and restores them into the next isolated workspace.
 4. Prove the same recovery behavior in Daytona after local acceptance passes.
 5. Build the separate PostgreSQL/OTLP central telemetry service, fleet alerts, retention, and backfill described in the observability study.
 
@@ -125,6 +137,7 @@ Remaining release blockers:
 - Windows descendant-process cancellation regression
 - latest-session-activity stale reconciliation regression
 - stale delegated-work requeue with provider identity regression
+- failed-attempt artifact persistence and isolated retry-workspace restoration regression
 - early provider-identity persistence and terminal preservation regressions
 - retry prompt contains verifier feedback and provider identity regression
 - logger closed-pipe regression

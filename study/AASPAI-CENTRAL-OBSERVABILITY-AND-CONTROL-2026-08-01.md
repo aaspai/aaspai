@@ -120,7 +120,7 @@ This is intentionally a test-only deterministic instruction. It makes expensive 
 
 Latest passing evidence:
 
-- Run: `workspace/company-simulation/acceptance/simulation/2026-08-02T04-58-52-014Z-b471e396`
+- Run: `workspace/company-simulation/acceptance/simulation/2026-08-02T08-51-19-723Z-551f19b6`
 - CEO and delegated employee used separate sessions and attempts.
 - Company controls: hire/delegate, milestone, define/start process.
 - Six company lifecycle events were recorded.
@@ -215,7 +215,7 @@ Still missing from the dashboard:
 
 ### P1: real-agent release proof
 
-The deterministic path is green. The first real local OpenCode ZedBlock run is documented in [Real OpenCode ZedBlock validation](REAL-OPENCODE-ZEDBLOCK-VALIDATION-2026-08-01.md). It proved typed CEO delegation, separate employee execution, native web research, safety rejection, stalled-process interruption, provider identity retention, and recovery routing. It failed before verified employee completion.
+The deterministic path is green. Two real local OpenCode ZedBlock runs are documented in [Real OpenCode ZedBlock validation](REAL-OPENCODE-ZEDBLOCK-VALIDATION-2026-08-01.md). They prove typed CEO delegation, separate employee execution, native web research, artifact creation, safety rejection, stalled-process interruption, provider identity retention, and recovery routing. They still fail before verified employee completion; the latest run ended on provider errors after the citation correction request.
 
 A fresh real OpenCode ZedBlock run is still required to prove:
 
