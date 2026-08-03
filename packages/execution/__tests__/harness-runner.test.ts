@@ -5,7 +5,7 @@ import type { ExecutionPlan, ExecutionWorkspace } from "@aaspai/contracts/execut
 import type { DbHandle } from "@aaspai/db";
 import { createDb, runMigrations, sessionEvents } from "@aaspai/db";
 import { asc, eq } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertGovernedRuntimeIsolation,
   assertRuntimeIdentity,
@@ -44,6 +44,8 @@ describe("HarnessExecutionPlanRunner", () => {
       [
         "const emit = (value) => console.log(JSON.stringify(value));",
         'emit({ type: "thread.started", thread_id: "thread_fixture" });',
+        'emit({ type: "item.started", item: { id: "cmd_fixture", type: "command_execution", command: "pwd", status: "in_progress" } });',
+        'emit({ type: "item.completed", item: { id: "cmd_fixture", type: "command_execution", command: "pwd", status: "completed", exit_code: 0, aggregated_output: "ok" } });',
         'emit({ type: "item.completed", item: { type: "agent_message", text: `cwd=${process.cwd()}` } });',
         'emit({ type: "turn.completed", usage: { input_tokens: 5, output_tokens: 7 } });',
       ].join("\n"),
@@ -81,6 +83,23 @@ describe("HarnessExecutionPlanRunner", () => {
       .orderBy(asc(sessionEvents.seq));
     expect(events.length).toBeGreaterThan(0);
     expect(events.some((event) => event.payloadJson.includes("assigned-workspace"))).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "tool_call" &&
+          event.payloadJson.includes('"name":"command"') &&
+          event.payloadJson.includes('"status":"completed"'),
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "tool_result")).toBe(true);
+    expect(events.some((event) => event.payloadJson.includes('"type":"item.completed"'))).toBe(
+      false,
+    );
+    expect(
+      (await store.listRawOutputs(attemptId)).some((row) =>
+        row.chunk.includes('"type":"item.completed"'),
+      ),
+    ).toBe(true);
     await expect(store.listEvents(attemptId)).resolves.toMatchObject([
       { type: "harness.session.started" },
       { type: "harness.session.completed" },
@@ -126,6 +145,8 @@ describe("HarnessExecutionPlanRunner", () => {
       "const emit = (value) => console.log(JSON.stringify(value));",
       "require('node:fs').writeFileSync('environment-seen.json', JSON.stringify({token:process.env.AASPAI_ATTEMPT_TOKEN,secret:process.env.AASPAI_TEST_WORKER_SECRET,path:Boolean(process.env.PATH ?? process.env.Path)}));",
       'emit({ type: "session.created", sessionID: "oc_fixture" });',
+      'emit({ type: "tool_use", sessionID: "oc_fixture", part: { type: "tool", tool: "bash", callID: "call_fixture", state: { status: "completed", input: { command: "pwd" }, output: "ok" } } });',
+      'emit({ type: "tool_use", sessionID: "oc_fixture", part: { type: "tool", tool: "company_action", callID: "failed_fixture", state: { status: "error", input: { payload: "{}" }, error: "action rejected" } } });',
       'emit({ type: "text", sessionID: "oc_fixture", part: { type: "text", text: `cwd=${process.cwd()}` } });',
       'emit({ type: "text", sessionID: "oc_fixture", part: { type: "text", text: `token=${process.env.AASPAI_ATTEMPT_TOKEN}` } });',
       'emit({ type: "step_finish", sessionID: "oc_fixture", part: { tokens: { input: 3, output: 4 }, cost: 0 } });',
@@ -171,12 +192,44 @@ describe("HarnessExecutionPlanRunner", () => {
       .from(sessionEvents)
       .where(eq(sessionEvents.sessionId, attempt?.harnessSessionId ?? "missing"));
     expect(events.some((event) => event.payloadJson.includes("assigned-workspace"))).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "tool_call" &&
+          event.payloadJson.includes('"name":"bash"') &&
+          event.payloadJson.includes('"command":"pwd"') &&
+          event.payloadJson.includes('"status":"completed"'),
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "tool_result" &&
+          event.payloadJson.includes('"name":"company_action"') &&
+          event.payloadJson.includes('"status":"failed"') &&
+          event.payloadJson.includes("action rejected"),
+      ),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "tool_result" &&
+          event.payloadJson.includes('"name":"bash"') &&
+          event.payloadJson.includes('"status":"completed"'),
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.payloadJson.includes('"type":"tool_use"'))).toBe(false);
     expect(events.every((event) => !event.payloadJson.includes("short-lived-test-token"))).toBe(
       true,
     );
     expect(
       (await store.listRawOutputs(attemptId)).every(
         (row) => !row.chunk.includes("short-lived-test-token"),
+      ),
+    ).toBe(true);
+    expect(
+      (await store.listRawOutputs(attemptId)).some((row) =>
+        row.chunk.includes('"type":"tool_use"'),
       ),
     ).toBe(true);
     expect(result.summary).not.toContain("short-lived-test-token");
@@ -271,6 +324,82 @@ describe("HarnessExecutionPlanRunner", () => {
     ).resolves.toMatchObject({
       sessionId: "oc_stalled",
     });
+  });
+
+  it("settles an operator interrupt as resumable timed_out work", async () => {
+    const attemptId = "attempt_operator_interrupt";
+    const workspace = await makeAttemptAndWorkspace(attemptId, "opencode_cli");
+    const controller = new AbortController();
+    const running = new HarnessExecutionPlanRunner(store).run({
+      plan: planFor(attemptId, "opencode_cli"),
+      workspace,
+      agent: {
+        id: "agent_opencode",
+        name: "OpenCode fixture",
+        adapterType: "opencode_cli",
+        adapterConfig: {
+          model: "fixture/model",
+          command: process.execPath,
+          commandArgs: [
+            "-e",
+            "console.log(JSON.stringify({type:'session.created',sessionID:'oc_interrupted'}));setInterval(()=>{},1000)",
+          ],
+        },
+      },
+      signal: controller.signal,
+    });
+    await vi.waitFor(async () => {
+      const attempt = await store.getAttempt(attemptId);
+      const session = attempt?.harnessSessionId
+        ? await store.getHarnessSession(attempt.harnessSessionId)
+        : null;
+      expect(session?.sessionId).toBe("oc_interrupted");
+    });
+
+    await store.requestInterruptAttempt(attemptId);
+    controller.abort();
+    const result = await running;
+
+    expect(result).toMatchObject({ timedOut: true, errorCode: "session_interrupted" });
+    await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "timed_out" });
+    const attempt = await store.getAttempt(attemptId);
+    await expect(
+      store.getHarnessSession(attempt?.harnessSessionId ?? "missing"),
+    ).resolves.toMatchObject({
+      status: "timed_out",
+      sessionId: "oc_interrupted",
+      errorCode: "session_interrupted",
+    });
+  });
+
+  it("keeps an unmarked shutdown abort permanently cancelled", async () => {
+    const attemptId = "attempt_shutdown_abort";
+    const workspace = await makeAttemptAndWorkspace(attemptId, "opencode_cli");
+    const controller = new AbortController();
+    const running = new HarnessExecutionPlanRunner(store).run({
+      plan: planFor(attemptId, "opencode_cli"),
+      workspace,
+      agent: {
+        id: "agent_opencode",
+        name: "OpenCode fixture",
+        adapterType: "opencode_cli",
+        adapterConfig: {
+          model: "fixture/model",
+          command: process.execPath,
+          commandArgs: ["-e", "setInterval(()=>{},1000)"],
+        },
+      },
+      signal: controller.signal,
+    });
+    await vi.waitFor(async () => {
+      await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "running" });
+    });
+
+    controller.abort();
+    const result = await running;
+
+    expect(result.errorCode).not.toBe("session_interrupted");
+    await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "cancelled" });
   });
 
   async function makeAttemptAndWorkspace(

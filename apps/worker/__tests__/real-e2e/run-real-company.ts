@@ -291,15 +291,21 @@ async function waitForManagerCallback(
   }
 }
 
-async function waitForSimulatedProcess(store: ExecutionStore, goalId: string) {
+async function waitForSimulatedProcess(store: ExecutionStore, goalId: string, requiredCycles = 1) {
   while (true) {
     const runs = await getDefaultDb()
       .db.select()
       .from(workflowRuns)
       .where(eq(workflowRuns.organizationId, organizationId));
-    const processRun = runs.find((run) => run.sourceType === "operator");
-    if (processRun?.status === "failed") throw new Error("Simulated manager process failed");
-    if (processRun?.status === "succeeded") {
+    const processRuns = runs.filter((run) => run.sourceType === "operator");
+    if (processRuns.some((run) => run.status === "failed"))
+      throw new Error("Simulated manager process failed");
+    const completedRuns = processRuns.filter((run) => run.status === "succeeded");
+    if (completedRuns.length >= requiredCycles) {
+      const processRun = completedRuns.sort((a, b) => a.createdAt.localeCompare(b.createdAt))[
+        requiredCycles - 1
+      ];
+      if (!processRun) throw new Error("Simulated process cycle disappeared");
       const items = (await store.listWorkItems(organizationId, goalId)).filter(
         (item) => item.workflowRunId === processRun.id,
       );
@@ -327,16 +333,30 @@ async function waitForSimulatedProcess(store: ExecutionStore, goalId: string) {
 }
 
 function provesTool(events: Array<{ payloadJson: string }>, tool: string): boolean {
-  return events.some((event) =>
-    event.payloadJson.toLowerCase().includes(`\\"tool\\":\\"${tool}\\"`),
-  );
+  const expected = tool.toLowerCase();
+  return events.some((event) => {
+    const raw = event.payloadJson.toLowerCase();
+    if (
+      raw.includes(`\\"tool\\":\\"${expected}\\"`) ||
+      raw.includes(`\\"name\\":\\"${expected}\\"`)
+    )
+      return true;
+    try {
+      const payload = JSON.parse(event.payloadJson) as Record<string, unknown>;
+      return [payload.tool, payload.name, payload.toolName].some(
+        (value) => typeof value === "string" && value.toLowerCase() === expected,
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 function provesSkill(events: Array<{ payloadJson: string }>, slug: string): boolean {
   return (
     provesTool(events, "skill") ||
     events.some((event) =>
-      event.payloadJson.toLowerCase().includes(`/skills/${slug.toLowerCase()}/skill.md`),
+      event.payloadJson.toLowerCase().includes(`/skills/${slug.toLowerCase()}`),
     )
   );
 }
@@ -411,6 +431,52 @@ async function main(): Promise<void> {
     sourceType: "real-company-acceptance",
     idempotencyKey: `real-company:${targetName}:${runId}`,
   });
+  const simulationDefinition = {
+    id: "process/simulation-research",
+    organizationId,
+    revision: 1,
+    contentHash: "simulation-research-v1",
+    name: "Simulation research",
+    description: "Exercise a bounded company process without a model call.",
+    steps: [
+      {
+        id: "step/research",
+        agent: employeeAgentId,
+        routingRule: null,
+        dependsOn: [],
+        prompt: "Produce one simulated research report.",
+        skills: [],
+        tools: [],
+        workKind: "general",
+        deliveryMode: "none",
+        timeoutMs: 60_000,
+        maxAttempts: 2,
+        acceptanceCriteria: "A report is durably recorded.",
+        failureAction: "escalate",
+        approvalPolicy: {},
+      },
+    ],
+    maxDurationMs: 300_000,
+    maxAttempts: 3,
+    createdAt,
+  };
+  const simulationReviewActions = [
+    {
+      type: "create_milestone",
+      projectId: project.id,
+      title: "Validate the second operating outcome",
+      outcome: "A second evidence-backed research report is completed",
+      sequence: 2,
+      acceptance: { reports: 1 },
+    },
+    {
+      type: "define_and_start_process",
+      projectId: project.id,
+      milestoneSequence: 2,
+      definition: simulationDefinition,
+      policy: {},
+    },
+  ];
   const simulationActions = [
     ...companyAction.actions.map((action) => ({ ...action, projectId: project.id })),
     {
@@ -425,36 +491,11 @@ async function main(): Promise<void> {
       type: "define_and_start_process",
       projectId: project.id,
       milestoneSequence: 1,
-      definition: {
-        id: "process/simulation-research",
-        organizationId,
-        revision: 1,
-        contentHash: "simulation-research-v1",
-        name: "Simulation research",
-        description: "Exercise a bounded company process without a model call.",
-        steps: [
-          {
-            id: "step/research",
-            agent: employeeAgentId,
-            routingRule: null,
-            dependsOn: [],
-            prompt: "Produce one simulated research report.",
-            skills: [],
-            tools: [],
-            workKind: "general",
-            deliveryMode: "none",
-            timeoutMs: 60_000,
-            maxAttempts: 2,
-            acceptanceCriteria: "A report is durably recorded.",
-            failureAction: "escalate",
-            approvalPolicy: {},
-          },
-        ],
-        maxDurationMs: 300_000,
-        maxAttempts: 3,
-        createdAt,
+      definition: simulationDefinition,
+      policy: {
+        schedule: { kind: "interval", seconds: 1 },
+        _aaspaiSimulationReviewActions: simulationReviewActions,
       },
-      policy: {},
     },
   ];
   const parentDescription = simulated
@@ -530,7 +571,7 @@ async function main(): Promise<void> {
     status: "queued",
   });
   const workItems = await waitForEmployee(store, goal.id, parent.id);
-  const simulationProcess = simulated ? await waitForSimulatedProcess(store, goal.id) : null;
+  const simulationProcess = simulated ? await waitForSimulatedProcess(store, goal.id, 2) : null;
   const completedParent = workItems.find((item) => item.id === parent.id);
   const child = workItems.find((item) => item.id !== parent.id);
   assert(completedParent, "Completed CEO work disappeared");

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  companyControlEvents,
   companyProfiles,
   createDb,
   eq,
@@ -10,6 +11,7 @@ import {
   executionWorkItems,
   goals,
   milestones,
+  processBindings,
   projectAssignments,
   projectObjectives,
   projects,
@@ -61,6 +63,13 @@ describe("StrategicReadModelService", () => {
       createdAt: now,
       updatedAt: now,
     });
+    await handle.db.insert(goals).values({
+      id: "goal:loops:org_a",
+      organizationId: "org_a",
+      title: "Company loop execution",
+      createdAt: now,
+      updatedAt: now,
+    });
     await handle.db.insert(projects).values({
       id: "project_a",
       organizationId: "org_a",
@@ -68,6 +77,14 @@ describe("StrategicReadModelService", () => {
       title: "Pipeline",
       managerAgentId: "agent/manager",
       budgetJson: JSON.stringify({ usd: 100 }),
+      createdAt: now,
+      updatedAt: now,
+    });
+    await handle.db.insert(projects).values({
+      id: "project:loops:org_a",
+      organizationId: "org_a",
+      goalId: "goal:loops:org_a",
+      title: "Loop work",
       createdAt: now,
       updatedAt: now,
     });
@@ -103,6 +120,8 @@ describe("StrategicReadModelService", () => {
 
     const summary = await new StrategicReadModelService(handle.db).getSummary("org_a");
     expect(summary.profile?.lifecycleStatus).toBe("active");
+    expect(summary.objectives).toHaveLength(1);
+    expect(summary.projects).toHaveLength(1);
     expect(summary.objectives[0]).toMatchObject({ id: "goal_a", projectCount: 1 });
     expect(summary.projects[0]).toMatchObject({
       id: "project_a",
@@ -122,6 +141,14 @@ describe("StrategicReadModelService", () => {
     resources.push({ close: handle.close, root });
     runMigrations(handle);
     const commands = new CompanyCommandService(handle.db);
+    const now = new Date().toISOString();
+    await handle.db.insert(goals).values({
+      id: "goal:loops:org_commands",
+      organizationId: "org_commands",
+      title: "Company loop execution",
+      createdAt: now,
+      updatedAt: now,
+    });
     await commands.execute({
       type: "setup_company",
       organizationId: "org_commands",
@@ -164,9 +191,32 @@ describe("StrategicReadModelService", () => {
       actorId: "founder",
       idempotencyKey: "discovery",
     });
+    const discoveryWakeup = (await handle.db.select().from(wakeups)).find((wakeup) =>
+      wakeup.payloadJson.includes('"command":"start_discovery"'),
+    );
+    expect(discoveryWakeup?.payloadJson).not.toContain("goal:loops:org_commands");
+    expect(discoveryWakeup?.payloadJson).not.toContain("Company loop execution");
     const objective = (await commands.getSummary("org_commands")).objectives[0];
     expect(objective).toBeDefined();
-    await commands.execute({
+    await expect(
+      commands.execute({
+        type: "submit_portfolio_proposal",
+        organizationId: "org_commands",
+        actorId: "agent/ceo",
+        idempotencyKey: "internal-proposal",
+        summary: "Do not expose internal execution lineage.",
+        evidence: ["artifact/discovery"],
+        projects: [
+          {
+            goalId: "goal:loops:org_commands",
+            title: "Internal loop work",
+            description: "This should never become a company project.",
+            managerAgentId: null,
+          },
+        ],
+      }),
+    ).rejects.toThrow("objective not found");
+    const proposalCommand = {
       type: "submit_portfolio_proposal",
       organizationId: "org_commands",
       actorId: "agent/ceo",
@@ -174,7 +224,20 @@ describe("StrategicReadModelService", () => {
       summary: "Start with a customer pipeline.",
       evidence: ["artifact/discovery"],
       projects: [],
-    });
+    } as const;
+    await commands.execute(proposalCommand);
+    await expect(commands.execute(proposalCommand)).resolves.toMatchObject({ status: "review" });
+    expect(
+      (await handle.db.select().from(companyControlEvents)).filter(
+        (event) => event.correlationId === proposalCommand.idempotencyKey,
+      ),
+    ).toHaveLength(1);
+    expect(
+      (await handle.db.select().from(wakeups)).filter(
+        (wakeup) =>
+          wakeup.idempotencyKey === `control:org_commands:${proposalCommand.idempotencyKey}`,
+      ),
+    ).toHaveLength(1);
     await commands.execute({
       type: "activate_company",
       organizationId: "org_commands",
@@ -381,7 +444,9 @@ describe("StrategicReadModelService", () => {
       .from(wakeups)
       .where(eq(wakeups.organizationId, "org_staffing"));
     const staffing = rows.find((row) => row.triggerDetail === "activate_company");
-    expect(JSON.parse(staffing!.payloadJson)).toMatchObject({
+    const staffingPayload = JSON.parse(staffing!.payloadJson) as Record<string, unknown>;
+    expect(staffingPayload).toMatchObject({
+      prompt: expect.stringContaining("Staff each unstaffed project"),
       runtime: {
         kind: "docker",
         image: "aaspai-opencode-test:latest",
@@ -394,6 +459,10 @@ describe("StrategicReadModelService", () => {
         },
       ],
     });
+    const reviewNotification = rows.find(
+      (row) => row.triggerDetail === "submit_portfolio_proposal",
+    );
+    expect(JSON.parse(reviewNotification!.payloadJson)).not.toHaveProperty("prompt");
   });
 
   it("binds a manager-owned process to assigned agents and durable work lineage", async () => {
@@ -420,16 +489,28 @@ describe("StrategicReadModelService", () => {
       goalId: goal.id,
       title: "Lead generation",
     });
-    await handle.db.insert(projectAssignments).values({
-      id: "assignment/process-manager",
-      organizationId,
-      projectId: project.id,
-      agentId: "agent/growth-manager",
-      role: "manager",
-      status: "active",
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
+    await handle.db.insert(projectAssignments).values([
+      {
+        id: "assignment/process-manager",
+        organizationId,
+        projectId: project.id,
+        agentId: "agent/growth-manager",
+        role: "manager",
+        status: "active",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: "assignment/process-specialist",
+        organizationId,
+        projectId: project.id,
+        agentId: "agent/lead-specialist",
+        role: "member",
+        status: "active",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ]);
     const repository = await store.createRepository({
       organizationId,
       projectId: project.id,
@@ -465,7 +546,7 @@ describe("StrategicReadModelService", () => {
       steps: [
         {
           id: "step/qualify",
-          agent: "agent/growth-manager",
+          agent: "agent/lead-specialist",
           routingRule: null,
           dependsOn: [],
           prompt: "Qualify the current lead batch.",
@@ -482,6 +563,52 @@ describe("StrategicReadModelService", () => {
       maxAttempts: 3,
       createdAt: timestamp,
     };
+    const managerDefinition = {
+      ...definition,
+      id: "process/manager-self-run",
+      contentHash: "manager-self-run-v1",
+      steps: definition.steps.map((step) => ({ ...step, agent: "agent/growth-manager" })),
+    };
+    await expect(
+      commands.execute({
+        type: "bind_process",
+        organizationId,
+        actorId: "agent/growth-manager",
+        idempotencyKey: "manager-self-binding",
+        projectId: project.id,
+        processDefinitionId: managerDefinition.id,
+        processRevision: managerDefinition.revision,
+        definition: managerDefinition,
+        ownerAgentId: "agent/growth-manager",
+        policy: {},
+      }),
+    ).rejects.toThrow("process steps must be assigned to specialists");
+    const unassignedDefinition = {
+      ...definition,
+      id: "process/unassigned",
+      contentHash: "unassigned-v1",
+      steps: definition.steps.map((step) => ({ ...step, agent: "agent/not-assigned" })),
+    };
+    await expect(
+      commands.execute({
+        type: "bind_process",
+        organizationId,
+        actorId: "agent/growth-manager",
+        idempotencyKey: "unassigned-binding",
+        projectId: project.id,
+        processDefinitionId: unassignedDefinition.id,
+        processRevision: unassignedDefinition.revision,
+        definition: unassignedDefinition,
+        ownerAgentId: "agent/growth-manager",
+        policy: {},
+      }),
+    ).rejects.toThrow("agents not assigned to the project");
+    expect(
+      await handle.db
+        .select()
+        .from(processBindings)
+        .where(eq(processBindings.organizationId, organizationId)),
+    ).toHaveLength(0);
     const binding = await commands.execute({
       type: "bind_process",
       organizationId,
@@ -508,6 +635,22 @@ describe("StrategicReadModelService", () => {
       sourceCommitSha: "abcdef1",
       definition,
     });
+    await expect(
+      commands.execute({
+        type: "start_process_run",
+        organizationId,
+        actorId: "agent/growth-manager",
+        idempotencyKey: "duplicate-process-run",
+        projectId: project.id,
+        goalId: goal.id,
+        milestoneId: milestone.id,
+        repositoryId: repository.id,
+        definitionRevisionId: revision.id,
+        operatorAgentId: "agent/growth-manager",
+        sourceCommitSha: "abcdef1",
+        definition,
+      }),
+    ).rejects.toThrow("project already has active process work");
     const [workItem] = await handle.db
       .select()
       .from(executionWorkItems)
@@ -517,7 +660,7 @@ describe("StrategicReadModelService", () => {
       projectId: project.id,
       milestoneId: milestone.id,
       processBindingId: binding.id,
-      assignedAgentId: "agent/growth-manager",
+      assignedAgentId: "agent/lead-specialist",
       status: "ready",
     });
     expect(JSON.parse(workItem!.governanceJson)).toMatchObject({

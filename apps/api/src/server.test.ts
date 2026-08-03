@@ -53,6 +53,14 @@ describe("execution API authorization", () => {
       provider: "local",
       localPath: "workspace/m1/api-auth/repo-a",
     });
+    await store.createDefinitionRevision({
+      id: "revision_api",
+      organizationId: "org_a",
+      repositoryId: "repo_api",
+      commitSha: "abcdef1",
+      sourcePath: ".",
+      contentHash: "api-revision",
+    });
     await store.createGoal({ id: "goal_api_b", organizationId: "org_b", title: "Other goal" });
     await store.createProject({
       id: "project_api_b",
@@ -216,6 +224,58 @@ describe("execution API authorization", () => {
       },
     );
     expect(crossCompany.status).toBe(403);
+  });
+
+  it("authorizes retryable attempt interruption by organization and write scope", async () => {
+    const store = new ExecutionStore(getDefaultDb().db);
+    const run = await store.createWorkflowRun({
+      id: "run_api_interrupt",
+      organizationId: "org_a",
+      goalId: "goal_api",
+      definitionRevisionId: "revision_api",
+      idempotencyKey: "run-api-interrupt",
+    });
+    const work = await store.createWorkItem({
+      id: "work_api_interrupt",
+      organizationId: "org_a",
+      goalId: "goal_api",
+      projectId: "project_api",
+      repositoryId: "repo_api",
+      workflowRunId: run.id,
+      title: "Interrupt safely",
+      definitionRevisionId: "revision_api",
+      idempotencyKey: "work-api-interrupt",
+      status: "ready",
+    });
+    const attempt = await store.createAttempt({
+      id: "attempt_api_interrupt",
+      organizationId: "org_a",
+      workflowRunId: run.id,
+      workItemId: work.id,
+      agentId: "agent/api",
+      harness: "dry_run_local",
+    });
+    await store.transitionAttempt(attempt.id, "preparing");
+    await store.transitionAttempt(attempt.id, "running");
+    const app = createApiApp({ authVerifier: verifier });
+    const interrupt = (token: string) =>
+      app.request(`/v1/execution/attempts/${attempt.id}/interrupt`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+    expect((await interrupt("read-org-a")).status).toBe(403);
+    expect((await interrupt("write-org-b")).status).toBe(403);
+    const allowed = await interrupt("write-org-a");
+    expect(allowed.status).toBe(200);
+    await expect(allowed.json()).resolves.toMatchObject({
+      data: {
+        id: attempt.id,
+        status: "cancelling",
+        interruptRequestedAt: expect.any(String),
+        cancelRequestedAt: null,
+      },
+    });
   });
 
   it("rejects cross-organization and mismatched work-item lineage", async () => {

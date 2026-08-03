@@ -1,6 +1,6 @@
 import type { LoopPattern } from "@aaspai/contracts/phase2";
 import { describe, expect, it } from "vitest";
-import { scheduledOccurrences } from "../src/scheduler";
+import { nextScheduledOccurrence, scheduledOccurrences } from "../src/scheduler";
 
 describe("scheduler catch-up", () => {
   it("enqueues bounded missed interval occurrences", () => {
@@ -25,6 +25,22 @@ describe("scheduler catch-up", () => {
         new Date("2026-07-29T00:00:00.000Z"),
       ),
     ).toEqual([]);
+  });
+
+  it("calculates the next recurring process cadence", () => {
+    const after = new Date("2026-07-29T01:07:00.000Z");
+    expect(
+      nextScheduledOccurrence({ schedule: { kind: "interval", seconds: 900 } }, after)?.toISOString(),
+    ).toBe("2026-07-29T01:22:00.000Z");
+    expect(
+      nextScheduledOccurrence(
+        { schedule: { kind: "cron", expression: "0 8 * * *", timezone: "UTC" } },
+        after,
+      )?.toISOString(),
+    ).toBe("2026-07-29T08:00:00.000Z");
+    expect(
+      nextScheduledOccurrence({ schedule: { kind: "cron", expression: "not cron" } }, after),
+    ).toBeNull();
   });
 });
 

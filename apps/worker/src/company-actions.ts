@@ -1,10 +1,24 @@
 import type { AdapterExecutionResult } from "@aaspai/contracts/harness";
 import { type ProcessDefinition, processDefinitionSchema } from "@aaspai/contracts/operator";
+import { type Trigger, triggerSchema } from "@aaspai/contracts/phase2";
+import { nextScheduledOccurrence } from "@aaspai/loops";
 
 export const COMPANY_ACTION_TOOL_SOURCE = `import { tool } from "@opencode-ai/plugin";
 
+const organizationId = process.env.AASPAI_COMPANY_ORGANIZATION_ID || "default";
+const createdAt = new Date().toISOString();
+
 export default tool({
-  description: "Submit exactly one company action per call. Supported types: hire_and_delegate {agentId,title,role,description,workTitle,workDescription,projectId,projectRole}; create_milestone {projectId,title,outcome,sequence,acceptance}; define_and_start_process {projectId,milestoneSequence,definition,loopId?,policy?}.",
+  description: [
+    "Submit exactly one company action per call.",
+    "hire_and_delegate roles: ceo, cto, cmo, cfo, security, engineer, designer, pm, qa, devops, researcher, operator, general. A project manager uses a domain role such as pm plus projectRole=manager.",
+    'Valid manager hire (replace example IDs): {"actions":[{"type":"hire_and_delegate","agentId":"agent/project-manager","title":"Project Manager","role":"pm","description":"Owns one approved project.","workTitle":"Set up the approved project","workDescription":"Hire one immediately needed specialist, create one measurable milestone, and start one minimal process owned by that specialist.","projectId":"project/example","projectRole":"manager","skillKeys":["company-operator","company-work"]}]}',
+    "Growth, lead, campaign, outreach, sales, prospect, or cmo work requires non-empty citationPaths and commercialClaimPaths, and every evidence path must also appear in artifactPaths.",
+    "A new project manager must hire one immediately needed member before starting a process, then assign that already-hired specialist to every process step.",
+    'For recurring operation set policy.schedule to {"kind":"interval","seconds":86400} or a valid cron schedule; the same manager session resumes at that cadence.',
+    'create_milestone shape: {"actions":[{"type":"create_milestone","projectId":"project/example","title":"First outcome","outcome":"One evidence-backed result","sequence":1,"acceptance":{"results":1}}]}',
+    'Valid minimal define_and_start_process (replace project/example and process/example-v1; agent/project-specialist must already be hired and assigned): {"actions":[{"type":"define_and_start_process","projectId":"project/example","milestoneSequence":1,"definition":{"id":"process/example-v1","organizationId":"' + organizationId + '","revision":1,"contentHash":"example-v1","name":"Minimal project loop","description":"Run one bounded evidence-backed cycle.","steps":[{"id":"step/execute","agent":"agent/project-specialist","dependsOn":[],"prompt":"Complete one bounded cycle and persist evidence.","skills":[],"tools":[],"workKind":"general","deliveryMode":"none","timeoutMs":86400000,"maxAttempts":3,"acceptanceCriteria":"One evidence-backed result is persisted.","failureAction":"escalate","approvalPolicy":{}}],"maxDurationMs":86400000,"maxAttempts":3,"createdAt":"' + createdAt + '"}}]}',
+  ].join("\\n"),
   args: {
     payload: tool.schema.string().max(65536).describe('JSON object: {"actions":[...]}'),
   },
@@ -140,6 +154,19 @@ export interface RequiredCompanyAction {
   projectId?: string;
 }
 
+export function requiredCompanyActionsForHire(
+  action: Pick<HireAndDelegateAction, "projectRole">,
+  projectId: string,
+): RequiredCompanyAction[] {
+  return action.projectRole === "manager"
+    ? [
+        { type: "hire_and_delegate", projectId },
+        { type: "create_milestone", projectId },
+        { type: "define_and_start_process", projectId },
+      ]
+    : [];
+}
+
 export function companyActions(result: AdapterExecutionResult): CompanyAction[] {
   const payload = result.resultJson;
   if (Array.isArray(payload?.companyActions)) {
@@ -193,8 +220,57 @@ export function companyActionPayload(value: unknown): CompanyAction[] {
     throw new Error("Company action payload must contain 1-8 actions");
   }
   const parsed = parseCompanyActions(actions);
-  if (parsed.length !== actions.length) throw new Error("Company action payload is invalid");
+  if (parsed.length !== actions.length) {
+    const invalidIndex = actions.findIndex(
+      (action) =>
+        !isHireAndDelegateAction(action) &&
+        !isCreateMilestoneAction(action) &&
+        !isDefineAndStartProcessAction(action),
+    );
+    throw new Error(invalidCompanyActionMessage(actions[invalidIndex], invalidIndex));
+  }
   return parsed;
+}
+
+function invalidCompanyActionMessage(value: unknown, index: number): string {
+  const prefix = `Company action ${index + 1} is invalid`;
+  if (!isRecord(value)) return `${prefix}: expected an object with a supported type`;
+  if (value.type === "hire_and_delegate") {
+    if (
+      typeof value.role === "string" &&
+      typeof value.workTitle === "string" &&
+      typeof value.workDescription === "string" &&
+      requiresCommercialEvidence({
+        role: value.role as HireAndDelegateAction["role"],
+        workTitle: value.workTitle,
+        workDescription: value.workDescription,
+      })
+    ) {
+      const artifacts = Array.isArray(value.artifactPaths) ? value.artifactPaths : [];
+      const evidence = [
+        ...(Array.isArray(value.citationPaths) ? value.citationPaths : []),
+        ...(Array.isArray(value.commercialClaimPaths) ? value.commercialClaimPaths : []),
+      ];
+      if (evidence.length < 2) {
+        return `${prefix}: commercial work requires non-empty artifactPaths, citationPaths, and commercialClaimPaths`;
+      }
+      const missing = evidence.filter((path) => !artifacts.includes(path));
+      if (missing.length > 0) {
+        return `${prefix}: artifactPaths must include every evidence path (${missing.join(", ")})`;
+      }
+    }
+    return `${prefix}: hire_and_delegate requires a valid non-CEO agentId, title, role, description, workTitle, and workDescription`;
+  }
+  if (value.type === "create_milestone") {
+    return `${prefix}: create_milestone requires projectId, title, outcome, non-negative integer sequence, and acceptance object`;
+  }
+  if (value.type === "define_and_start_process") {
+    if (isRecord(value.policy) && value.policy.schedule !== undefined) {
+      return `${prefix}: policy.schedule must be a valid interval or cron schedule`;
+    }
+    return `${prefix}: define_and_start_process requires projectId, milestoneSequence, and a valid process definition`;
+  }
+  return `${prefix}: supported types are hire_and_delegate, create_milestone, and define_and_start_process`;
 }
 
 export function requiresCommercialEvidence(
@@ -206,6 +282,19 @@ export function requiresCommercialEvidence(
       `${action.workTitle} ${action.workDescription}`,
     )
   );
+}
+
+export function recurringProcessSchedule(policy: unknown): Trigger | null {
+  if (!isRecord(policy) || policy.schedule === undefined) return null;
+  const parsed = triggerSchema.safeParse(policy.schedule);
+  if (
+    !parsed.success ||
+    !["interval", "cron"].includes(parsed.data.kind) ||
+    nextScheduledOccurrence({ schedule: parsed.data }, new Date()) === null
+  ) {
+    return null;
+  }
+  return parsed.data;
 }
 
 function parseCompanyActions(values: unknown[]): CompanyAction[] {
@@ -339,6 +428,11 @@ function isCreateMilestoneAction(value: unknown): value is CreateMilestoneAction
 
 function isDefineAndStartProcessAction(value: unknown): value is DefineAndStartProcessAction {
   if (!isRecord(value)) return false;
+  const validPolicy =
+    value.policy === undefined ||
+    (isRecord(value.policy) &&
+      !("_aaspaiContinuation" in value.policy) &&
+      (value.policy.schedule === undefined || recurringProcessSchedule(value.policy) !== null));
   return (
     value.type === "define_and_start_process" &&
     isIdentifier(value.projectId) &&
@@ -346,7 +440,7 @@ function isDefineAndStartProcessAction(value: unknown): value is DefineAndStartP
     Number(value.milestoneSequence) >= 0 &&
     processDefinitionSchema.safeParse(value.definition).success &&
     (value.loopId === undefined || isIdentifier(value.loopId)) &&
-    (value.policy === undefined || isRecord(value.policy))
+    validPolicy
   );
 }
 

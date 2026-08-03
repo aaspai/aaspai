@@ -308,6 +308,27 @@ export function scheduledOccurrences(
   return result;
 }
 
+/** Next automatic occurrence after a completed recurring process cycle. */
+export function nextScheduledOccurrence(loop: Pick<LoopPattern, "schedule">, after: Date): Date | null {
+  if (loop.schedule.kind === "interval" && loop.schedule.seconds) {
+    return new Date(after.getTime() + loop.schedule.seconds * 1_000);
+  }
+  if (loop.schedule.kind === "cron" && loop.schedule.expression) {
+    try {
+      return cronParser
+        .parseExpression(loop.schedule.expression, {
+          currentDate: after,
+          tz: loop.schedule.timezone ?? "UTC",
+        })
+        .next()
+        .toDate();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function occurrenceDate(loop: LoopPattern, now: Date): Date {
   if (loop.schedule.kind === "interval" && loop.schedule.seconds) {
     const intervalMs = loop.schedule.seconds * 1_000;

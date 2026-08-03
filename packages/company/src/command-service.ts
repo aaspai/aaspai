@@ -17,6 +17,7 @@ import {
   executionVerifications,
   executionWorkItems,
   goals,
+  inArray,
   loops,
   milestones,
   objectiveMeasurements,
@@ -26,9 +27,11 @@ import {
   projects,
   type SqliteDb,
   serviceAgents,
+  sql,
   threadMessages,
   threads,
   wakeups,
+  workflowRuns,
 } from "@aaspai/db";
 import { ExecutionStore, OperatorService, OperatorStateStore } from "@aaspai/execution";
 import { CompanyControlPlaneService } from "./control-plane.js";
@@ -43,6 +46,10 @@ type CommandResult = {
 };
 
 export class CompanyCommandError extends Error {}
+
+function isCompanyObjective(id: string): boolean {
+  return !id.startsWith("goal:loops:");
+}
 
 /** Canonical strategic mutation boundary. Every web/API/agent mutation should call this service. */
 export class CompanyCommandService {
@@ -199,10 +206,9 @@ export class CompanyCommandService {
   ): Promise<CommandResult> {
     const profile = await this.profile(command.organizationId);
     if (!profile) throw new CompanyCommandError("company profile not found");
-    const objectives = await this.db
-      .select()
-      .from(goals)
-      .where(eq(goals.organizationId, command.organizationId));
+    const objectives = (
+      await this.db.select().from(goals).where(eq(goals.organizationId, command.organizationId))
+    ).filter((objective) => isCompanyObjective(objective.id));
     if (objectives.length === 0)
       throw new CompanyCommandError("at least one objective is required");
     if (!profile.ceoAgentId) throw new CompanyCommandError("CEO agent is required");
@@ -330,15 +336,17 @@ export class CompanyCommandService {
     const profile = await this.profile(command.organizationId);
     if (profile?.lifecycleStatus !== "validated")
       throw new CompanyCommandError("company must be validated before discovery");
-    const objectives = await this.db
-      .select({
-        id: goals.id,
-        title: goals.title,
-        description: goals.description,
-        successCriteriaJson: goals.successCriteriaJson,
-      })
-      .from(goals)
-      .where(eq(goals.organizationId, command.organizationId));
+    const objectives = (
+      await this.db
+        .select({
+          id: goals.id,
+          title: goals.title,
+          description: goals.description,
+          successCriteriaJson: goals.successCriteriaJson,
+        })
+        .from(goals)
+        .where(eq(goals.organizationId, command.organizationId))
+    ).filter((objective) => isCompanyObjective(objective.id));
     const provider =
       typeof profile.policy.provider === "string" ? profile.policy.provider : "dry_run_local";
     const runtime = companyRuntime(profile.policy, provider);
@@ -383,6 +391,21 @@ export class CompanyCommandService {
   private async submitPortfolioProposal(
     command: Extract<CompanyCommand, { type: "submit_portfolio_proposal" }>,
   ): Promise<CommandResult> {
+    const [prior] = await this.db
+      .select({ id: companyControlEvents.id })
+      .from(companyControlEvents)
+      .where(
+        and(
+          eq(companyControlEvents.organizationId, command.organizationId),
+          eq(companyControlEvents.action, "portfolio_proposal"),
+          eq(companyControlEvents.correlationId, command.idempotencyKey),
+        ),
+      )
+      .limit(1);
+    if (prior) {
+      const current = await this.profile(command.organizationId);
+      return this.result(command, command.organizationId, current?.lifecycleStatus ?? "review");
+    }
     const profile = await this.profile(command.organizationId);
     if (!profile || profile.lifecycleStatus !== "discovery")
       throw new CompanyCommandError("company is not awaiting a discovery proposal");
@@ -672,6 +695,35 @@ export class CompanyCommandService {
       ) {
         throw new CompanyCommandError("bound process definition identity does not match");
       }
+      const assignedAgents = new Set(
+        (
+          await this.db
+            .select({ agentId: projectAssignments.agentId })
+            .from(projectAssignments)
+            .where(
+              and(
+                eq(projectAssignments.organizationId, command.organizationId),
+                eq(projectAssignments.projectId, command.projectId),
+                eq(projectAssignments.status, "active"),
+              ),
+            )
+        ).map((assignment) => assignment.agentId),
+      );
+      const unassigned = command.definition.steps
+        .map((step) => step.agent)
+        .filter((agentId): agentId is string => agentId !== null)
+        .filter((agentId) => !assignedAgents.has(agentId));
+      if (unassigned.length > 0)
+        throw new CompanyCommandError(
+          `process references agents not assigned to the project: ${[...new Set(unassigned)].join(", ")}`,
+        );
+      const managerSteps = command.definition.steps
+        .filter((step) => step.agent === command.ownerAgentId)
+        .map((step) => step.id);
+      if (managerSteps.length > 0)
+        throw new CompanyCommandError(
+          `process steps must be assigned to specialists, not the project manager: ${managerSteps.join(", ")}`,
+        );
       await new OperatorStateStore(this.db).saveProcessDefinition(command.definition);
     }
     const definitions = await this.db
@@ -686,26 +738,55 @@ export class CompanyCommandService {
       )
       .limit(1);
     if (!definitions[0]) throw new CompanyCommandError("process definition revision not found");
-    const id = stableId("process-binding", `${command.organizationId}:${command.idempotencyKey}`);
+    const activeBindings = await this.db
+      .select()
+      .from(processBindings)
+      .where(
+        and(
+          eq(processBindings.organizationId, command.organizationId),
+          eq(processBindings.projectId, command.projectId),
+          eq(processBindings.ownerAgentId, command.ownerAgentId),
+          eq(processBindings.status, "active"),
+        ),
+      );
+    const existing = activeBindings.find(
+      (binding) =>
+        binding.processDefinitionId === command.processDefinitionId ||
+        (command.loopId !== null && binding.loopId === command.loopId),
+    );
+    const id =
+      existing?.id ?? stableId("process-binding", `${command.organizationId}:${command.idempotencyKey}`);
     const timestamp = now();
     this.db.transaction((tx) => {
-      tx.insert(processBindings)
-        .values({
-          id,
-          organizationId: command.organizationId,
-          projectId: command.projectId,
-          processDefinitionId: command.processDefinitionId,
-          processRevision: command.processRevision,
-          ownerAgentId: command.ownerAgentId,
-          loopId: command.loopId,
-          status: "active",
-          performanceJson: "{}",
-          policyJson: JSON.stringify(command.policy),
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        })
-        .onConflictDoNothing()
-        .run();
+      if (existing) {
+        tx.update(processBindings)
+          .set({
+            processDefinitionId: command.processDefinitionId,
+            processRevision: command.processRevision,
+            loopId: command.loopId,
+            policyJson: JSON.stringify(command.policy),
+            updatedAt: timestamp,
+          })
+          .where(eq(processBindings.id, existing.id))
+          .run();
+      } else {
+        tx.insert(processBindings)
+          .values({
+            id,
+            organizationId: command.organizationId,
+            projectId: command.projectId,
+            processDefinitionId: command.processDefinitionId,
+            processRevision: command.processRevision,
+            ownerAgentId: command.ownerAgentId,
+            loopId: command.loopId,
+            status: "active",
+            performanceJson: "{}",
+            policyJson: JSON.stringify(command.policy),
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          })
+          .run();
+      }
       this.audit(tx, command, "process_binding", id, "bind_process");
       this.wake(tx, command, command.ownerAgentId, "Process binding activated");
     });
@@ -730,6 +811,40 @@ export class CompanyCommandService {
       );
     const binding = bindings[0];
     if (!binding) throw new CompanyCommandError("active process binding not found");
+    const [activeProcessWork] = await this.db
+      .select({
+        id: executionWorkItems.id,
+        processBindingId: executionWorkItems.processBindingId,
+        runIdempotencyKey: workflowRuns.idempotencyKey,
+      })
+      .from(executionWorkItems)
+      .innerJoin(workflowRuns, eq(workflowRuns.id, executionWorkItems.workflowRunId))
+      .where(
+        and(
+          eq(executionWorkItems.organizationId, command.organizationId),
+          eq(executionWorkItems.projectId, command.projectId),
+          sql`${executionWorkItems.processBindingId} is not null`,
+          inArray(executionWorkItems.status, [
+            "proposed",
+            "ready",
+            "claimed",
+            "in_progress",
+            "awaiting_verification",
+            "awaiting_approval",
+            "blocked",
+          ]),
+        ),
+      )
+      .limit(1);
+    if (
+      activeProcessWork &&
+      (activeProcessWork.processBindingId !== binding.id ||
+        activeProcessWork.runIdempotencyKey !== command.idempotencyKey)
+    ) {
+      throw new CompanyCommandError(
+        `project already has active process work ${activeProcessWork.id}`,
+      );
+    }
     const [project] = await this.db
       .select({ status: projects.status, goalId: projects.goalId })
       .from(projects)
@@ -778,6 +893,13 @@ export class CompanyCommandService {
       throw new CompanyCommandError(
         `process references agents not assigned to the project: ${[...new Set(unassigned)].join(", ")}`,
       );
+    const managerSteps = command.definition.steps
+      .filter((step) => step.agent === binding.ownerAgentId)
+      .map((step) => step.id);
+    if (managerSteps.length > 0)
+      throw new CompanyCommandError(
+        `process steps must be assigned to specialists, not the project manager: ${managerSteps.join(", ")}`,
+      );
     const routedAgents = new Map<string, string>();
     const control = new CompanyControlPlaneService(this.db);
     for (const step of command.definition.steps.filter((item) => item.agent === null)) {
@@ -785,6 +907,7 @@ export class CompanyCommandService {
       if (!rule) throw new CompanyCommandError(`process step ${step.id} has no routing rule`);
       const candidate = availableAgents
         .filter((agent) => assignedAgents.has(agent.agentId))
+        .filter((agent) => agent.agentId !== binding.ownerAgentId)
         .filter((agent) => !rule.departmentId || agent.departmentId === rule.departmentId)
         .filter((agent) => {
           const assignment = assignments.find((row) => row.agentId === agent.agentId);
@@ -834,6 +957,9 @@ export class CompanyCommandService {
       definitionRevisionId: command.definitionRevisionId,
       sourceCommitSha: command.sourceCommitSha,
       idempotencyKey: command.idempotencyKey,
+      parentWorkItemId: command.parentWorkItemId,
+      parentAttemptId: command.parentAttemptId,
+      parentSessionId: command.parentSessionId,
       resolveAgent: async (step) => {
         const agentId = routedAgents.get(step.id);
         if (!agentId) throw new CompanyCommandError(`process step ${step.id} was not routed`);
@@ -875,6 +1001,7 @@ export class CompanyCommandService {
       this.audit(tx, command, "workflow_run", started.workflowRunId, "start_process_run");
       this.wake(tx, command, command.operatorAgentId, "Process run started", {
         operatorRunId: started.run.id,
+        workflowRunId: started.workflowRunId,
       });
     });
     return {
@@ -1305,6 +1432,7 @@ export class CompanyCommandService {
   }
 
   private async requireGoal(organizationId: string, id: string) {
+    if (!isCompanyObjective(id)) throw new CompanyCommandError("objective not found");
     const rows = await this.db
       .select({ id: goals.id })
       .from(goals)

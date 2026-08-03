@@ -116,3 +116,18 @@ yarn workspace @aaspai/worker test:real:zedblock:local
 Remote CLI execution remains disabled for autonomous-company reasoning until
 the selected CLI is authenticated natively inside that remote runtime. Host
 authentication files are not copied into Daytona.
+
+## Capability truth
+
+The harness and runtime registries are independent. Check both before a real
+run; a ready CLI adapter does not make an unavailable runtime ready, and a
+ready runtime does not authenticate the CLI:
+
+```sh
+yarn workspace @aaspai/cli start provider capabilities
+yarn workspace @aaspai/cli start provider doctor
+```
+
+The local company-action broker is attempt-scoped and validated. Remote
+company-control execution still needs a secure synchronous bridge; runtime
+execution support alone is not remote company-control parity.

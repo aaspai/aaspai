@@ -54,6 +54,7 @@ import {
   getDefaultDb,
   loops,
   milestones,
+  processBindings,
   projectAssignments,
   projects,
   repositories,
@@ -61,6 +62,7 @@ import {
   runMigrations,
   sessions as sessionsTable,
   wakeups as wakeupsTable,
+  workflowRuns,
 } from "@aaspai/db";
 import {
   AutonomousWorkExecutor,
@@ -72,6 +74,7 @@ import {
   HarnessExecutionPlanRunner,
   LocalExecutionWorkspaceManager,
   OperatorService,
+  OperatorStateStore,
 } from "@aaspai/execution";
 import {
   DEFAULT_AGENTS_DIR,
@@ -88,6 +91,7 @@ import {
   LoopControlStore,
   type LoopExecutionLineage,
   LoopRunner,
+  nextScheduledOccurrence,
   PatternRegistry,
   resolveFilePattern,
   Scheduler,
@@ -113,6 +117,8 @@ import {
   companyActions,
   type HireAndDelegateAction,
   missingRequiredCompanyActions,
+  recurringProcessSchedule,
+  requiredCompanyActionsForHire,
 } from "./company-actions.js";
 import { validateEvidencePolicy } from "./output-policy.js";
 
@@ -128,6 +134,79 @@ const TERMINAL_WORK_ITEM_STATUSES = new Set<ExecutionWorkItem["status"]>([
   "completed",
   "failed",
 ]);
+
+interface RecurringProcessContinuation {
+  managerWorkItemId: string;
+  managerAttemptId: string;
+  managerSessionId: string;
+  resumeSessionId: string;
+  resumeWorkspaceId: string;
+  adapter: string;
+  repositoryId: string;
+  definitionRevisionId: string;
+  sourceCommitSha: string | null;
+}
+
+function recurringContinuation(value: unknown): RecurringProcessContinuation | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const required = [
+    "managerWorkItemId",
+    "managerAttemptId",
+    "managerSessionId",
+    "resumeSessionId",
+    "resumeWorkspaceId",
+    "adapter",
+    "repositoryId",
+    "definitionRevisionId",
+  ] as const;
+  if (required.some((key) => typeof row[key] !== "string" || row[key].length === 0)) return null;
+  if (row.sourceCommitSha !== null && typeof row.sourceCommitSha !== "string") return null;
+  return row as unknown as RecurringProcessContinuation;
+}
+
+export function contextualizeDelegatedPrompt(
+  prompt: string,
+  agentId: string,
+  workItem: Pick<
+    ExecutionWorkItem,
+    "id" | "projectId" | "milestoneId" | "processBindingId" | "parentWorkItemId" | "metadata"
+  >,
+): string {
+  if (!workItem.parentWorkItemId) return prompt;
+  const managerBoundary = isManagerSetupWork(workItem.metadata)
+    ? "You are the project manager. Only hire or assign the specialist, create the milestone, and define and start the process. Do not execute specialist research or create project deliverable artifacts; stop after the process starts."
+    : null;
+  return [
+    prompt,
+    "",
+    "Durable assignment context (use these exact IDs):",
+    `- Your agent ID: ${agentId}`,
+    `- Project ID: ${workItem.projectId ?? "none"}`,
+    `- Milestone ID: ${workItem.milestoneId ?? "none"}`,
+    `- Process binding ID: ${workItem.processBindingId ?? "none"}`,
+    `- Work item ID: ${workItem.id}`,
+    `- Parent work item ID: ${workItem.parentWorkItemId}`,
+    `- Required company actions: ${JSON.stringify(workItem.metadata.requiredCompanyActions ?? [])}`,
+    `- Required artifacts: ${JSON.stringify(workItem.metadata.declaredArtifacts ?? [])}`,
+    `- Evidence policy: ${JSON.stringify(workItem.metadata.evidencePolicy ?? {})}`,
+    ...(managerBoundary ? [managerBoundary] : []),
+    "Use company_action for organizational changes. Work only inside the assigned attempt workspace. Do not inspect sibling attempts, agent profiles, AASPAI source code, the company workspace, or its state database to rediscover this supplied context.",
+  ].join("\n");
+}
+
+function isManagerSetupWork(metadata: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(metadata.requiredCompanyActions) &&
+    metadata.requiredCompanyActions.some(
+      (action) =>
+        action !== null &&
+        typeof action === "object" &&
+        "type" in action &&
+        action.type === "define_and_start_process",
+    )
+  );
+}
 
 export function hiredAgentTools(
   tools: AgentConfig["tools"],
@@ -256,6 +335,17 @@ async function hashAgentDefinition(directory: string): Promise<string> {
     hash.update("\0");
   }
   return hash.digest("hex");
+}
+
+function attemptArtifactRoot(attemptId: string): string {
+  return resolve(
+    process.env.AASPAI_ARTIFACTS_ROOT ?? join(".aaspai", "artifacts"),
+    createHash("sha256").update(attemptId).digest("hex"),
+  );
+}
+
+function hasExecutableWakeupIntent(payload: Record<string, unknown>): boolean {
+  return typeof payload.prompt === "string" && payload.prompt.trim().length > 0;
 }
 
 export function changedPathsFromStatus(entries: readonly string[]): string[] {
@@ -633,6 +723,7 @@ export class WorkerDaemon {
 
     this.installShutdownHandlers();
 
+    await this.recoverMissedExecutableWakeups();
     await this.recoverStaleClaims();
 
     log.info("worker started");
@@ -908,6 +999,22 @@ export class WorkerDaemon {
 
     const controlPayload = (safeJsonParse(wakeupRow.payloadJson) ?? {}) as Record<string, unknown>;
     if (typeof controlPayload.operatorRunId === "string") {
+      if (typeof controlPayload.workflowRunId === "string") {
+        const [currentRun] = await handle.db
+          .select({ workflowRunId: executionOperatorRuns.workflowRunId })
+          .from(executionOperatorRuns)
+          .where(
+            and(
+              eq(executionOperatorRuns.organizationId, this.organizationId),
+              eq(executionOperatorRuns.id, controlPayload.operatorRunId),
+            ),
+          )
+          .limit(1);
+        if (currentRun?.workflowRunId !== controlPayload.workflowRunId) {
+          await this.finishWakeup(wakeupId);
+          return;
+        }
+      }
       const result = await new OperatorService(this.executionStore).tick(
         {
           organizationId: this.organizationId,
@@ -921,12 +1028,19 @@ export class WorkerDaemon {
           result.run.workflowRunId,
           result.decision.targetId,
           result.run.operatorAgentId,
+          wakeupId,
         );
+        const settledWork = result.decision.targetId
+          ? await this.executionStore.getWorkItem(result.decision.targetId)
+          : null;
         await this.queueManagerWake(
           result.run.id,
           result.run.operatorAgentId,
           result.run.observedStateVersion,
-          "Manager work item finished",
+          result.run.workflowRunId,
+          settledWork?.status === "ready"
+            ? "Process work retry requested"
+            : "Process work item finished",
         );
       } else if (result.decision?.action === "complete" && result.run.workflowRunId) {
         await this.finalizeManagerRun(
@@ -939,13 +1053,10 @@ export class WorkerDaemon {
       return;
     }
 
-    // Company commands already performed their durable state mutation before
-    // emitting this wakeup. Only discovery needs another agent turn; the rest
-    // are notifications, not new repository work.
-    if (
-      typeof controlPayload.command === "string" &&
-      controlPayload.command !== "start_discovery"
-    ) {
+    // Company commands without a prompt are state-change notifications. A
+    // prompt is executable intent and must enter the same durable work path as
+    // every other agent assignment.
+    if (typeof controlPayload.command === "string" && !hasExecutableWakeupIntent(controlPayload)) {
       await this.finishWakeup(wakeupId);
       return;
     }
@@ -1033,11 +1144,25 @@ export class WorkerDaemon {
               workItem,
               agentId,
               adapter,
-              prompt,
+              prompt: contextualizeDelegatedPrompt(prompt, agentId, workItem),
               runtime,
+              wakeupId,
               durableSessionId: request.sessionId,
               resumeSessionId: request.resumeSessionId,
               resumeWorkspaceId: request.resumeWorkspaceId,
+              beforeAttemptCompletion:
+                payload.command === "start_discovery"
+                  ? async (candidate, durableSessionId) => {
+                      if (!candidate.timedOut && candidate.exitCode === 0) {
+                        await this.applyDiscoveryProposal(
+                          payload,
+                          candidate.summary,
+                          durableSessionId,
+                          request.workItemId ?? wakeupId,
+                        );
+                      }
+                    }
+                  : undefined,
             });
             return {
               status: executed.timedOut
@@ -1054,28 +1179,34 @@ export class WorkerDaemon {
         });
       } catch (error) {
         await this.settleDelegationLifecycle(request);
+        const workItem = await this.executionStore.getWorkItem(request.workItemId);
+        const attempt = workItem?.claimedByAttemptId
+          ? await this.executionStore.getAttempt(workItem.claimedByAttemptId)
+          : null;
+        if (workItem?.status === "ready" && attempt) {
+          await this.queueRetryAfterAttempt(wakeupRow, request, attempt, String(error));
+          await this.finishWakeup(wakeupId, attempt.harnessSessionId ?? request.sessionId);
+          return;
+        }
+        if (payload.command === "start_discovery" && workItem?.status === "failed") {
+          await this.markFailed(wakeupId, String(error));
+          return;
+        }
         throw error;
       }
       await this.verifyPendingWorkItems(request.workflowRunId);
       await this.settleDelegationLifecycle(request, result.attempt);
       if (result.workItem.status === "ready") {
+        await this.queueRetryAfterAttempt(wakeupRow, request, result.attempt);
+      } else if (payload.command === "start_discovery" && result.workItem.status === "failed") {
         const harnessSession = result.attempt.harnessSessionId
           ? await this.executionStore.getHarnessSession(result.attempt.harnessSessionId)
           : null;
-        const resumeSessionId =
-          harnessSession?.sessionId &&
-          (result.attempt.status === "timed_out" ||
-            harnessSession.errorCode === "evidence_persistence_failed")
-            ? harnessSession.sessionId
-            : undefined;
-        await this.queueRetryWakeup(wakeupRow, request, result.attempt.attemptNumber + 1, {
-          ...(resumeSessionId ? { resumeSessionId } : {}),
-          ...(harnessSession?.errorMessage
-            ? { failure: harnessSession.errorMessage }
-            : harnessSession?.errorCode
-              ? { failure: harnessSession.errorCode }
-              : {}),
-        });
+        await this.markFailed(
+          wakeupId,
+          harnessSession?.errorMessage ?? harnessSession?.errorCode ?? result.attempt.status,
+        );
+        return;
       }
       await this.finishWakeup(wakeupId, request.sessionId ?? result.attempt.harnessSessionId);
       return;
@@ -1110,78 +1241,64 @@ export class WorkerDaemon {
       return;
     }
     const lineage = this.loopLineage ?? (await this.ensureLoopLineage());
-    const workItem = await this.executionStore.createWorkItem({
-      id: `work:wakeup:${wakeupId}`,
-      organizationId: this.organizationId,
-      goalId: lineage.goalId,
-      projectId: lineage.projectId,
-      repositoryId: lineage.repositoryId,
-      title: prompt.slice(0, 512),
-      description: prompt,
-      definitionRevisionId: lineage.definitionRevisionId,
-      sourceCommitSha: "0000000",
-      branchName: "worker-wakeup",
-      idempotencyKey: wakeupId,
-      status: "ready",
-      metadata: Array.isArray(request.requiredCompanyActions)
-        ? { requiredCompanyActions: request.requiredCompanyActions }
-        : {},
-    });
-    const workflowRun = await this.executionStore.createWorkflowRun({
-      id: `run:wakeup:${wakeupId}`,
-      organizationId: this.organizationId,
-      goalId: lineage.goalId,
-      definitionRevisionId: lineage.definitionRevisionId,
-      sourceType: "wakeup",
-      sourceId: wakeupId,
-      idempotencyKey: `workflow:${wakeupId}`,
-    });
-    const attempt = await this.executionStore.createAttempt({
-      id: `attempt:wakeup:${wakeupId}`,
-      organizationId: this.organizationId,
-      workflowRunId: workflowRun.id,
+    const workflowRunId = `run:wakeup:${wakeupId}`;
+    const workflowRun =
+      (await this.executionStore.getWorkflowRun(workflowRunId)) ??
+      (await this.executionStore.createWorkflowRun({
+        id: workflowRunId,
+        organizationId: this.organizationId,
+        goalId: lineage.goalId,
+        definitionRevisionId: lineage.definitionRevisionId,
+        sourceType: "wakeup",
+        sourceId: wakeupId,
+        idempotencyKey: `workflow:${wakeupId}`,
+      }));
+    const workItemId = `work:wakeup:${wakeupId}`;
+    const workItem =
+      (await this.executionStore.getWorkItem(workItemId)) ??
+      (await this.executionStore.createWorkItem({
+        id: workItemId,
+        organizationId: this.organizationId,
+        goalId: lineage.goalId,
+        projectId: lineage.projectId,
+        repositoryId: lineage.repositoryId,
+        workflowRunId: workflowRun.id,
+        workKind: "general",
+        deliveryMode: "none",
+        title: prompt.slice(0, 512),
+        description: prompt,
+        definitionRevisionId: lineage.definitionRevisionId,
+        sourceCommitSha: "0000000",
+        branchName: "worker-wakeup",
+        idempotencyKey: wakeupId,
+        status: "ready",
+        maxAttempts: 3,
+        metadata: Array.isArray(request.requiredCompanyActions)
+          ? { requiredCompanyActions: request.requiredCompanyActions }
+          : {},
+      }));
+    const durablePayload = {
+      ...payload,
       workItemId: workItem.id,
-      agentId,
-      harness: adapter,
-    });
-    if (!(await this.executionStore.claimWorkItem(workItem.id, attempt.id))) {
-      throw new Error(`Wakeup ${wakeupId} could not be claimed`);
-    }
-    const claimedWorkItem = await this.executionStore.getWorkItem(workItem.id);
-    if (!claimedWorkItem) throw new Error(`Wakeup work item ${workItem.id} disappeared`);
-    const result = await this.executeDurableAttempt({
-      attempt,
-      workItem: claimedWorkItem,
-      agentId,
-      adapter,
-      prompt,
-      runtime,
-      durableSessionId: request.sessionId,
-    });
-    const legacyStatus = result.timedOut
-      ? "failed"
-      : result.exitCode === 0
-        ? "completed"
-        : "failed";
-    await this.executionStore.updateWorkItemStatus(claimedWorkItem.id, legacyStatus, {
-      blockedReason: legacyStatus === "completed" ? null : (result.errorMessage ?? result.summary),
-    });
-    if (legacyStatus === "completed") {
-      await this.applyDiscoveryProposal(
-        payload,
-        result.summary,
-        result.sessionId ?? request.sessionId ?? wakeupId,
-        wakeupId,
-      );
-    }
-    await this.finishWakeup(wakeupId, result.sessionId ?? request.sessionId);
+      workflowRunId: workflowRun.id,
+    };
+    const bound = await getDefaultDb()
+      .db.update(wakeupsTable)
+      .set({ payloadJson: JSON.stringify(durablePayload) })
+      .where(this.wakeupClaimGuard(wakeupId))
+      .returning({ id: wakeupsTable.id });
+    if (bound.length !== 1) throw new Error(`Wakeup ${wakeupId} lost its claim before execution`);
+    await this.executeLegacyWakeup(
+      { ...wakeupRow, payloadJson: JSON.stringify(durablePayload) },
+      wakeupId,
+    );
   }
 
   private async applyDiscoveryProposal(
     payload: Record<string, unknown>,
     summary: string | undefined,
     sessionId: string,
-    wakeupId: string,
+    idempotencyScope: string,
   ): Promise<void> {
     if (payload.command !== "start_discovery") return;
     const proposal = parsePortfolioProposal(summary);
@@ -1190,7 +1307,7 @@ export class WorkerDaemon {
       type: "submit_portfolio_proposal",
       organizationId: this.organizationId,
       actorId: typeof payload.operatorAgentId === "string" ? payload.operatorAgentId : "agent/ceo",
-      idempotencyKey: `discovery-proposal:${wakeupId}`,
+      idempotencyKey: `discovery-proposal:${idempotencyScope}`,
       summary: proposal.summary,
       evidence: [`session/${sessionId}`],
       projects: proposal.projects,
@@ -1261,6 +1378,12 @@ export class WorkerDaemon {
     const sessionId = `sess_retry_${suffix}`;
     const wakeupId = `wake_retry_${suffix}`;
     const requestedAt = new Date().toISOString();
+    const workItem = await this.executionStore.getWorkItem(request.workItemId);
+    if (workItem?.status === "ready") {
+      await this.executionStore.updateWorkItemStatus(workItem.id, "ready", {
+        retryAfter: requestedAt,
+      });
+    }
     const retryPayload = {
       ...request,
       sessionId,
@@ -1306,6 +1429,52 @@ export class WorkerDaemon {
         .onConflictDoNothing()
         .run();
     });
+  }
+
+  private async queueRetryAfterAttempt(
+    wakeup: typeof wakeupsTable.$inferSelect,
+    request: {
+      adapter?: string;
+      runtime?: unknown;
+      prompt?: string;
+      workItemId?: string;
+      workflowRunId?: string;
+      sessionId?: string;
+      resumeSessionId?: string;
+      resumeWorkspaceId?: string;
+      mustResumeSession?: boolean;
+    },
+    attempt: AgentAttempt,
+    failure?: string,
+  ): Promise<void> {
+    const harnessSession = attempt.harnessSessionId
+      ? await this.executionStore.getHarnessSession(attempt.harnessSessionId)
+      : null;
+    const resumeSessionId =
+      harnessSession?.sessionId &&
+      (attempt.status === "timed_out" ||
+        attempt.status === "lost" ||
+        harnessSession.errorCode === "evidence_persistence_failed")
+        ? harnessSession.sessionId
+        : undefined;
+    await this.queueRetryWakeup(
+      wakeup,
+      {
+        ...request,
+        sessionId: attempt.harnessSessionId ?? request.sessionId,
+      },
+      attempt.attemptNumber + 1,
+      {
+        ...(resumeSessionId ? { resumeSessionId } : {}),
+        ...(failure
+          ? { failure }
+          : harnessSession?.errorMessage
+            ? { failure: harnessSession.errorMessage }
+            : harnessSession?.errorCode
+              ? { failure: harnessSession.errorCode }
+              : {}),
+      },
+    );
   }
 
   private async settleDelegationLifecycle(
@@ -1354,6 +1523,26 @@ export class WorkerDaemon {
       throw new Error(`Retained manager workspace ${workspaceId} is not disposable`);
     }
     if (workspace.status === "released") return;
+    const recurringBindings = await getDefaultDb()
+      .db.select({ policyJson: processBindings.policyJson })
+      .from(processBindings)
+      .where(
+        and(
+          eq(processBindings.organizationId, this.organizationId),
+          eq(processBindings.status, "active"),
+        ),
+      );
+    if (
+      recurringBindings.some((binding) => {
+        const policy = (safeJsonParse(binding.policyJson) ?? {}) as Record<string, unknown>;
+        return (
+          recurringProcessSchedule(policy) !== null &&
+          recurringContinuation(policy._aaspaiContinuation)?.resumeWorkspaceId === workspaceId
+        );
+      })
+    ) {
+      return;
+    }
     const existingLock = await this.executionStore.findResourceLock(
       this.organizationId,
       "workspace",
@@ -1491,6 +1680,7 @@ export class WorkerDaemon {
     workflowRunId: string,
     workItemId: string | null,
     managerAgentId: string,
+    wakeupId: string,
   ): Promise<void> {
     if (!workItemId) throw new Error("manager dispatch has no work item");
     const workItem = await this.executionStore.getWorkItem(workItemId, {
@@ -1502,20 +1692,40 @@ export class WorkerDaemon {
       throw new Error("manager dispatch target is outside its workflow");
     const assignedAgentId = workItem.assignedAgentId ?? managerAgentId;
     const agent = await this.agentSource.get(assignedAgentId);
+    const parentAttemptId =
+      typeof workItem.metadata.parentAttemptId === "string"
+        ? workItem.metadata.parentAttemptId
+        : undefined;
+    const parentSessionId =
+      typeof workItem.metadata.parentSessionId === "string"
+        ? workItem.metadata.parentSessionId
+        : undefined;
+    const resumeSessionId =
+      typeof workItem.metadata.resumeSessionId === "string"
+        ? workItem.metadata.resumeSessionId
+        : undefined;
+    const resumeWorkspaceId =
+      typeof workItem.metadata.resumeWorkspaceId === "string"
+        ? workItem.metadata.resumeWorkspaceId
+        : undefined;
     await this.autonomousExecutor.execute({
       organizationId: this.organizationId,
       workflowRunId,
       workItemId,
       agentId: assignedAgentId,
       harness: agent.adapter,
+      parentAttemptId,
       runProvider: async ({ attempt }) => {
         const result = await this.executeDurableAttempt({
           attempt,
           workItem,
           agentId: assignedAgentId,
           adapter: agent.adapter,
-          prompt: workItem.description,
-          resumeSessionId: await this.resumeStalledSession(workItem.id),
+          prompt: contextualizeDelegatedPrompt(workItem.description, assignedAgentId, workItem),
+          wakeupId,
+          parentSessionId,
+          resumeSessionId: resumeSessionId ?? (await this.resumeStalledSession(workItem.id)),
+          resumeWorkspaceId,
         });
         return {
           status: result.timedOut
@@ -1537,11 +1747,12 @@ export class WorkerDaemon {
     managerRunId: string,
     managerAgentId: string,
     stateVersion: number,
+    workflowRunId: string | null,
     reason: string,
   ): Promise<void> {
     const timestamp = new Date().toISOString();
     const loopId = `loop/manager/${this.organizationId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-    const key = `manager:${managerRunId}:${stateVersion}`;
+    const key = `manager:${managerRunId}:${workflowRunId ?? "none"}:${stateVersion}`;
     const db = getDefaultDb().db;
     db.transaction((tx) => {
       tx.insert(loops)
@@ -1568,7 +1779,11 @@ export class WorkerDaemon {
           triggerDetail: "manager",
           reason,
           agentId: managerAgentId,
-          payloadJson: JSON.stringify({ managerRunId, operatorRunId: managerRunId }),
+          payloadJson: JSON.stringify({
+            managerRunId,
+            operatorRunId: managerRunId,
+            ...(workflowRunId ? { workflowRunId } : {}),
+          }),
           status: "queued",
           idempotencyKey: key,
           requestedAt: timestamp,
@@ -1585,6 +1800,15 @@ export class WorkerDaemon {
     workflowRunId: string,
     managerAgentId: string,
   ): Promise<void> {
+    const db = getDefaultDb().db;
+    const context = {
+      organizationId: this.organizationId,
+      actorId: "worker",
+      correlationId: workflowRunId,
+    };
+    const operatorState = new OperatorStateStore(db);
+    const currentRun = await operatorState.getOperatorRun(context, managerRunId);
+    if (!currentRun || currentRun.workflowRunId !== workflowRunId) return;
     const items = await this.executionStore.listWorkItemsForWorkflow(
       this.organizationId,
       workflowRunId,
@@ -1603,7 +1827,33 @@ export class WorkerDaemon {
       throw new Error("Manager process must align to exactly one milestone");
     const projectId = items[0]?.projectId;
     if (!projectId) throw new Error("Manager process has no project");
-    const commands = new CompanyCommandService(getDefaultDb().db);
+    const bindingIds = [
+      ...new Set(
+        items.map((item) => item.processBindingId).filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const binding =
+      bindingIds.length === 1
+        ? (
+            await db
+              .select()
+              .from(processBindings)
+              .where(
+                and(
+                  eq(processBindings.organizationId, this.organizationId),
+                  eq(processBindings.id, bindingIds[0] as string),
+                ),
+              )
+              .limit(1)
+          )[0]
+        : null;
+    const policy = (safeJsonParse(binding?.policyJson ?? null) ?? {}) as Record<string, unknown>;
+    const schedule = recurringProcessSchedule(policy);
+    if (policy.schedule !== undefined && !schedule)
+      throw new Error(
+        `Recurring process binding ${binding?.id ?? "unknown"} has an invalid schedule`,
+      );
+    const commands = new CompanyCommandService(db);
     await commands.execute({
       type: "record_milestone_evaluation",
       organizationId: this.organizationId,
@@ -1615,8 +1865,23 @@ export class WorkerDaemon {
       evidence,
       rationale: "All milestone process steps passed independent verification.",
     });
-    const projectMilestones = await getDefaultDb()
-      .db.select({ status: milestones.status })
+    if (schedule) {
+      const continuation = recurringContinuation(policy._aaspaiContinuation);
+      if (!binding || !continuation)
+        throw new Error("Recurring process binding has no resumable manager context");
+      await this.scheduleRecurringProcessReview(
+        operatorState,
+        currentRun,
+        workflowRunId,
+        items,
+        binding,
+        continuation,
+        schedule,
+      );
+      return;
+    }
+    const projectMilestones = await db
+      .select({ status: milestones.status })
       .from(milestones)
       .where(
         and(
@@ -1655,6 +1920,113 @@ export class WorkerDaemon {
     }
   }
 
+  private async scheduleRecurringProcessReview(
+    operatorState: OperatorStateStore,
+    currentRun: NonNullable<Awaited<ReturnType<OperatorStateStore["getOperatorRun"]>>>,
+    completedWorkflowRunId: string,
+    items: ExecutionWorkItem[],
+    binding: typeof processBindings.$inferSelect,
+    continuation: RecurringProcessContinuation,
+    schedule: NonNullable<ReturnType<typeof recurringProcessSchedule>>,
+  ): Promise<void> {
+    const completedAt = new Date();
+    const policy = (safeJsonParse(binding.policyJson) ?? {}) as Record<string, unknown>;
+    const wakeAt = nextScheduledOccurrence({ schedule }, completedAt);
+    if (!wakeAt) throw new Error(`Recurring process binding ${binding.id} has no next cadence`);
+    const nextSequence =
+      Math.max(
+        0,
+        ...(
+          await getDefaultDb()
+            .db.select({ sequence: milestones.sequence })
+            .from(milestones)
+            .where(
+              and(
+                eq(milestones.organizationId, this.organizationId),
+                eq(milestones.projectId, binding.projectId),
+              ),
+            )
+        ).map((row) => row.sequence),
+      ) + 1;
+    const first = items[0];
+    if (!first) throw new Error("Recurring process has no completed work");
+    const reviewWorkflow = await this.executionStore.createWorkflowRun({
+      organizationId: this.organizationId,
+      goalId: first.goalId,
+      definitionRevisionId: continuation.definitionRevisionId,
+      sourceType: "process_review",
+      sourceId: binding.id,
+      idempotencyKey: `process-review:workflow:${binding.id}:${completedWorkflowRunId}`,
+    });
+    const simulationReviewActions =
+      continuation.adapter === "dry_run_local" &&
+      Array.isArray(policy._aaspaiSimulationReviewActions)
+        ? `AASPAI_SIMULATION_COMPANY_ACTIONS=${JSON.stringify(policy._aaspaiSimulationReviewActions)}`
+        : null;
+    const prompt = [
+      `Recurring process ${binding.processDefinitionId}@${binding.processRevision} completed and passed verification.`,
+      `Completed workflow: ${completedWorkflowRunId}`,
+      `Evidence: ${(
+        await Promise.all(
+          items.map((item) => this.executionStore.getVerificationForWorkItem(item.id)),
+        )
+      )
+        .filter(Boolean)
+        .map((verification) => verification?.id)
+        .join(", ")}`,
+      `Create milestone sequence ${nextSequence}, then start the next bounded cycle using the same process ID and schedule.`,
+      "Review the evidence in this retained manager session. Improve the process only when the evidence justifies it; do not recreate the project, binding, or completed work.",
+      ...(simulationReviewActions ? [simulationReviewActions] : []),
+    ].join("\n\n");
+    await this.executionStore.createWorkItem({
+      organizationId: this.organizationId,
+      goalId: first.goalId,
+      projectId: binding.projectId,
+      repositoryId: continuation.repositoryId,
+      workflowRunId: reviewWorkflow.id,
+      parentWorkItemId: first.id,
+      assignedAgentId: binding.ownerAgentId,
+      alignmentRationale: `Review recurring process cycle ${completedWorkflowRunId}`,
+      title: `Review recurring cycle: ${binding.processDefinitionId}`.slice(0, 512),
+      description: prompt,
+      definitionRevisionId: continuation.definitionRevisionId,
+      sourceCommitSha: continuation.sourceCommitSha,
+      priority: Math.max(...items.map((item) => item.priority)),
+      maxAttempts: 3,
+      idempotencyKey: `process-review:work:${binding.id}:${completedWorkflowRunId}`,
+      workKind: "general",
+      deliveryMode: "none",
+      status: "proposed",
+      metadata: {
+        processReview: { bindingId: binding.id, completedWorkflowRunId },
+        requiredCompanyActions: [
+          { type: "create_milestone", projectId: binding.projectId },
+          { type: "define_and_start_process", projectId: binding.projectId },
+        ],
+        parentAttemptId: continuation.managerAttemptId,
+        parentSessionId: continuation.managerSessionId,
+        resumeSessionId: continuation.resumeSessionId,
+        resumeWorkspaceId: continuation.resumeWorkspaceId,
+      },
+    });
+    await this.executionStore.updateWorkflowRunStatus(reviewWorkflow.id, "running");
+    await getDefaultDb()
+      .db.update(projects)
+      .set({ status: "active", healthStatus: "healthy", updatedAt: completedAt.toISOString() })
+      .where(
+        and(eq(projects.organizationId, this.organizationId), eq(projects.id, binding.projectId)),
+      );
+    await operatorState.updateOperatorRun(
+      {
+        organizationId: this.organizationId,
+        actorId: "worker",
+        correlationId: completedWorkflowRunId,
+      },
+      currentRun.id,
+      { workflowRunId: reviewWorkflow.id, status: "waiting", wakeAt: wakeAt.toISOString() },
+    );
+  }
+
   private async enqueueDueManagerRuns(): Promise<void> {
     const rows = await getDefaultDb()
       .db.select()
@@ -1667,6 +2039,7 @@ export class WorkerDaemon {
         run.id,
         run.operatorAgentId,
         run.observedStateVersion,
+        run.workflowRunId,
         "Scheduled manager review",
       );
     }
@@ -1848,9 +2221,15 @@ export class WorkerDaemon {
     adapter: string;
     prompt: string;
     runtime?: ReturnType<typeof executionTargetSchema.parse>;
+    wakeupId?: string;
+    parentSessionId?: string;
     durableSessionId?: string;
     resumeSessionId?: string;
     resumeWorkspaceId?: string;
+    beforeAttemptCompletion?: (
+      result: AdapterExecutionResult,
+      durableSessionId: string,
+    ) => Promise<void>;
   }): Promise<AdapterExecutionResult> {
     const persistedPlan = await this.executionStore.getPlanForAttempt(input.attempt.id);
     const profile = persistedPlan
@@ -1866,6 +2245,8 @@ export class WorkerDaemon {
       organizationId: this.organizationId,
       agentId: input.agentId,
       adapter: input.adapter,
+      wakeupId: input.wakeupId,
+      parentSessionId: input.parentSessionId,
     });
     const resumeSessionId = input.resumeSessionId ?? sessionStart.resumeSessionId;
     const requestedTools = Array.isArray(input.workItem.metadata.tools)
@@ -2098,7 +2479,14 @@ export class WorkerDaemon {
               },
               brokerAppliedActions.length,
             );
-            if (results.some((result) => result.actionType === "hire_and_delegate")) {
+            if (
+              results.some((result) => typeof result.outcome.delegatedWorkItemId === "string") ||
+              actions.some(
+                (action) =>
+                  action.type === "define_and_start_process" &&
+                  recurringProcessSchedule(action.policy) !== null,
+              )
+            ) {
               retainWorkspaceForCallback = true;
             }
             brokerAppliedActions.push(...actions);
@@ -2182,7 +2570,7 @@ export class WorkerDaemon {
               ? `${input.prompt}\n\n${companyActionRunInstruction(input.adapter)}`
               : input.prompt,
           harnessConfig: adapterConfig,
-          runtimeConfig: { workspacePolicy: "disposable" },
+          runtimeConfig: { workspacePolicy: "disposable", workKind: input.workItem.workKind },
           profile,
         }));
       assertGovernedRuntimeIsolation(plan.harness, plan.target, true);
@@ -2233,6 +2621,12 @@ export class WorkerDaemon {
                 ? [companyActionBroker.env.AASPAI_COMPANY_BROKER_TOKEN]
                 : [],
             });
+            if (input.beforeAttemptCompletion) {
+              const currentAttempt = await this.executionStore.getAttempt(input.attempt.id);
+              if (!currentAttempt?.harnessSessionId)
+                throw new Error(`Attempt ${input.attempt.id} has no durable harness session`);
+              await input.beforeAttemptCompletion(result, currentAttempt.harnessSessionId);
+            }
             if (mayManageCompany && !result.timedOut && result.exitCode === 0) {
               const reportedActions = companyActions(result);
               // A live broker is authoritative: a rejected tool call must never be replayed
@@ -2261,7 +2655,16 @@ export class WorkerDaemon {
                 },
                 brokerAppliedActions.length,
               );
-              if (fallbackResults.some((action) => action.actionType === "hire_and_delegate")) {
+              if (
+                fallbackResults.some(
+                  (action) => typeof action.outcome.delegatedWorkItemId === "string",
+                ) ||
+                fallbackActions.some(
+                  (action) =>
+                    action.type === "define_and_start_process" &&
+                    recurringProcessSchedule(action.policy) !== null,
+                )
+              ) {
                 retainWorkspaceForCallback = true;
               }
             }
@@ -2471,6 +2874,71 @@ export class WorkerDaemon {
           )[0]?.id;
           if (!milestoneId)
             throw new Error("Process action must reference a milestone created for the project");
+          const processReview = input.workItem.metadata.processReview;
+          const reviewBindingId =
+            processReview &&
+            typeof processReview === "object" &&
+            !Array.isArray(processReview) &&
+            typeof (processReview as Record<string, unknown>).bindingId === "string"
+              ? ((processReview as Record<string, unknown>).bindingId as string)
+              : null;
+          const inheritedBinding = reviewBindingId
+            ? (
+                await getDefaultDb()
+                  .db.select()
+                  .from(processBindings)
+                  .where(
+                    and(
+                      eq(processBindings.organizationId, this.organizationId),
+                      eq(processBindings.id, reviewBindingId),
+                      eq(processBindings.projectId, targetProject.id),
+                      eq(processBindings.ownerAgentId, input.managerAgentId),
+                      eq(processBindings.status, "active"),
+                    ),
+                  )
+                  .limit(1)
+              )[0]
+            : null;
+          if (reviewBindingId && !inheritedBinding)
+            throw new Error(`Recurring process binding ${reviewBindingId} is unavailable`);
+          if (inheritedBinding && inheritedBinding.processDefinitionId !== action.definition.id) {
+            throw new Error("Recurring process review must keep the existing process identity");
+          }
+          const inheritedPolicy = (safeJsonParse(inheritedBinding?.policyJson ?? null) ??
+            {}) as Record<string, unknown>;
+          const schedule =
+            recurringProcessSchedule(action.policy) ?? recurringProcessSchedule(inheritedPolicy);
+          if (inheritedBinding && !schedule)
+            throw new Error("Recurring process review lost its schedule");
+          let bindingPolicy = { ...inheritedPolicy, ...(action.policy ?? {}) };
+          let managerHarnessSessionId = input.attempt.harnessSessionId;
+          if (schedule) {
+            const currentAttempt = input.attempt.harnessSessionId
+              ? input.attempt
+              : await this.executionStore.getAttempt(input.attempt.id);
+            managerHarnessSessionId = currentAttempt?.harnessSessionId ?? null;
+            if (!managerHarnessSessionId)
+              throw new Error("Recurring process manager has no durable session");
+            const managerSession =
+              await this.executionStore.getHarnessSession(managerHarnessSessionId);
+            if (!managerSession?.sessionId)
+              throw new Error("Recurring process manager has no provider session to resume");
+            bindingPolicy = {
+              ...bindingPolicy,
+              schedule,
+              _aaspaiContinuation: {
+                managerWorkItemId: input.workItem.id,
+                managerAttemptId: input.attempt.id,
+                managerSessionId: managerSession.id,
+                resumeSessionId: managerSession.sessionId,
+                resumeWorkspaceId: input.managerWorkspaceId,
+                adapter: manager.adapter,
+                repositoryId: input.workItem.repositoryId,
+                definitionRevisionId: input.workItem.definitionRevisionId,
+                sourceCommitSha: input.workItem.sourceCommitSha,
+              },
+            };
+          }
           const binding = await commands.execute({
             type: "bind_process",
             organizationId: this.organizationId,
@@ -2481,8 +2949,9 @@ export class WorkerDaemon {
             processRevision: action.definition.revision,
             definition: action.definition,
             ownerAgentId: input.managerAgentId,
-            loopId: action.loopId ?? null,
-            policy: action.policy ?? {},
+            loopId:
+              action.loopId ?? inheritedBinding?.loopId ?? (schedule ? action.definition.id : null),
+            policy: bindingPolicy,
           });
           const processRun = await commands.execute({
             type: "start_process_run",
@@ -2497,6 +2966,9 @@ export class WorkerDaemon {
             operatorAgentId: input.managerAgentId,
             sourceCommitSha: input.workItem.sourceCommitSha,
             definition: action.definition,
+            parentWorkItemId: input.workItem.id,
+            parentAttemptId: input.attempt.id,
+            parentSessionId: managerHarnessSessionId,
           });
           await this.recordCompanyAction(
             input.attempt.id,
@@ -2559,6 +3031,35 @@ export class WorkerDaemon {
           toAgentId: action.agentId,
           relation: "may_delegate_to",
         });
+        if (action.projectRole === "member") {
+          const outcome = { agentId: action.agentId, assignedProjectId: targetProject.id };
+          await this.executionStore.recordGovernanceEvent({
+            organizationId: this.organizationId,
+            workItemId: input.workItem.id,
+            attemptId: input.attempt.id,
+            action: "agent.hire_and_delegate",
+            decision: "allowed",
+            reason: `${action.title} hired and assigned to ${targetProject.id}; work is dispatched by the project process`,
+            metadata: outcome,
+          });
+          await this.recordCompanyAction(
+            input.attempt.id,
+            action,
+            actionIndex,
+            targetProject.id,
+            "succeeded",
+            outcome,
+          );
+          applied.push({
+            actionIndex,
+            actionType: action.type,
+            projectId: targetProject.id,
+            status: "succeeded",
+            outcome,
+          });
+          activeAction = null;
+          continue;
+        }
         const definitionRevision = await this.executionStore.createDefinitionRevision({
           organizationId: this.organizationId,
           repositoryId: input.workItem.repositoryId,
@@ -2616,10 +3117,7 @@ export class WorkerDaemon {
             },
             ...(action.projectRole === "manager"
               ? {
-                  requiredCompanyActions: [
-                    { type: "create_milestone", projectId: targetProject.id },
-                    { type: "define_and_start_process", projectId: targetProject.id },
-                  ],
+                  requiredCompanyActions: requiredCompanyActionsForHire(action, targetProject.id),
                 }
               : {}),
           },
@@ -3203,7 +3701,8 @@ Use typed actions instead of merely describing company changes. In OpenCode call
     ephemeralSecrets?: readonly string[];
   }): Promise<void> {
     const successful = input.result.exitCode === 0 && !input.result.timedOut;
-    let artifactDeclarations = declaredArtifacts(input.workItem.metadata);
+    const managerSetupWork = isManagerSetupWork(input.workItem.metadata);
+    let artifactDeclarations = managerSetupWork ? [] : declaredArtifacts(input.workItem.metadata);
     if (
       !input.repositoryWork &&
       input.attempt.role === "maker" &&
@@ -3297,10 +3796,7 @@ Use typed actions instead of merely describing company changes. In OpenCode call
       ? await this.git.diff(input.workspacePath, input.sourceCommit, commit ?? undefined)
       : "";
     assertSecretFreeValue(patch, ephemeralSecrets);
-    const attemptRoot = resolve(
-      process.env.AASPAI_ARTIFACTS_ROOT ?? join(".aaspai", "artifacts"),
-      input.attempt.id,
-    );
+    const attemptRoot = attemptArtifactRoot(input.attempt.id);
     await mkdir(attemptRoot, { recursive: true });
     const resultPath = join(attemptRoot, "result.json");
     await writeFile(
@@ -3363,7 +3859,12 @@ Use typed actions instead of merely describing company changes. In OpenCode call
         declaration.mediaType,
       );
     }
-    if (successful && input.attempt.role === "maker" && !input.repositoryWork) {
+    if (
+      successful &&
+      input.attempt.role === "maker" &&
+      !input.repositoryWork &&
+      !managerSetupWork
+    ) {
       await validateEvidencePolicy(
         input.workspacePath,
         input.workItem.metadata,
@@ -3405,11 +3906,7 @@ Use typed actions instead of merely describing company changes. In OpenCode call
     sourceAttemptId: string,
     workspacePath: string,
   ): Promise<number> {
-    const declaredRoot = resolve(
-      process.env.AASPAI_ARTIFACTS_ROOT ?? join(".aaspai", "artifacts"),
-      sourceAttemptId,
-      "files",
-    );
+    const declaredRoot = join(attemptArtifactRoot(sourceAttemptId), "files");
     const [artifactRoot, workspaceRoot] = await Promise.all([
       realpath(declaredRoot).catch(() => null),
       realpath(workspacePath),
@@ -3641,34 +4138,35 @@ Use typed actions instead of merely describing company changes. In OpenCode call
         const lost = (await execution.listAttemptsForWorkItem(payload.workItemId))
           .filter((attempt) => attempt.status === "lost")
           .at(-1);
-        if (
-          workItem &&
-          lost &&
-          claim?.claimedByAttemptId === lost.id &&
-          lost.attemptNumber < workItem.maxAttempts
-        ) {
+        const retryableAttempt =
+          lost && claim?.claimedByAttemptId === lost.id
+            ? lost
+            : workItem?.status === "ready" &&
+                currentAttempt &&
+                ["failed", "timed_out"].includes(currentAttempt.status)
+              ? currentAttempt
+              : null;
+        if (workItem && retryableAttempt && retryableAttempt.attemptNumber < workItem.maxAttempts) {
           if (
             !(await this.markFailed(
               row.id,
-              `lost attempt ${lost.attemptNumber}; retry queued`,
+              `${retryableAttempt.status} attempt ${retryableAttempt.attemptNumber}; retry queued`,
               row,
             ))
           ) {
             continue;
           }
-          const providerSession = lost.harnessSessionId
-            ? await execution.getHarnessSession(lost.harnessSessionId)
-            : null;
           await execution.updateWorkItemStatus(workItem.id, "ready", {
             retryAfter: new Date().toISOString(),
           });
-          await this.queueRetryWakeup(row, payload, lost.attemptNumber + 1, {
-            ...(providerSession?.sessionId ? { resumeSessionId: providerSession.sessionId } : {}),
-            failure:
-              providerSession?.errorMessage ??
-              providerSession?.errorCode ??
-              "The worker stopped before the attempt reached a terminal result",
-          });
+          await this.queueRetryAfterAttempt(
+            row,
+            payload,
+            retryableAttempt,
+            retryableAttempt.status === "lost"
+              ? "The worker stopped before the attempt reached a terminal result"
+              : undefined,
+          );
           recovered++;
           continue;
         }
@@ -3708,6 +4206,21 @@ Use typed actions instead of merely describing company changes. In OpenCode call
         recovered++;
         continue;
       }
+      if (payload.command === "start_discovery") {
+        const requeued = await handle.db
+          .update(wakeupsTable)
+          .set({
+            status: "queued",
+            claimedAt: null,
+            heartbeatAt: null,
+            finishedAt: null,
+            error: null,
+          } as never)
+          .where(this.wakeupClaimGuard(row.id, row))
+          .returning({ id: wakeupsTable.id });
+        if (requeued.length === 1) recovered++;
+        continue;
+      }
       if (
         !(await this.markFailed(row.id, "stale claim: worker died before completing wakeup", row))
       ) {
@@ -3720,6 +4233,75 @@ Use typed actions instead of merely describing company changes. In OpenCode call
     if (lostAttempts > 0) log.warn("reconciled lost execution attempts", { lostAttempts, staleMs });
     if (recovered > 0) {
       log.warn("recovered stale wakeup claims on startup", { recovered, staleMs });
+    }
+  }
+
+  private async recoverMissedExecutableWakeups(): Promise<void> {
+    const handle = getDefaultDb();
+    const completed = await handle.db
+      .select({ id: wakeupsTable.id, payloadJson: wakeupsTable.payloadJson })
+      .from(wakeupsTable)
+      .where(
+        and(
+          eq(wakeupsTable.organizationId, this.organizationId),
+          eq(wakeupsTable.status, "completed"),
+          isNull(wakeupsTable.sessionId),
+        ),
+      );
+    const candidates = completed.flatMap((row) => {
+      const payload = safeJsonParse(row.payloadJson);
+      if (!payload || typeof payload !== "object") return [];
+      const controlPayload = payload as Record<string, unknown>;
+      return typeof controlPayload.command === "string" && hasExecutableWakeupIntent(controlPayload)
+        ? [{ ...row, payload: controlPayload }]
+        : [];
+    });
+    if (candidates.length === 0) return;
+
+    const runs = await handle.db
+      .select({
+        id: workflowRuns.id,
+        sourceType: workflowRuns.sourceType,
+        sourceId: workflowRuns.sourceId,
+      })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.organizationId, this.organizationId));
+    const runIds = new Set(runs.map((run) => run.id));
+    const executedWakeups = new Set(
+      runs
+        .filter((run) => run.sourceType === "wakeup" && typeof run.sourceId === "string")
+        .map((run) => run.sourceId as string),
+    );
+    let recovered = 0;
+    for (const candidate of candidates) {
+      if (executedWakeups.has(candidate.id)) continue;
+      if (
+        typeof candidate.payload.workflowRunId === "string" &&
+        runIds.has(candidate.payload.workflowRunId)
+      ) {
+        continue;
+      }
+      const changed = await handle.db
+        .update(wakeupsTable)
+        .set({
+          status: "queued",
+          claimedAt: null,
+          heartbeatAt: null,
+          finishedAt: null,
+          error: null,
+        } as never)
+        .where(
+          and(
+            eq(wakeupsTable.id, candidate.id),
+            eq(wakeupsTable.organizationId, this.organizationId),
+            eq(wakeupsTable.status, "completed"),
+          ),
+        )
+        .returning({ id: wakeupsTable.id });
+      recovered += changed.length;
+    }
+    if (recovered > 0) {
+      log.warn("requeued completed executable wakeups without durable work", { recovered });
     }
   }
 }

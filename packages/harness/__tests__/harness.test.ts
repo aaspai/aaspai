@@ -17,6 +17,7 @@ import {
   transcriptEntrySchema,
 } from "@aaspai/harness";
 import { describe, expect, it } from "vitest";
+import { codexSandboxProbeArgs } from "../src/drivers/codex-local/execute";
 
 describe("harness contract", () => {
   it("exposes a stable protocol version", () => {
@@ -110,6 +111,21 @@ describe("codex_local config", () => {
     const parsed = codexLocalConfigSchema.parse({});
     expect(parsed.command).toBe("codex");
     expect(parsed.sandbox).toBe("workspace-write");
+  });
+
+  it("uses a model-free sandbox readiness probe on Windows", () => {
+    expect(codexSandboxProbeArgs("workspace-write", "linux")).toBeNull();
+    expect(codexSandboxProbeArgs("workspace-write", "win32")).toEqual([
+      "sandbox",
+      "-c",
+      'sandbox_mode="workspace-write"',
+      "--",
+      "cmd.exe",
+      "/d",
+      "/c",
+      "exit",
+      "0",
+    ]);
   });
 });
 

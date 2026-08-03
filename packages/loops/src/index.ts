@@ -38,6 +38,7 @@ export {
 export {
   type DueLoopOccurrence,
   isDue,
+  nextScheduledOccurrence,
   Scheduler,
   scheduledOccurrences,
   type TickResult,

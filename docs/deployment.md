@@ -73,9 +73,13 @@ yarn workspace @aaspai/cli start db backup
 - Do not bind the API publicly unless authentication is configured and every
   exposed route has been reviewed for organization scoping.
 - Execution mutations fail closed when the API auth verifier is absent.
-- Daytona agent sandboxes receive short-lived attempt credentials from the
-  configured gateway. Permanent provider credentials stay outside agent
-  sandboxes and definition files.
+- Local Codex/OpenCode runs use the CLI's native authentication. Remote CLI
+  execution is allowed only after the selected CLI is installed and
+  authenticated inside the selected runtime; permanent host credential files
+  are not copied into disposable sandboxes.
+- The local company-action broker uses a short-lived attempt-scoped control
+  credential. It is not a model-provider credential, and remote company
+  actions require a separate secure bridge before they are enabled.
 - Treat the worker as privileged: it can create workspaces and invoke local or
   remote runtimes according to policy.
 
@@ -102,6 +106,7 @@ Do not assume the following until they have dedicated acceptance evidence:
 - complete worker-loss and in-flight attempt recovery;
 - production Postgres parity for every execution/control-plane operation;
 - remote artifact durability and backup;
+- secure remote company-control action bridging;
 - public web/API hardening and tenant isolation;
 - metrics, tracing, alerting, and operational runbooks.
 

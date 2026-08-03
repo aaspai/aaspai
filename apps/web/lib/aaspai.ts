@@ -36,6 +36,8 @@ import {
   artifacts,
   autonomyChangeRequests,
   autonomyProposals,
+  companyControlEvents,
+  companyProfiles,
   definitionRevisions,
   executionApprovals,
   executionBudgetReservations,
@@ -394,17 +396,7 @@ export async function getStateSnapshot(): Promise<StateSnapshot> {
   const agents = await listAgents();
   const recentSessions = await listRecentSessions(10);
 
-  // Group sessions by status for the counts
   const sessionRows = await handle.db.select({ status: sessions.status }).from(sessions);
-  const sessionCounts = { queued: 0, running: 0, failed: 0, completed: 0 };
-  for (const r of sessionRows) {
-    const s = r.status ?? "unknown";
-    if (s === "queued") sessionCounts.queued++;
-    else if (s === "running") sessionCounts.running++;
-    else if (s === "failed") sessionCounts.failed++;
-    else if (s === "succeeded" || s === "completed") sessionCounts.completed++;
-  }
-
   const wakeupRows = await handle.db
     .select({
       id: wakeups.id,
@@ -413,16 +405,8 @@ export async function getStateSnapshot(): Promise<StateSnapshot> {
       loopId: wakeups.loopId,
     })
     .from(wakeups)
-    .orderBy(desc(wakeups.requestedAt))
-    .limit(10);
-  const wakeupCounts = { queued: 0, running: 0, failed: 0, completed: 0 };
-  for (const w of sessionRows) {
-    const s = w.status ?? "unknown";
-    if (s === "queued") wakeupCounts.queued++;
-    else if (s === "running") wakeupCounts.running++;
-    else if (s === "failed") wakeupCounts.failed++;
-    else if (s === "succeeded" || s === "completed") wakeupCounts.completed++;
-  }
+    .orderBy(desc(wakeups.requestedAt));
+  const wakeupCounts = summarizeWakeupCounts(wakeupRows);
 
   return {
     ok: true,
@@ -433,7 +417,7 @@ export async function getStateSnapshot(): Promise<StateSnapshot> {
       wakeups: wakeupCounts,
     },
     recentSessions,
-    recentWakeups: wakeupRows.map((r) => ({
+    recentWakeups: wakeupRows.slice(0, 10).map((r) => ({
       id: r.id,
       status: r.status ?? "unknown",
       reason: r.reason,
@@ -727,6 +711,12 @@ export interface ExecutionAttemptDetail {
   workspace: Record<string, unknown> | null;
   plan: Record<string, unknown> | null;
   harnessSession: Record<string, unknown> | null;
+  source: {
+    type: string | null;
+    id: string | null;
+    command: string | null;
+    label: string | null;
+  } | null;
   events: Array<{
     id: number;
     seq: number;
@@ -758,6 +748,26 @@ export async function getExecutionAttemptDetail(
     .limit(1);
   const attempt = attemptRows[0];
   if (!attempt) return null;
+
+  const workflowRun = (
+    await handle.db
+      .select()
+      .from(workflowRuns)
+      .where(eq(workflowRuns.id, attempt.workflowRunId))
+      .limit(1)
+  )[0];
+  const sourceWakeup =
+    workflowRun?.sourceType === "wakeup" && workflowRun.sourceId
+      ? (
+          await handle.db
+            .select()
+            .from(wakeups)
+            .where(eq(wakeups.id, workflowRun.sourceId))
+            .limit(1)
+        )[0]
+      : undefined;
+  const sourcePayload = safeJson(sourceWakeup?.payloadJson);
+  const sourceCommand = typeof sourcePayload?.command === "string" ? sourcePayload.command : null;
 
   const workItem = (
     await handle.db
@@ -864,7 +874,7 @@ export async function getExecutionAttemptDetail(
       createdAt: attempt.createdAt,
       startedAt: attempt.startedAt,
       finishedAt: attempt.finishedAt,
-      error: attempt.error,
+      error: attempt.error ?? harnessSession?.errorMessage ?? null,
     },
     workItem: workItem ? { ...workItem, metadata: safeJson(workItem.metadataJson) ?? {} } : null,
     project: project ?? null,
@@ -881,6 +891,14 @@ export async function getExecutionAttemptDetail(
         }
       : null,
     harnessSession: harnessSession ?? null,
+    source: workflowRun
+      ? {
+          type: workflowRun.sourceType,
+          id: workflowRun.sourceId,
+          command: sourceCommand,
+          label: resolveExecutionScope(workflowRun.sourceType, sourceCommand),
+        }
+      : null,
     events: eventRows.map((event) => ({
       id: event.id,
       seq: event.seq,
@@ -902,6 +920,20 @@ export async function getExecutionAttemptDetail(
       workEvents: timeline.filter((event) => event.lane === "work").length,
     },
   };
+}
+
+export function resolveExecutionScope(
+  sourceType: string | null,
+  command: string | null,
+): string | null {
+  if (sourceType === "wakeup" && command === "start_discovery")
+    return "Company setup / CEO discovery";
+  if (sourceType === "wakeup" && command === "activate_company")
+    return "Company operation / CEO staffing";
+  if (sourceType === "manager_delegation") return "Project setup / delegated manager";
+  if (sourceType === "operator") return "Project process / assigned work";
+  if (sourceType === "delegation_callback") return "Project review / manager callback";
+  return null;
 }
 
 function attemptPhase(status: string, timeline: ObservedExecutionEvent[]): string {
@@ -985,6 +1017,38 @@ export interface CompanyEvidenceSummary {
   createdAt: string;
 }
 
+export type CompanyDiscoveryStatus =
+  | "not_started"
+  | "queued"
+  | "running"
+  | "failed"
+  | "review"
+  | "active";
+
+export interface CompanyDiscoverySummary {
+  status: CompanyDiscoveryStatus;
+  wakeupId: string | null;
+  workflowRunId: string | null;
+  attemptId: string | null;
+  harnessSessionId: string | null;
+  error: string | null;
+  requestedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface CompanyPortfolioProposalSummary {
+  summary: string;
+  evidence: string[];
+  projects: Array<{
+    goalId: string;
+    title: string;
+    description: string;
+    managerAgentId: string | null;
+  }>;
+  actorId: string;
+  occurredAt: string;
+}
+
 export interface CompanyOverview {
   organizationId: string | null;
   workspace: string;
@@ -1020,6 +1084,8 @@ export interface CompanyOverview {
   inbox: HumanInboxItem[];
   runs: CompanyRunSummary[];
   attempts: ExecutionAttemptSummary[];
+  discovery: CompanyDiscoverySummary;
+  portfolioProposal: CompanyPortfolioProposalSummary | null;
   evidence: CompanyEvidenceSummary[];
   agents: AgentSummary[];
   governance: Array<{
@@ -1073,6 +1139,10 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
     outputRows,
     governanceRows,
     budgetRows,
+    profileRows,
+    wakeupRows,
+    sessionRows,
+    controlEventRows,
   ] = await Promise.all([
     db.select().from(goals).orderBy(desc(goals.updatedAt)),
     db.select().from(projects).orderBy(desc(projects.updatedAt)),
@@ -1090,6 +1160,10 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
     db.select().from(loopOutputs).orderBy(desc(loopOutputs.createdAt)),
     db.select().from(executionGovernanceEvents).orderBy(desc(executionGovernanceEvents.occurredAt)),
     db.select().from(executionBudgetReservations),
+    db.select().from(companyProfiles),
+    db.select().from(wakeups).orderBy(desc(wakeups.requestedAt)),
+    db.select().from(sessions).orderBy(desc(sessions.startedAt)),
+    db.select().from(companyControlEvents).orderBy(desc(companyControlEvents.occurredAt)),
   ]);
 
   const organizationId = firstOrganizationId([
@@ -1099,6 +1173,8 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
     workItemRows,
     runRows,
     attemptRows,
+    profileRows,
+    controlEventRows,
   ]);
   const inCompany = (row: { organizationId: string }) =>
     organizationId === null || row.organizationId === organizationId;
@@ -1114,6 +1190,10 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
   const companyOutputs = outputRows.filter(inCompany);
   const companyGovernance = governanceRows.filter(inCompany);
   const companyBudgets = budgetRows.filter(inCompany);
+  const companyProfilesRows = profileRows.filter(inCompany);
+  const companyWakeups = wakeupRows.filter(inCompany);
+  const companySessions = sessionRows.filter(inCompany);
+  const companyControlEventRows = controlEventRows.filter(inCompany);
   const health = organizationId
     ? await new ExecutionStore(db).getCompanyHealth(organizationId)
     : null;
@@ -1227,6 +1307,14 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
       (attemptCountByRun.get(attempt.workflowRunId) ?? 0) + 1,
     );
   }
+  const discovery = resolveCompanyDiscovery({
+    lifecycleStatus: companyProfilesRows[0]?.lifecycleStatus ?? null,
+    wakeups: companyWakeups,
+    runs: companyRuns,
+    attempts: companyAttempts,
+    sessions: companySessions,
+  });
+  const portfolioProposal = resolveLatestPortfolioProposal(companyControlEventRows);
 
   return {
     organizationId,
@@ -1283,6 +1371,8 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
       attemptCount: attemptCountByRun.get(run.id) ?? 0,
     })),
     attempts: attempts.slice(0, 20),
+    discovery,
+    portfolioProposal,
     evidence: companyOutputs.slice(0, 20).map((output) => ({
       id: output.id,
       title: output.title,
@@ -1329,6 +1419,142 @@ export async function getCompanyOverview(): Promise<CompanyOverview> {
           return sum + (Array.isArray(ids) ? ids.length : 0);
         }, 0),
     },
+  };
+}
+
+export function summarizeWakeupCounts(
+  rows: Array<{ status: string | null }>,
+): StateSnapshot["counts"]["wakeups"] {
+  const counts = { queued: 0, running: 0, failed: 0, completed: 0 };
+  for (const row of rows) {
+    if (row.status === "queued") counts.queued++;
+    else if (row.status === "claimed" || row.status === "running") counts.running++;
+    else if (row.status === "failed") counts.failed++;
+    else if (row.status === "succeeded" || row.status === "completed") counts.completed++;
+  }
+  return counts;
+}
+
+type DiscoveryRows = {
+  lifecycleStatus: string | null;
+  wakeups: Array<
+    Pick<
+      typeof wakeups.$inferSelect,
+      "id" | "status" | "payloadJson" | "requestedAt" | "finishedAt" | "error" | "sessionId"
+    >
+  >;
+  runs: Array<Pick<typeof workflowRuns.$inferSelect, "id" | "sourceType" | "sourceId">>;
+  attempts: Array<
+    Pick<
+      typeof agentAttempts.$inferSelect,
+      | "id"
+      | "workflowRunId"
+      | "harnessSessionId"
+      | "status"
+      | "error"
+      | "attemptNumber"
+      | "createdAt"
+    >
+  >;
+  sessions: Array<Pick<typeof sessions.$inferSelect, "id" | "status" | "errorMessage">>;
+};
+
+export function resolveCompanyDiscovery(rows: DiscoveryRows): CompanyDiscoverySummary {
+  const discoveryWakeups = rows.wakeups
+    .filter((candidate) => safeJson(candidate.payloadJson)?.command === "start_discovery")
+    .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt));
+  const currentWakeup = discoveryWakeups[0];
+  const run = discoveryWakeups
+    .map((wakeup) =>
+      rows.runs.find(
+        (candidate) => candidate.sourceType === "wakeup" && candidate.sourceId === wakeup.id,
+      ),
+    )
+    .find((candidate) => candidate !== undefined);
+  const sourceWakeup = run
+    ? discoveryWakeups.find((candidate) => candidate.id === run.sourceId)
+    : currentWakeup;
+  const attempt = run
+    ? rows.attempts
+        .filter((candidate) => candidate.workflowRunId === run.id)
+        .sort(
+          (left, right) =>
+            right.attemptNumber - left.attemptNumber ||
+            right.createdAt.localeCompare(left.createdAt),
+        )[0]
+    : undefined;
+  const harnessSessionId = attempt?.harnessSessionId ?? currentWakeup?.sessionId ?? null;
+  const harnessSession = harnessSessionId
+    ? rows.sessions.find((candidate) => candidate.id === harnessSessionId)
+    : undefined;
+  const failed =
+    currentWakeup?.status === "failed" ||
+    currentWakeup?.status === "cancelled" ||
+    ["failed", "cancelled", "timed_out", "lost"].includes(attempt?.status ?? "") ||
+    ["failed", "cancelled", "timed_out"].includes(harnessSession?.status ?? "");
+  const status: CompanyDiscoveryStatus =
+    rows.lifecycleStatus === "review"
+      ? "review"
+      : rows.lifecycleStatus === "active"
+        ? "active"
+        : rows.lifecycleStatus !== "discovery"
+          ? "not_started"
+          : failed
+            ? "failed"
+            : currentWakeup?.status === "queued" || !currentWakeup
+              ? "queued"
+              : "running";
+  return {
+    status,
+    wakeupId: sourceWakeup?.id ?? null,
+    workflowRunId: run?.id ?? null,
+    attemptId: attempt?.id ?? null,
+    harnessSessionId,
+    error: harnessSession?.errorMessage ?? attempt?.error ?? currentWakeup?.error ?? null,
+    requestedAt: currentWakeup?.requestedAt ?? null,
+    finishedAt: currentWakeup?.finishedAt ?? null,
+  };
+}
+
+export function resolveLatestPortfolioProposal(
+  rows: Array<
+    Pick<
+      typeof companyControlEvents.$inferSelect,
+      "action" | "actorId" | "occurredAt" | "metadataJson"
+    >
+  >,
+): CompanyPortfolioProposalSummary | null {
+  const event = [...rows]
+    .filter((candidate) => candidate.action === "portfolio_proposal")
+    .sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))[0];
+  const metadata = safeJson(event?.metadataJson);
+  if (!event || typeof metadata?.summary !== "string" || !Array.isArray(metadata.projects))
+    return null;
+  const projects = metadata.projects.flatMap((value) => {
+    if (
+      !isRecordValue(value) ||
+      typeof value.goalId !== "string" ||
+      typeof value.title !== "string" ||
+      typeof value.description !== "string"
+    )
+      return [];
+    return [
+      {
+        goalId: value.goalId,
+        title: value.title,
+        description: value.description,
+        managerAgentId: typeof value.managerAgentId === "string" ? value.managerAgentId : null,
+      },
+    ];
+  });
+  return {
+    summary: metadata.summary,
+    evidence: Array.isArray(metadata.evidence)
+      ? metadata.evidence.filter((value): value is string => typeof value === "string")
+      : [],
+    projects,
+    actorId: event.actorId,
+    occurredAt: event.occurredAt,
   };
 }
 

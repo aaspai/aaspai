@@ -31,6 +31,9 @@ export interface StartProcessInput {
   definitionRevisionId: string;
   sourceCommitSha?: string | null;
   idempotencyKey: string;
+  parentWorkItemId?: string | null;
+  parentAttemptId?: string | null;
+  parentSessionId?: string | null;
   resolveAgent?: (step: ProcessStep) => Promise<string>;
 }
 
@@ -127,6 +130,7 @@ export class OperatorService {
         workflowRunId: workflow.id,
         milestoneId: input.milestoneId ?? null,
         processBindingId: input.processBindingId ?? null,
+        parentWorkItemId: input.parentWorkItemId ?? null,
         assignedAgentId,
         alignmentRationale: `Process ${definition.id}@${definition.revision}, step ${step.id}`,
         title: step.id,
@@ -175,6 +179,8 @@ export class OperatorService {
           workKind: step.workKind,
           deliveryMode: step.deliveryMode,
           processBindingId: input.processBindingId ?? null,
+          parentAttemptId: input.parentAttemptId ?? null,
+          parentSessionId: input.parentSessionId ?? null,
         },
       });
       items.set(step.id, item.id);
@@ -188,18 +194,19 @@ export class OperatorService {
         );
       }
     }
-    await this.state.updateOperatorRun(context, run.id, {
+    const evaluating = await this.state.updateOperatorRun(context, run.id, {
       workflowRunId: workflow.id,
       status: "evaluating",
+      wakeAt: null,
     });
     await this.store.updateWorkflowRunStatus(workflow.id, "running");
     const startDecision = controlDecisionSchema.parse({
       id: id("decision"),
       organizationId: context.organizationId,
       operatorRunId: run.id,
-      sequence: 1,
-      observedStateVersion: 0,
-      idempotencyKey: `${run.id}:start_process`,
+      sequence: evaluating.observedStateVersion + 1,
+      observedStateVersion: evaluating.observedStateVersion,
+      idempotencyKey: `${run.id}:start_process:${workflow.id}`,
       action: "start_process",
       targetType: "workflow_run",
       targetId: workflow.id,

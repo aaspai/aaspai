@@ -10,7 +10,6 @@ import {
 import Link from "next/link";
 import { DecisionActions, GiveDirection } from "@/components/company-actions";
 import { CompanyControlActions } from "@/components/company-control-actions";
-import { PortfolioProposalForm } from "@/components/portfolio-proposal-form";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +38,8 @@ export default async function CompanyPage() {
   const pending = overview.approvals.filter((approval) => approval.status === "requested");
   const latestAttempt = overview.attempts[0];
   const latestEvidence = overview.evidence[0];
+  const lifecycleStatus = strategic?.profile?.lifecycleStatus ?? "draft";
+  const discovery = overview.discovery;
   const today = new Intl.DateTimeFormat("en-US", {
     month: "long",
     day: "numeric",
@@ -62,14 +63,53 @@ export default async function CompanyPage() {
         </div>
       </header>
 
-      {strategic?.profile?.lifecycleStatus === "discovery" && (
+      {lifecycleStatus === "discovery" && (
+        <section className="rounded-xl border bg-card p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-base font-semibold">
+              {discovery.status === "failed"
+                ? "CEO discovery failed"
+                : discovery.status === "queued"
+                  ? "CEO discovery queued"
+                  : "CEO discovery is running"}
+            </h2>
+            <Badge variant={discovery.status === "failed" ? "destructive" : "secondary"}>
+              {discovery.status}
+            </Badge>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            The CEO is studying the mandate and will return an evidence-backed project portfolio for
+            your review.
+          </p>
+          {discovery.error ? (
+            <p className="mt-3 whitespace-pre-wrap rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              {discovery.error}
+            </p>
+          ) : null}
+          {discovery.attemptId ? (
+            <Button asChild variant="outline" size="sm" className="mt-4">
+              <Link href={`/execution/attempts/${encodeURIComponent(discovery.attemptId)}`}>
+                Open execution detail <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+              </Link>
+            </Button>
+          ) : null}
+        </section>
+      )}
+
+      {lifecycleStatus === "review" && (
         <section className="rounded-xl border bg-card p-5">
           <h2 className="text-base font-semibold">CEO discovery review</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Record the evidence-backed portfolio recommendation before founder activation.
+            {overview.portfolioProposal?.summary ??
+              "The CEO completed discovery. Review the proposed portfolio, then approve activation."}
           </p>
-          <div className="mt-4">
-            <PortfolioProposalForm goalId={strategic.objectives[0]?.id} />
+          <div className="mt-4 space-y-3">
+            {overview.portfolioProposal?.projects.map((project) => (
+              <div key={`${project.goalId}:${project.title}`} className="rounded-md border p-3">
+                <p className="text-sm font-medium">{project.title}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{project.description}</p>
+              </div>
+            ))}
           </div>
         </section>
       )}
@@ -81,11 +121,17 @@ export default async function CompanyPage() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-lg font-semibold">
-                  {strategic?.profile?.lifecycleStatus === "active"
+                  {lifecycleStatus === "active"
                     ? "The company is running."
-                    : "Company plan ready for review."}
+                    : lifecycleStatus === "review"
+                      ? "Company plan ready for review."
+                      : lifecycleStatus === "discovery"
+                        ? discovery.status === "failed"
+                          ? "CEO discovery needs attention."
+                          : "The CEO is preparing the company plan."
+                        : "Company setup is in progress."}
                 </h2>
-                <Badge variant="secondary">{strategic?.profile?.lifecycleStatus ?? "draft"}</Badge>
+                <Badge variant="secondary">{lifecycleStatus}</Badge>
               </div>
               <p className="mt-1 max-w-xl text-sm text-muted-foreground">
                 {onboarding?.ceoAgenda ?? "The CEO is operating from the founder mandate."}

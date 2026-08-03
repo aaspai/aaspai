@@ -802,6 +802,29 @@ export function registerExecutionRoutes(app: Hono, options: ExecutionRouteOption
       throw error;
     }
   });
+
+  app.post("/v1/execution/attempts/:id/interrupt", async (c) => {
+    const auth = await authenticate(c, options.authVerifier, "write");
+    if ("response" in auth) return auth.response;
+    const store = new ExecutionStore(getDefaultDb().db);
+    try {
+      const current = await store.getAttempt(c.req.param("id"));
+      if (!current) return c.json({ error: "not_found", message: "Agent attempt not found" }, 404);
+      if (current.organizationId !== auth.principal.organizationId) {
+        return c.json({ error: "organization_denied", message: "Organization access denied" }, 403);
+      }
+      const attempt = await store.requestInterruptAttempt(c.req.param("id"));
+      return c.json({ data: attempt });
+    } catch (error) {
+      if (String(error).includes("not found")) {
+        return c.json({ error: "not_found", message: "Agent attempt not found" }, 404);
+      }
+      if (String(error).includes("has not started")) {
+        return c.json({ error: "attempt_not_running", message: String(error) }, 409);
+      }
+      throw error;
+    }
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

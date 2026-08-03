@@ -75,6 +75,14 @@ test("UI onboarding creates an executable OpenCode company workspace", async () 
     );
     const workSkill = await readFile(join(root, "skills", "company-work", "SKILL.md"), "utf8");
     assert.match(operatorSkill, /skillKeys:\["company-operator","company-work"\]/);
+    assert.match(operatorSkill, /ceo\|cto\|cmo\|cfo\|security/);
+    assert.match(operatorSkill, /"role":"pm"/);
+    assert.match(operatorSkill, /"workKind":"general"/);
+    assert.match(operatorSkill, /"createdAt":"2026-01-01T00:00:00.000Z"/);
+    assert.match(
+      operatorSkill,
+      /"steps":\[\{"id":"step\/execute","agent":"agent\/project-specialist"/,
+    );
     assert.match(operatorSkill, /Delegated work runs in its own session/);
     assert.match(workSkill, /native read, write, shell, and web tools/);
     assert.match(workSkill, /durable artifacts/);

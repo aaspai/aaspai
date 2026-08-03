@@ -17,6 +17,7 @@ export function ExecutionLiveControls({
   const router = useRouter();
   const [connection, setConnection] = useState(TERMINAL.has(status) ? "complete" : "connecting");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (TERMINAL.has(status)) return;
@@ -35,23 +36,38 @@ export function ExecutionLiveControls({
       {!TERMINAL.has(status) && (
         <Button
           size="sm"
-          variant="destructive"
+          variant="outline"
           disabled={busy}
           onClick={async () => {
             setBusy(true);
+            setError(null);
             try {
-              await fetch(`/api/execution/attempts/${encodeURIComponent(attemptId)}/cancel`, {
-                method: "POST",
-              });
+              const response = await fetch(
+                `/api/execution/attempts/${encodeURIComponent(attemptId)}/interrupt`,
+                { method: "POST" },
+              );
+              if (!response.ok) {
+                const body = (await response.json().catch(() => null)) as {
+                  error?: string;
+                } | null;
+                throw new Error(body?.error ?? `Interrupt failed (${response.status})`);
+              }
               router.refresh();
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : String(cause));
             } finally {
               setBusy(false);
             }
           }}
         >
-          {busy ? "Interrupting…" : "Interrupt"}
+          {busy ? "Interrupting…" : "Interrupt & retry"}
         </Button>
       )}
+      {error ? (
+        <span className="text-xs text-destructive" role="alert">
+          {error}
+        </span>
+      ) : null}
     </div>
   );
 }

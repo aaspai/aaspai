@@ -52,7 +52,25 @@ describe("runtime tool policy", () => {
       autoApprove: false,
       dangerouslySkipPermissions: false,
       disableProjectConfig: true,
-      permissions: { "*": "deny", read: "allow", bash: "allow" },
+      permissions: {
+        "*": "deny",
+        read: "allow",
+        bash: "allow",
+        external_directory: "deny",
+      },
+    });
+    const generalOpenCode = enforceRuntimeToolPolicy(
+      "opencode_cli",
+      {},
+      resolved,
+      undefined,
+      "general",
+    );
+    expect(generalOpenCode.adapterConfig.permissions).toMatchObject({
+      "*": "deny",
+      read: "allow",
+      bash: "allow",
+      external_directory: "deny",
     });
   });
 });
