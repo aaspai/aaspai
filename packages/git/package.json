@@ -17,9 +17,6 @@
     "test": "vitest run",
     "clean": "rimraf dist .turbo"
   },
-  "dependencies": {
-    "@aaspai/contracts": "workspace:*"
-  },
   "devDependencies": {
     "@biomejs/biome": "^2.1.1",
     "@types/node": "^24.0.0",

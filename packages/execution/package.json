@@ -28,11 +28,13 @@
     "@aaspai/harness": "workspace:*",
     "@aaspai/knowledge": "workspace:*",
     "@aaspai/runtime": "workspace:*",
-    "@aaspai/sessions": "workspace:*",
     "@aaspai/skills": "workspace:*",
     "@aaspai/tools": "workspace:*"
   },
   "devDependencies": {
+    "@aaspai/company": "workspace:*",
+    "@aaspai/loops": "workspace:*",
+    "@aaspai/sessions": "workspace:*",
     "@biomejs/biome": "^2.1.1",
     "@types/node": "^24.0.0",
     "rimraf": "^6.1.3",

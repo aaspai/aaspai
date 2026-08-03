@@ -110,8 +110,6 @@ export interface BuildOptions {
   fetchGithub?: boolean;
 }
 
-const _MAX_CATALOG_FILE_BYTES = 1024 * 1024; // 1 MiB per file
-
 /**
  * Walk a `catalog/` directory and produce a `CatalogManifest` (and
  * optionally populate a `SkillRegistry`).

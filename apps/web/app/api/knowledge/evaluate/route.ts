@@ -1,8 +1,11 @@
 import { ProcessImprovementService } from "@aaspai/company";
 import { getDefaultDb, runMigrations } from "@aaspai/db";
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { ensureWorkspaceEnv, isAaspaiWorkspace } from "@/lib/aaspai";
 import { currentUser } from "@/lib/local-auth";
+
+const bodySchema = z.object({ staleAfterDays: z.number().int().positive().optional() });
 
 export async function POST(request: Request) {
   const user = await currentUser();
@@ -10,14 +13,16 @@ export async function POST(request: Request) {
   ensureWorkspaceEnv();
   if (!isAaspaiWorkspace())
     return NextResponse.json({ error: "No aaspai workspace" }, { status: 404 });
-  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const parsed = bodySchema.safeParse(await request.json().catch(() => ({})));
+  if (!parsed.success)
+    return NextResponse.json({ error: "Invalid evaluation options" }, { status: 400 });
   const handle = getDefaultDb();
   runMigrations(handle);
   try {
     const data = await new ProcessImprovementService(handle.db).evaluate({
       organizationId: user.organizationId,
       actorId: user.id,
-      staleAfterDays: typeof body.staleAfterDays === "number" ? body.staleAfterDays : undefined,
+      staleAfterDays: parsed.data.staleAfterDays,
     });
     return NextResponse.json({ data }, { status: 201 });
   } catch (error) {

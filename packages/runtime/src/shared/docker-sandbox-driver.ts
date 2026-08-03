@@ -33,7 +33,6 @@ export interface DockerSandboxConfig {
   homeDir?: string;
 }
 
-const _DEFAULT_IMAGE = "aaspai-opencode-test:latest";
 const DEFAULT_HOME = "/root";
 
 /**
@@ -220,7 +219,6 @@ export class DockerSandboxDriver implements SandboxDriver {
       );
     }
     const containerId = rec.containerId;
-    const _homeDir = rec.homeDir;
     const execIn = (
       cmd: string,
       args: string[],

@@ -22,6 +22,7 @@
     "prepublishOnly": "yarn build"
   },
   "dependencies": {
+    "@aaspai/config": "workspace:*",
     "@aaspai/db": "workspace:*",
     "@aaspai/execution": "workspace:*",
     "@aaspai/file-loader": "workspace:*",

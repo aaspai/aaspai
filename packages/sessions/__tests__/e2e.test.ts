@@ -347,10 +347,6 @@ describe("e2e: Sessions.execute() → opencode_cli adapter", () => {
 
     // The DB now has the session row.
     const db = getDefaultDb();
-    const _rows = await db.db
-      .select()
-      .from(schema.sessions)
-      .where(eq(schema.sessions.id, `sess_e2e_happy`.replace("sess_", "sess_")));
     // The session id is the adapter's ses_e2e_happy (from the fake
     // CLI's <e2e:session:> marker), not the sessions-internal one.
     const adapterSession = await db.db
@@ -687,11 +683,6 @@ describe("e2e: Sessions.execute() → opencode_cli adapter", () => {
     // adapter throws synchronously. We force a throw by setting
     // config.command to a non-existent path on Windows.
     const { Sessions } = await import("../src/sessions.js");
-    const _sessions = new Sessions({
-      agentSource: buildAgentSource([makeAgent({ id: "agent/throw" })]),
-      knowledgeSource: buildKnowledgeSource(),
-      skillRegistry: await buildSkillRegistry(),
-    });
     const agent = makeAgent({ id: "agent/throw" });
     agent.adapterConfig = {
       command: "C:\\this\\binary\\definitely\\does\\not\\exist.exe",
@@ -778,7 +769,6 @@ describe("e2e: Sessions.execute() → opencode_cli adapter", () => {
     // back via onLog. The sessions.execute() layer DOES write the
     // composed prompt into configJson (via executionConfig), so we
     // assert it appears there.
-    const _cfg = JSON.parse(row.configJson as string);
     // The full composed prompt isn't in configJson (only the
     // adapterConfig and the override config). So instead we verify
     // the systemPrompt was wired into the agent lookup (the agent
