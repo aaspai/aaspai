@@ -30,7 +30,10 @@ describe("scheduler catch-up", () => {
   it("calculates the next recurring process cadence", () => {
     const after = new Date("2026-07-29T01:07:00.000Z");
     expect(
-      nextScheduledOccurrence({ schedule: { kind: "interval", seconds: 900 } }, after)?.toISOString(),
+      nextScheduledOccurrence(
+        { schedule: { kind: "interval", seconds: 900 } },
+        after,
+      )?.toISOString(),
     ).toBe("2026-07-29T01:22:00.000Z");
     expect(
       nextScheduledOccurrence(

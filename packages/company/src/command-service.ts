@@ -231,7 +231,7 @@ export class CompanyCommandService {
     if (!command.approved)
       throw new CompanyCommandError("founder approval is required to activate a portfolio");
     const profile = await this.profile(command.organizationId);
-    if (!profile || profile.lifecycleStatus !== "review")
+    if (profile?.lifecycleStatus !== "review")
       throw new CompanyCommandError("a reviewed portfolio proposal is required before activation");
     const proposals = await this.db
       .select()
@@ -407,7 +407,7 @@ export class CompanyCommandService {
       return this.result(command, command.organizationId, current?.lifecycleStatus ?? "review");
     }
     const profile = await this.profile(command.organizationId);
-    if (!profile || profile.lifecycleStatus !== "discovery")
+    if (profile?.lifecycleStatus !== "discovery")
       throw new CompanyCommandError("company is not awaiting a discovery proposal");
     if (command.actorId.startsWith("agent/") && command.actorId !== profile.ceoAgentId)
       throw new CompanyCommandError("only the configured CEO may submit a portfolio proposal");
@@ -477,7 +477,7 @@ export class CompanyCommandService {
   ): Promise<CommandResult> {
     await this.requireCeoActor(command.organizationId, command.actorId);
     const profile = await this.profile(command.organizationId);
-    if (!profile || profile.lifecycleStatus !== "active")
+    if (profile?.lifecycleStatus !== "active")
       throw new CompanyCommandError(
         "an approved active portfolio is required before creating projects",
       );
@@ -755,7 +755,8 @@ export class CompanyCommandService {
         (command.loopId !== null && binding.loopId === command.loopId),
     );
     const id =
-      existing?.id ?? stableId("process-binding", `${command.organizationId}:${command.idempotencyKey}`);
+      existing?.id ??
+      stableId("process-binding", `${command.organizationId}:${command.idempotencyKey}`);
     const timestamp = now();
     this.db.transaction((tx) => {
       if (existing) {

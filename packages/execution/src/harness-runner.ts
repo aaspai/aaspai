@@ -749,7 +749,7 @@ export function enforceRuntimeToolPolicy(
   adapterConfig: JsonObject,
   profile: ResolvedAgentProfile,
   tools?: AdapterExecutionContext["tools"],
-  workKind?: WorkKind,
+  _workKind?: WorkKind,
 ): { adapterConfig: JsonObject; tools?: AdapterExecutionContext["tools"] } {
   const approvalRequired = profile.tools.filter(
     (decision) => decision.allowed && decision.requiresApproval,

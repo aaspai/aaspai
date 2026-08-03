@@ -309,7 +309,10 @@ export function scheduledOccurrences(
 }
 
 /** Next automatic occurrence after a completed recurring process cycle. */
-export function nextScheduledOccurrence(loop: Pick<LoopPattern, "schedule">, after: Date): Date | null {
+export function nextScheduledOccurrence(
+  loop: Pick<LoopPattern, "schedule">,
+  after: Date,
+): Date | null {
   if (loop.schedule.kind === "interval" && loop.schedule.seconds) {
     return new Date(after.getTime() + loop.schedule.seconds * 1_000);
   }
