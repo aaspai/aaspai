@@ -8,6 +8,12 @@ builder) the adapters compose.
 
 ## Adapter registry
 
+The registry includes the complete Paperclip provider set: Claude, Codex, Gemini,
+Cursor local/cloud, Grok, Pi, Hermes local/gateway, OpenClaw gateway, OpenCode,
+and the deterministic `dry_run_local` adapter. All registered providers expose
+executable modules and environment probes; provider session state is normalized
+through the optional session codec.
+
 `getAdapter(type)` returns the singleton `ServerAdapterModule` for a known
 `AdapterType`. `listAdapters()` enumerates all of them with their capabilities.
 
@@ -15,11 +21,17 @@ builder) the adapters compose.
 | --------------------- | ------------------ | ------- | --------------------------------------------------------------------------------------------- |
 | `claude_local`        | `local_subprocess` | ready   | Spawns `claude --output-format stream-json --verbose`, parses JSONL.                          |
 | `codex_local`         | `local_subprocess` | ready   | Spawns `codex exec --json`, parses JSONL.                                                     |
+| `gemini_local`        | `local_subprocess` | ready   | ACP-first Gemini CLI adapter with CLI fallback and managed environment isolation.             |
+| `grok_local`          | `local_subprocess` | ready   | Grok Build streaming JSON adapter with resumable sessions.                                    |
+| `pi_local`            | `local_subprocess` | ready   | Pi CLI adapter with model routing and resumable sessions.                                     |
+| `hermes_local`        | `local_subprocess` | ready   | Hermes Agent CLI adapter with model routing and resumable sessions.                           |
+| `hermes`              | `local_subprocess` | ready   | Backward-compatible alias for `hermes_local`.                                                 |
 | `opencode_cli`        | `local_subprocess` | ready   | Spawns `opencode run --format json`, parses JSONL. **Full control surface — see below.**       |
-| `cursor_local`        | `local_subprocess` | stub    | Cursor CLI adapter — not implemented in this slice.                                           |
-| `cursor_cloud`        | `cloud_sdk`        | stub    | Cursor cloud adapter — not implemented.                                                       |
-| `openclaw_gateway`    | `gateway`          | stub    | OpenClaw WebSocket + Ed25519 device pairing.                                                  |
-| `hermes_gateway`      | `gateway`          | stub    | Hermes HTTP/SSE gateway.                                                                     |
+| `cursor_local`        | `local_subprocess` | ready   | Cursor Agent stream-json adapter with resume and managed process execution.                   |
+| `cursor_cloud`        | `cloud_sdk`        | ready   | Cursor HTTPS agent API adapter with polling and resumable cloud sessions.                     |
+| `openclaw_gateway`    | `gateway`          | ready   | OpenClaw WebSocket gateway with token/password and Ed25519 device auth.                      |
+| `hermes_gateway`      | `gateway`          | ready   | Hermes HTTP/SSE gateway with polling fallback and session continuation.                      |
+| `opencode_local`      | `local_subprocess` | ready   | Backward-compatible alias for `opencode_cli`.                                                 |
 | `dry_run_local`       | `local_subprocess` | ready   | No-op deterministic adapter for end-to-end testing without API keys. Includes CEO role.       |
 
 The `capabilitiesFor(info)` helper in `src/registry.ts` derives
@@ -41,6 +53,7 @@ import {
   dryRunLocal, dryRunLocalInfo,
   cursorLocal, cursorLocalInfo,
   cursorCloud, cursorCloudInfo,
+  geminiLocal, grokLocal, piLocal, hermesLocal,
   openclawGateway, openclawGatewayInfo,
   hermesGateway, hermesGatewayInfo,
 

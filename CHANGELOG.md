@@ -159,10 +159,9 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [0.0.0] — Phase 1 foundation
 
 ### Added
-- `packages/harness` — adapter registry + 9 harness adapters
-  (`claude_local`, `codex_local`, `cursor_local`, `cursor_cloud`,
-  `openclaw_gateway`, `hermes_gateway`, `opencode_local`, `opencode_cli`,
-  `dry_run_local`).
+- `packages/harness` — adapter registry covering Claude, Codex, Gemini, Cursor
+  local/cloud, Grok, Pi, Hermes local/gateway, OpenClaw gateway, OpenCode, and
+  `dry_run_local`.
 - `packages/runtime` — execution target registry (local, docker,
   ssh, sandbox). 7 stub drivers.
 - Foundation packages: `audit`, `auth`, `config`, `contracts`,

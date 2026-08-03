@@ -32,10 +32,16 @@ describe("harness contract", () => {
         "codex_local",
         "cursor_local",
         "cursor_cloud",
+        "gemini_local",
+        "grok_local",
+        "pi_local",
+        "hermes_local",
+        "hermes",
         "openclaw_gateway",
         "hermes_gateway",
         "dry_run_local",
         "opencode_cli",
+        "opencode_local",
       ]),
     );
   });
@@ -199,20 +205,15 @@ describe("adapter registry", () => {
     }
   });
 
-  it("marks claude_local and codex_local as ready, the rest as stubs", () => {
-    expect(isAdapterReady("claude_local")).toBe(true);
-    expect(isAdapterReady("codex_local")).toBe(true);
-    expect(isAdapterReady("cursor_local")).toBe(false);
-    expect(isAdapterReady("cursor_cloud")).toBe(false);
-    expect(isAdapterReady("openclaw_gateway")).toBe(false);
-    expect(isAdapterReady("hermes_gateway")).toBe(false);
+  it("marks every registered provider as ready", () => {
+    for (const type of ADAPTER_TYPE_VALUES) expect(isAdapterReady(type)).toBe(true);
   });
 
   it("reports declared adapter capabilities instead of generic optimistic values", () => {
     expect(getAdapterCapabilities("claude_local")).toMatchObject({
       execute: true,
       streaming: true,
-      cancellation: false,
+      cancellation: true,
       timeout: true,
       resume: true,
       billing: "subscription",

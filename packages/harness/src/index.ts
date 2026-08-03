@@ -21,9 +21,18 @@ export {
 export { cursorCloud, cursorCloudInfo } from "./drivers/cursor-cloud/index.js";
 export { cursorLocal, cursorLocalInfo } from "./drivers/cursor-local/index.js";
 export { dryRunLocal, dryRunLocalInfo } from "./drivers/dry-run-local/index.js";
+export type { GeminiLocalConfig } from "./drivers/gemini-local/config.js";
+export {
+  geminiLocalConfigSchema,
+  parseGeminiLocalConfig,
+} from "./drivers/gemini-local/config.js";
+export { geminiLocal } from "./drivers/gemini-local/index.js";
+export { grokLocal } from "./drivers/grok-local/index.js";
+export { hermes, hermesLocal } from "./drivers/hermes/index.js";
 export { hermesGateway, hermesGatewayInfo } from "./drivers/hermes-gateway/index.js";
 export { openclawGateway, openclawGatewayInfo } from "./drivers/openclaw-gateway/index.js";
 export { opencodeCli, opencodeCliInfo } from "./drivers/opencode-cli/index.js";
+export { piLocal } from "./drivers/pi-local/index.js";
 export {
   ADAPTER_REGISTRY_VERSION,
   getAdapter,
@@ -32,9 +41,11 @@ export {
   listAdapters,
 } from "./registry.js";
 export {
+  cancelAcpSession,
   executeAcp,
   nodeVersionMeetsAcpMinimum,
   parseAcpConfig,
+  resolveAcpEngine,
   testAcpEnvironment,
 } from "./shared/acp.js";
 export { buildAgentEnv } from "./shared/env.js";
@@ -58,6 +69,14 @@ export {
 } from "./shared/redact.js";
 export { runProcess } from "./shared/run-process.js";
 export { SANDBOX_STUB_MESSAGE, SandboxTransportUnavailableError } from "./shared/sandbox.js";
+export {
+  acpSessionCodec,
+  cursorCloudSessionCodec,
+  hermesSessionCodec,
+  localSessionCodec,
+  openclawSessionCodec,
+  opencodeSessionCodec,
+} from "./shared/session-codec.js";
 export {
   ensureSshTransportAvailable,
   SSH_STUB_MESSAGE,

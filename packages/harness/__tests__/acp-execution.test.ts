@@ -4,7 +4,12 @@ import { join } from "node:path";
 import type { AdapterExecutionContext } from "@aaspai/contracts/harness";
 import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
 import { describe, expect, it } from "vitest";
-import { type AcpExecutorOptions, executeAcp } from "../src/shared/acp.js";
+import {
+  type AcpExecutorOptions,
+  executeAcp,
+  parseAcpConfig,
+  resolveAcpEngine,
+} from "../src/shared/acp.js";
 
 function context(
   stateDir: string,
@@ -92,5 +97,108 @@ describe("shared ACP execution", () => {
     expect(logs.some((line) => line.includes('"kind":"assistant"'))).toBe(true);
     expect(logs.some((line) => line.includes('"kind":"tool_result"'))).toBe(true);
     expect(closed).toBe(true);
+  });
+
+  it("fails closed when a managed execution boundary lacks controlled ACP support", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aaspai-harness-acp-boundary-"));
+    const result = await executeAcp(
+      {
+        ...context(stateDir, async () => undefined),
+        execution: {
+          identity: { kind: "local", cwd: stateDir },
+          run: async () => {
+            throw new Error("must not be called");
+          },
+        },
+      },
+      "claude",
+      {},
+      { nodeVersion: "v22.12.0" },
+    );
+
+    expect(result.errorCode).toBe("acp_runtime_boundary_unavailable");
+  });
+
+  it("falls back from auto ACP on unsupported Node versions", async () => {
+    const selection = await resolveAcpEngine(
+      "claude",
+      { config: { engine: "auto" }, cwd: process.cwd() },
+      { nodeVersion: "v20.18.0" },
+    );
+
+    expect(selection).toMatchObject({ engine: "cli", explicit: false });
+    expect(selection.fallbackReason).toContain("Node");
+  });
+
+  it("rejects unsupported ACP permissions before starting a runtime", async () => {
+    const selection = await resolveAcpEngine(
+      "claude",
+      { config: { engine: "auto", permissionMode: "unsafe" }, cwd: process.cwd() },
+      { nodeVersion: "v22.12.0" },
+    );
+
+    expect(selection).toMatchObject({ engine: "cli", explicit: false });
+    expect(selection.fallbackReason).toContain("permission mode");
+  });
+
+  it("scopes default state to organization and agent", () => {
+    const parsed = parseAcpConfig("codex", {}, { organizationId: "org_a", agentId: "agent_b" });
+    expect(parsed.stateDir).toContain("org_a");
+    expect(parsed.stateDir).toContain("agent_b");
+  });
+
+  it("passes controlled environment and ACP policy to the runtime", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aaspai-harness-acp-policy-"));
+    let sessionOptions: Record<string, unknown> | undefined;
+    const configOptions: Array<{ key: string; value: string }> = [];
+    const fakeRuntime = {
+      ensureSession: async (input: { sessionOptions?: Record<string, unknown> }) => {
+        sessionOptions = input.sessionOptions;
+        return { sessionKey: "key", backend: "acpx", runtimeSessionName: "runtime" };
+      },
+      setConfigOption: async (input: { key: string; value: string }) => {
+        configOptions.push(input);
+      },
+      startTurn: () => ({
+        events: (async function* () {
+          yield { type: "text_delta" as const, text: "ok", stream: "output" as const };
+        })(),
+        result: Promise.resolve({ status: "completed" as const }),
+        cancel: async () => undefined,
+      }),
+      close: async () => undefined,
+      getStatus: async () => undefined,
+    };
+    const result = await executeAcp(
+      {
+        ...context(stateDir, async () => undefined),
+        config: {
+          stateDir,
+          acpAllowedTools: ["Read"],
+          effort: "high",
+          warmHandleIdleMs: 0,
+        },
+        execution: {
+          identity: { kind: "local", cwd: stateDir },
+          environment: { env: { AASPAI_EPHEMERAL_TOKEN: "runtime-only" }, inheritEnv: false },
+          run: async () => {
+            throw new Error("ACP should not use the CLI runner");
+          },
+        },
+      },
+      "claude",
+      {},
+      {
+        createRuntime: (() => fakeRuntime) as unknown as AcpExecutorOptions["createRuntime"],
+        nodeVersion: "v22.12.0",
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(sessionOptions).toMatchObject({
+      allowedTools: ["Read"],
+      env: { AASPAI_EPHEMERAL_TOKEN: "runtime-only" },
+    });
+    expect(configOptions).toMatchObject([{ key: "effort", value: "high" }]);
   });
 });

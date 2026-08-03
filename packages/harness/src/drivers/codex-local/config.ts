@@ -16,6 +16,8 @@ export const codexLocalConfigSchema = z
     nonInteractivePermissions: z.enum(["deny", "fail"]).optional(),
     stateDir: z.string().trim().min(1).max(8_192).optional(),
     acpStateDir: z.string().trim().min(1).max(8_192).optional(),
+    acpAllowedTools: z.array(z.string().trim().min(1).max(128)).max(128).optional(),
+    warmHandleIdleMs: nonNegativeIntegerSchema.max(86_400_000).optional(),
     sandbox: codexSandboxSchema.default("workspace-write"),
     approvalMode: z.enum(["untrusted", "on-failure", "on-request", "never"]).default("never"),
     maxTurns: positiveIntegerSchema.max(1_000).optional(),
@@ -68,6 +70,8 @@ Core fields:
 - acpPermissionMode (string, optional): ACP permission mode
 - nonInteractivePermissions (string, optional): ACP fallback, "deny" or "fail"
 - stateDir/acpStateDir (string, optional): ACP session state directory
+- acpAllowedTools (string[]): allowlisted native tools for ACP sessions
+- warmHandleIdleMs (number, optional): retain persistent ACP processes for this idle period
 - sandbox (string, default "workspace-write"): "read-only" | "workspace-write" | "danger-full-access"
 - approvalMode (string, default "never"): "untrusted" | "on-failure" | "on-request" | "never"
 - maxTurns (number, optional): cap agent turns per run

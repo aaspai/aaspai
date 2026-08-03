@@ -179,6 +179,18 @@ export class HarnessExecutionPlanRunner {
     });
 
     let result: AdapterExecutionResult;
+    const managedExecutionEnv = {
+      ...managedEnvironmentBaseline(input.plan.target.kind),
+      ...managedAdapterEnvironment(
+        typeof adapterConfig.env === "object" &&
+          adapterConfig.env !== null &&
+          !Array.isArray(adapterConfig.env)
+          ? (adapterConfig.env as Record<string, string>)
+          : undefined,
+        adapterConfig,
+      ),
+      ...input.ephemeralEnv,
+    };
     try {
       result = await adapter.execute({
         protocolVersion: HARNESS_PROTOCOL_VERSION,
@@ -216,14 +228,17 @@ export class HarnessExecutionPlanRunner {
             cwd:
               input.plan.target.kind === "ssh" ? input.plan.target.remoteCwd : input.workspace.path,
           },
+          environment: {
+            env: managedExecutionEnv,
+            inheritEnv: false,
+          },
           run: async (options) => {
             const result = await target.run(targetInput, {
               ...options,
               cwd: input.workspace.path,
               env: {
-                ...managedEnvironmentBaseline(input.plan.target.kind),
+                ...managedExecutionEnv,
                 ...managedAdapterEnvironment(options.env, adapterConfig),
-                ...input.ephemeralEnv,
               },
               inheritEnv: false,
               timeoutMs: requiresRuntimeExecution(adapterType)
@@ -313,6 +328,18 @@ export class HarnessExecutionPlanRunner {
     }
 
     result = redactResult(result, ephemeralSecrets);
+
+    if (adapter.sessionCodec && (result.sessionParams || result.sessionId)) {
+      const encoded = adapter.sessionCodec.serialize(
+        result.sessionParams ?? (result.sessionId ? { sessionId: result.sessionId } : null),
+      ) as JsonObject | null;
+      const displayId = adapter.sessionCodec.getDisplayId?.(encoded);
+      result = {
+        ...result,
+        sessionParams: encoded ?? undefined,
+        ...(displayId ? { sessionDisplayId: displayId } : {}),
+      };
+    }
 
     if (
       result.exitCode === 0 &&
@@ -488,7 +515,7 @@ function normalizeSessionLine(
   const ts = new Date().toISOString();
   if (adapter === "codex_local") return withToolResultStatus(parseCodexStreamLine(line, ts));
   if (adapter === "claude_local") return withToolResultStatus(parseClaudeStreamLine(line, ts));
-  if (adapter !== "opencode_cli") return [];
+  if (adapter !== "opencode_cli" && adapter !== "opencode_local") return [];
 
   const part = isRecord(parsed.part) ? parsed.part : {};
   const state = isRecord(part.state) ? part.state : {};
@@ -628,10 +655,21 @@ const MANAGED_OPENCODE_ENV_KEYS = new Set([
   "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
 ]);
 
+const MANAGED_LOCAL_RUNTIME_ENV_KEYS = new Set([
+  "PATH",
+  "Path",
+  "HOME",
+  "USERPROFILE",
+  "SystemRoot",
+  "COMSPEC",
+  "TEMP",
+  "TMP",
+]);
+
 function managedEnvironmentBaseline(kind: ExecutionTarget["kind"]): Record<string, string> {
   if (kind !== "local") return {};
   return Object.fromEntries(
-    MANAGED_ENV_BASELINE_KEYS.flatMap((key) => {
+    [...MANAGED_ENV_BASELINE_KEYS, ...MANAGED_LOCAL_RUNTIME_ENV_KEYS].flatMap((key) => {
       const value = process.env[key];
       return value === undefined ? [] : [[key, value]];
     }),
@@ -659,7 +697,7 @@ function managedAdapterEnvironment(
 }
 
 function requiresRuntimeExecution(adapter: AdapterType): boolean {
-  return ["claude_local", "codex_local", "opencode_cli"].includes(adapter);
+  return adapter !== "dry_run_local" && getAdapter(adapter).info.transport === "local_subprocess";
 }
 
 function resolveStuckAfterMs(config: JsonObject): number {
@@ -824,6 +862,7 @@ export function enforceRuntimeToolPolicy(
         ...adapterConfig,
         sandbox: "workspace-write",
         approvalMode: "never",
+        acpAllowedTools: nativeBundle,
       },
       tools: guardedTools,
     };
@@ -840,13 +879,14 @@ export function enforceRuntimeToolPolicy(
       adapterConfig: {
         ...adapterConfig,
         tools: boundedNativeAllowed,
+        acpAllowedTools: boundedNativeAllowed,
         permissionMode: "default",
         dangerouslySkipPermissions: false,
       },
       tools: guardedTools,
     };
   }
-  if (adapter === "opencode_cli") {
+  if (adapter === "opencode_cli" || adapter === "opencode_local") {
     return {
       adapterConfig: {
         ...adapterConfig,

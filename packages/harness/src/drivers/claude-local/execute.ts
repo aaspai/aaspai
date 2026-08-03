@@ -6,11 +6,17 @@ import type {
   UsageSummary,
 } from "@aaspai/contracts/harness";
 import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
-import { executeAcp, testAcpEnvironment } from "../../shared/acp.js";
+import {
+  cancelAcpSession,
+  executeAcp,
+  resolveAcpEngine,
+  testAcpEnvironment,
+} from "../../shared/acp.js";
 import { buildAgentEnv } from "../../shared/env.js";
 import { createJsonlFramer } from "../../shared/jsonl.js";
 import { redactCommandText, redactHomePath } from "../../shared/redact.js";
 import { runProcess } from "../../shared/run-process.js";
+import { acpSessionCodec } from "../../shared/session-codec.js";
 import type { ClaudeStreamEvent } from "./config.js";
 import { type ClaudeLocalConfig, claudeLocalInfo, parseClaudeLocalConfig } from "./config.js";
 import { parseClaudeStreamLine } from "./parse.js";
@@ -26,8 +32,10 @@ const REDACTED_TEXT_VALUE = "[REDACTED]";
  */
 export const claudeLocal: ServerAdapterModule = {
   info: claudeLocalInfo,
+  sessionCodec: acpSessionCodec,
   execute,
   testEnvironment,
+  cancel: async (request) => cancelAcpSession(request.sessionId),
   describe: () => ({
     type: "claude_local",
     label: claudeLocalInfo.label,
@@ -44,7 +52,7 @@ export const claudeLocal: ServerAdapterModule = {
       "WebSearch",
       "Write",
     ],
-    supportsCancel: false,
+    supportsCancel: true,
     supportsCompact: false,
     supportsFork: false,
     supportsResume: true,
@@ -64,11 +72,21 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       err instanceof Error ? err.message : String(err),
     );
   }
-  if (
-    config.engine === "acp" ||
-    (config.engine === "auto" && (!ctx.execution || ctx.execution.identity?.kind === "local"))
-  ) {
+  const engine = await resolveAcpEngine("claude", {
+    config: ctx.config,
+    cwd: ctx.context.cwd,
+    execution: ctx.execution,
+    organizationId: ctx.organizationId,
+    agentId: ctx.agent.id,
+  });
+  if (engine.engine === "acp") {
     return executeAcp(ctx, "claude", { timeoutSec: config.timeoutSec });
+  }
+  if (!engine.explicit && engine.fallbackReason) {
+    await ctx.onLog(
+      "stderr",
+      `[aaspai] Claude ACP unavailable; falling back to CLI. ${engine.fallbackReason}\n`,
+    );
   }
   const command = config.command;
   const args = buildClaudeArgs(config, ctx);
@@ -232,8 +250,26 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
   ok: boolean;
   checks: { name: string; level: "info" | "warn" | "error"; message: string }[];
 }> {
-  const config = parseClaudeLocalConfig(ctx.config);
-  if (config.engine === "acp") {
+  let config: ClaudeLocalConfig;
+  try {
+    config = parseClaudeLocalConfig(ctx.config);
+  } catch (error) {
+    return {
+      ok: false,
+      checks: [
+        {
+          name: "config",
+          level: "error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      ],
+    };
+  }
+  const engine = await resolveAcpEngine("claude", {
+    config: (ctx.config ?? {}) as AdapterExecutionContext["config"],
+    cwd: ctx.cwd,
+  });
+  if (engine.engine === "acp") {
     return testAcpEnvironment("claude", {
       config: ctx.config,
       cwd: ctx.cwd,
@@ -248,6 +284,15 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
   return {
     ok,
     checks: [
+      ...(engine.fallbackReason
+        ? [
+            {
+              name: "acp_fallback",
+              level: "warn" as const,
+              message: `ACP unavailable; testing the Claude CLI fallback: ${engine.fallbackReason}`,
+            },
+          ]
+        : []),
       {
         name: "claude_cli",
         level: installed ? "info" : "error",

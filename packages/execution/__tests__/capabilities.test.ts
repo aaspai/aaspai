@@ -6,9 +6,11 @@ import {
 } from "../src/capabilities.js";
 
 describe("provider capability guards", () => {
-  it("accepts an executable harness and rejects a stub before dispatch", () => {
+  it("accepts every registered harness before dispatch", () => {
     expect(() => assertHarnessExecutable("dry_run_local")).not.toThrow();
-    expect(() => assertHarnessExecutable("cursor_local")).toThrowError(ProviderCapabilityError);
+    expect(() => assertHarnessExecutable("cursor_local")).not.toThrow();
+    expect(() => assertHarnessExecutable("gemini_local")).not.toThrow();
+    expect(() => assertHarnessExecutable("openclaw_gateway")).not.toThrow();
   });
 
   it("rejects a stub runtime with a stable error code", () => {
