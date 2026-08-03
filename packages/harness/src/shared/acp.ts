@@ -50,6 +50,7 @@ type RuntimeFactory = typeof createAcpRuntime;
 
 export interface AcpExecutorOptions {
   createRuntime?: RuntimeFactory;
+  nodeVersion?: string;
 }
 
 function normalizeAgentCommand(command: string | undefined): string | undefined {
@@ -338,7 +339,7 @@ export async function executeAcp(
   defaults: { timeoutSec?: number; stateDir?: string } = {},
   options: AcpExecutorOptions = {},
 ): Promise<AdapterExecutionResult> {
-  if (!nodeVersionMeetsAcpMinimum(agent)) {
+  if (!nodeVersionMeetsAcpMinimum(agent, options.nodeVersion)) {
     return resultForError(
       new Error(
         `${agent} ACP requires Node >=${MIN_NODE_VERSION[agent].join(".")} (running ${process.version})`,

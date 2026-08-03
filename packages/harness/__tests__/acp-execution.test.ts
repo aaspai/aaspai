@@ -73,6 +73,7 @@ describe("shared ACP execution", () => {
     };
     const options: AcpExecutorOptions = {
       createRuntime: (() => fakeRuntime) as unknown as AcpExecutorOptions["createRuntime"],
+      nodeVersion: "v22.12.0",
     };
 
     const result = await executeAcp(
