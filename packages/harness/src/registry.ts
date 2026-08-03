@@ -9,9 +9,13 @@ import { codexLocal } from "./drivers/codex-local/index.js";
 import { cursorCloud } from "./drivers/cursor-cloud/index.js";
 import { cursorLocal } from "./drivers/cursor-local/index.js";
 import { dryRunLocal } from "./drivers/dry-run-local/index.js";
+import { geminiLocal } from "./drivers/gemini-local/index.js";
+import { grokLocal } from "./drivers/grok-local/index.js";
+import { hermes, hermesLocal } from "./drivers/hermes/index.js";
 import { hermesGateway } from "./drivers/hermes-gateway/index.js";
 import { openclawGateway } from "./drivers/openclaw-gateway/index.js";
 import { opencodeCli } from "./drivers/opencode-cli/index.js";
+import { piLocal } from "./drivers/pi-local/index.js";
 
 /**
  * The full adapter registry. Maps every known `AdapterType` to its
@@ -27,10 +31,19 @@ const ADAPTERS: Readonly<Record<AdapterType, ServerAdapterModule>> = Object.free
   codex_local: codexLocal,
   cursor_local: cursorLocal,
   cursor_cloud: cursorCloud,
+  gemini_local: geminiLocal,
+  grok_local: grokLocal,
+  pi_local: piLocal,
+  hermes_local: hermesLocal,
+  hermes,
   openclaw_gateway: openclawGateway,
   hermes_gateway: hermesGateway,
   dry_run_local: dryRunLocal,
   opencode_cli: opencodeCli,
+  opencode_local: {
+    ...opencodeCli,
+    info: { ...opencodeCli.info, type: "opencode_local" },
+  },
 });
 
 function capabilitiesFor(module: ServerAdapterModule): ProviderCapabilities {
@@ -51,13 +64,7 @@ function capabilitiesFor(module: ServerAdapterModule): ProviderCapabilities {
   const description = module.describe?.();
   const supports = description && !(description instanceof Promise) ? description : undefined;
   const billing =
-    info.type === "dry_run_local"
-      ? "free"
-      : info.type === "claude_local"
-        ? "subscription"
-        : info.type === "codex_local" || info.type === "opencode_cli"
-          ? "api"
-          : "unknown";
+    info.type === "dry_run_local" ? "free" : info.type === "claude_local" ? "subscription" : "api";
   return {
     execute: true,
     streaming: info.transport !== "cloud_sdk",

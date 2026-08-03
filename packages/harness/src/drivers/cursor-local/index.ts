@@ -1,43 +1,39 @@
 import type { ServerAdapterModule } from "@aaspai/contracts/harness";
-import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
+import { createLocalAgentAdapter, standardLocalArgs } from "../../shared/local-agent.js";
 
-export const cursorLocalInfo = {
-  type: "cursor_local" as const,
-  label: "Cursor (local)",
-  transport: "local_subprocess" as const,
-  models: [
-    { id: "auto", label: "Auto" },
-    { id: "sonnet", label: "Claude Sonnet" },
-    { id: "opus", label: "Claude Opus" },
-  ],
-  agentConfigurationDoc: "# cursor_local\n\nStub. Real impl pending.",
-  status: "stub" as const,
-};
-
-const STUB_MESSAGE = "cursor_local is a stub in @aaspai/harness. Wire it up when you need it.";
-
-export const cursorLocal: ServerAdapterModule = {
-  info: cursorLocalInfo,
-  execute: async () => ({
-    protocolVersion: HARNESS_PROTOCOL_VERSION,
-    exitCode: 1,
-    timedOut: false,
-    errorMessage: STUB_MESSAGE,
-    errorFamily: "internal" as const,
-    summary: "stub",
-    usageBasis: "per_run" as const,
-    clearSession: false,
-  }),
-  testEnvironment: async () => ({
-    ok: false,
-    checks: [
-      {
-        name: "stub",
-        level: "warn" as const,
-        message: STUB_MESSAGE,
-      },
+export const cursorLocal: ServerAdapterModule = createLocalAgentAdapter({
+  info: {
+    type: "cursor_local",
+    label: "Cursor Agent",
+    transport: "local_subprocess",
+    models: [
+      { id: "auto", label: "Auto" },
+      { id: "composer-1.5", label: "Composer 1.5" },
+      { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+      { id: "sonnet-4.6", label: "Sonnet 4.6" },
     ],
-  }),
-};
+    agentConfigurationDoc: `# cursor_local
+
+Runs Cursor Agent with stream-json output, model selection, resumable sessions, and the managed runtime process boundary.
+`,
+    status: "ready",
+  },
+  command: "agent",
+  promptMode: "stdin",
+  resumeFlag: "--resume",
+  buildArgs: (config, ctx) => [
+    "-p",
+    "--output-format",
+    "stream-json",
+    ...standardLocalArgs(config, ctx, {
+      resumeFlag: "--resume",
+      modelFlag: "--model",
+      modeFlag: "--mode",
+      yoloFlag: "--yolo",
+    }),
+  ],
+});
+
+export const cursorLocalInfo = cursorLocal.info;
 
 export const module: ServerAdapterModule = cursorLocal;

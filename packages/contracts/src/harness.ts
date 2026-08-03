@@ -22,10 +22,16 @@ export const ADAPTER_TYPE_VALUES = [
   "codex_local",
   "cursor_local",
   "cursor_cloud",
+  "gemini_local",
+  "grok_local",
+  "pi_local",
+  "hermes_local",
+  "hermes",
   "openclaw_gateway",
   "hermes_gateway",
   "dry_run_local",
   "opencode_cli",
+  "opencode_local",
 ] as const;
 
 export const adapterTypeSchema = z.enum(ADAPTER_TYPE_VALUES);
@@ -59,6 +65,15 @@ export type AdapterRuntime = z.infer<typeof adapterRuntimeSchema>;
 export interface AdapterRuntimeExecution {
   run(options: RunProcessOptions): Promise<RunProcessResult>;
   identity?: Record<string, unknown>;
+  /**
+   * Environment selected by the runtime owner for adapter-owned child
+   * processes. This is deliberately ephemeral and is not persisted with the
+   * agent configuration.
+   */
+  environment?: {
+    env: Record<string, string>;
+    inheritEnv?: boolean;
+  };
 }
 
 /** Token accounting for a run. */
@@ -184,6 +199,8 @@ export const adapterExecutionContextSchema = z
         prompt: z.string().trim().min(1).max(1_048_576),
         systemPrompt: z.string().max(1_048_576).optional(),
         role: z.string().trim().min(1).max(64).optional(),
+        issueId: identifierSchema.optional(),
+        taskId: identifierSchema.optional(),
         attachments: z
           .array(
             z
@@ -605,6 +622,17 @@ export const adapterDescribeSchema = z
   .strict();
 export type AdapterDescribe = z.infer<typeof adapterDescribeSchema>;
 
+export const adapterSessionCodecSchema = z
+  .object({
+    deserialize: z.custom<(raw: unknown) => unknown>((v) => typeof v === "function"),
+    serialize: z.custom<(params: unknown) => unknown>((v) => typeof v === "function"),
+    getDisplayId: z
+      .custom<(params: unknown) => string | null>((v) => typeof v === "function")
+      .optional(),
+  })
+  .strict();
+export type AdapterSessionCodec = z.infer<typeof adapterSessionCodecSchema>;
+
 /** The full adapter contract. */
 export const serverAdapterModuleSchema = z
   .object({
@@ -616,6 +644,7 @@ export const serverAdapterModuleSchema = z
     testEnvironment: z.custom<
       (ctx: AdapterEnvironmentTestContext) => Promise<AdapterEnvironmentTestResult>
     >((v) => typeof v === "function", { message: "testEnvironment must be a function" }),
+    sessionCodec: adapterSessionCodecSchema.optional(),
     // Tier 3 (this pass): out-of-band operations. All optional; default = "not supported".
     cancel: z
       .custom<(req: AdapterCancelRequest) => Promise<AdapterCancelResult>>(
@@ -675,14 +704,3 @@ export const adapterConfigSchemaSchema = z
   })
   .strict();
 export type AdapterConfigSchema = z.infer<typeof adapterConfigSchemaSchema>;
-
-export const adapterSessionCodecSchema = z
-  .object({
-    deserialize: z.custom<(raw: unknown) => unknown>((v) => typeof v === "function"),
-    serialize: z.custom<(params: unknown) => unknown>((v) => typeof v === "function"),
-    getDisplayId: z
-      .custom<(params: unknown) => string | null>((v) => typeof v === "function")
-      .optional(),
-  })
-  .strict();
-export type AdapterSessionCodec = z.infer<typeof adapterSessionCodecSchema>;

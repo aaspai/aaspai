@@ -74,6 +74,7 @@ import {
 } from "@aaspai/contracts/harness";
 import { type JsonObject, type JsonValue, jsonObjectSchema } from "@aaspai/contracts/primitives";
 import { getLogger } from "@aaspai/observability";
+import { opencodeSessionCodec } from "../../shared/session-codec.js";
 
 const log = getLogger("harness.opencode-cli");
 const MAX_RESULT_TEXT_BYTES = 1024 * 1024;
@@ -2585,6 +2586,7 @@ export const opencodeCli: ServerAdapterModule = {
       "Spawns the opencode CLI (npm i -g opencode-ai). Auth via ~/.local/share/opencode/auth.json. Use `opencode models` to list available models. Optional command and commandArgs fields support managed wrappers and deterministic runners.",
     status: "ready",
   },
+  sessionCodec: opencodeSessionCodec,
   async execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
     const config = resolveConfig(ctx);
     const prompt =

@@ -53,9 +53,9 @@ required, no network call. Switch to a real LLM by setting
   runtime state (`.aaspai/state.db`) stays out.
 - **Two-storage tier** — your project (versioned) vs. `.aaspai/`
   (gitignored). The CLI enforces the boundary.
-- **Eight harness adapters** — `dry_run_local`, `claude_local`,
-  `codex_local`, `cursor_local`, `cursor_cloud`, `opencode_cli`, plus
-  gateway stubs. Same agent
+- **Provider harness adapters** — `dry_run_local`, Claude, Codex, Gemini,
+  Cursor local/cloud, Grok, Pi, Hermes local/gateway, OpenClaw gateway, and
+  OpenCode. Same agent
   contract, swap adapters per agent.
 - **Seven starter loops** — `daily-triage`, `pr-babysitter`,
   `ci-sweeper`, `dependency-sweeper`, `changelog-drafter`,

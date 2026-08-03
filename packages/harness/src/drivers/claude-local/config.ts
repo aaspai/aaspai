@@ -23,6 +23,8 @@ export const claudeLocalConfigSchema = z
     nonInteractivePermissions: z.enum(["deny", "fail"]).optional(),
     stateDir: z.string().trim().min(1).max(8_192).optional(),
     acpStateDir: z.string().trim().min(1).max(8_192).optional(),
+    acpAllowedTools: z.array(z.string().trim().min(1).max(128)).max(128).optional(),
+    warmHandleIdleMs: nonNegativeIntegerSchema.max(86_400_000).optional(),
     maxTurns: positiveIntegerSchema.max(1_000).optional(),
     timeoutSec: positiveIntegerSchema.max(86_400).optional(),
     graceSec: positiveIntegerSchema.max(300).default(15),
@@ -76,6 +78,8 @@ Core fields:
 - acpPermissionMode (string, optional): ACP permission mode
 - nonInteractivePermissions (string, optional): ACP fallback, "deny" or "fail"
 - stateDir/acpStateDir (string, optional): ACP session state directory
+- acpAllowedTools (string[]): allowlisted native tools for ACP sessions
+- warmHandleIdleMs (number, optional): retain persistent ACP processes for this idle period
 - maxTurns (number, optional): cap agent turns per run
 - timeoutSec (number, optional): hard timeout in seconds
 - graceSec (number, default 15): SIGTERM grace before SIGKILL
