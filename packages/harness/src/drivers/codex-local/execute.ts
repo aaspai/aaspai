@@ -6,7 +6,9 @@ import type {
   UsageSummary,
 } from "@aaspai/contracts/harness";
 import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
+import { executeAcp, testAcpEnvironment } from "../../shared/acp.js";
 import { buildAgentEnv } from "../../shared/env.js";
+import { createJsonlFramer } from "../../shared/jsonl.js";
 import { redactCommandText, redactHomePath } from "../../shared/redact.js";
 import { runProcess } from "../../shared/run-process.js";
 import type { CodexStreamEvent } from "./config.js";
@@ -51,6 +53,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       err instanceof Error ? err.message : String(err),
     );
   }
+  if (
+    config.engine === "acp" ||
+    (config.engine === "auto" && (!ctx.execution || ctx.execution.identity?.kind === "local"))
+  ) {
+    return executeAcp(ctx, "codex", { timeoutSec: config.timeoutSec });
+  }
   const command = config.command;
   const args = buildCodexArgs(config, ctx);
   const env = {
@@ -76,41 +84,82 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let sessionId: string | undefined;
   const model: string | undefined = config.model;
   let timedOut = false;
+  let inactivityTimedOut = false;
+  const monitorController = new AbortController();
+  const stdoutFramer = createJsonlFramer();
+  let sawStdoutLine = false;
+  let monitorActive = true;
+  let inactivityTimer: NodeJS.Timeout | undefined;
+  const resetInactivityTimer = (): void => {
+    if (!monitorActive) return;
+    if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(() => {
+      inactivityTimedOut = true;
+      monitorController.abort();
+    }, config.outputInactivityTimeoutMs);
+    inactivityTimer.unref();
+  };
+  resetInactivityTimer();
+  const onAbort = (): void => monitorController.abort();
+  if (ctx.signal?.aborted) onAbort();
+  else ctx.signal?.addEventListener("abort", onAbort, { once: true });
+
+  const processLine = async (line: string, emit: boolean): Promise<void> => {
+    if (line.length === 0) return;
+    sawStdoutLine = true;
+    resetInactivityTimer();
+    const entries = parseCodexStreamLine(line, new Date().toISOString());
+    for (const entry of entries) {
+      if (entry.kind === "assistant" && typeof entry.text === "string") {
+        collectedText.push(entry.text);
+      } else if (entry.kind === "init") {
+        if (entry.sessionId) sessionId = entry.sessionId;
+      }
+    }
+    if (emit) await ctx.onLog("stdout", line);
+  };
 
   const onLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
     if (stream === "stderr") {
-      collectedErrors.push(redactHomePath(chunk));
-      await ctx.onLog(stream, redactHomePath(chunk));
+      const redacted = redactHomePath(chunk);
+      collectedErrors.push(redacted);
+      await ctx.onLog(stream, redacted);
     } else {
-      for (const line of chunk.split(/\r?\n/)) {
-        if (line.length === 0) continue;
-        const entries = parseCodexStreamLine(line, new Date().toISOString());
-        for (const entry of entries) {
-          if (entry.kind === "assistant" && typeof entry.text === "string") {
-            collectedText.push(entry.text);
-          } else if (entry.kind === "init") {
-            if (entry.sessionId) sessionId = entry.sessionId;
-          } else if (entry.kind === "result") {
-          }
-        }
-        await ctx.onLog(stream, line);
-      }
+      for (const line of stdoutFramer.push(chunk)) await processLine(line, true);
     }
   };
 
-  const result = await (ctx.execution?.run ?? runProcess)({
-    command,
-    args,
-    cwd,
-    env,
-    stdin,
-    signal: ctx.signal,
-    timeoutMs,
-    onLog,
-  });
-  timedOut = result.timedOut;
+  let result: Awaited<ReturnType<typeof runProcess>>;
+  try {
+    result = await (ctx.execution?.run ?? runProcess)({
+      command,
+      args,
+      cwd,
+      env,
+      stdin,
+      signal: monitorController.signal,
+      timeoutMs,
+      graceMs: config.graceSec * 1_000,
+      onLog,
+    });
+  } finally {
+    monitorActive = false;
+    if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
+    ctx.signal?.removeEventListener("abort", onAbort);
+  }
+  for (const line of stdoutFramer.flush()) await processLine(line, true);
+  timedOut = result.timedOut || inactivityTimedOut;
 
-  for (const line of result.stdout.split(/\r?\n/)) {
+  // Managed runtimes may return buffered stdout without invoking onLog.
+  if (!sawStdoutLine && result.stdout) {
+    const fallbackFramer = createJsonlFramer();
+    for (const line of [...fallbackFramer.push(result.stdout), ...fallbackFramer.flush()]) {
+      await processLine(line, false);
+    }
+  }
+
+  const metadataFramer = createJsonlFramer();
+  for (const line of [...metadataFramer.push(result.stdout), ...metadataFramer.flush()]) {
     if (line.trim().length === 0) continue;
     let parsed: unknown;
     try {
@@ -140,7 +189,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       protocolVersion: HARNESS_PROTOCOL_VERSION,
       exitCode: result.exitCode,
       timedOut: true,
-      errorMessage: "Run exceeded timeout",
+      errorMessage: inactivityTimedOut
+        ? `No Codex output for ${config.outputInactivityTimeoutMs}ms`
+        : "Run exceeded timeout",
       errorFamily: "transient_upstream",
       summary: summary || undefined,
       usage: collectedUsage.inputTokens !== undefined ? collectedUsage : undefined,
@@ -197,6 +248,12 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
   checks: { name: string; level: "info" | "warn" | "error"; message: string }[];
 }> {
   const config = parseCodexLocalConfig(ctx.config);
+  if (config.engine === "acp") {
+    return testAcpEnvironment("codex", {
+      config: ctx.config,
+      cwd: ctx.cwd,
+    });
+  }
   const result = await runProcess({ command: config.command, args: ["--version"], cwd: ctx.cwd });
   const installed = result.exitCode === 0;
   const auth = installed

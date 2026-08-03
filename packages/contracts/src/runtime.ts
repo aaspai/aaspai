@@ -88,6 +88,8 @@ export const runProcessOptionsSchema = z
       )
       .optional(),
     timeoutMs: positiveIntegerSchema.optional(),
+    /** Grace period after timeout/cancellation before force-killing. */
+    graceMs: positiveIntegerSchema.optional(),
     onLog: z
       .custom<(stream: "stdout" | "stderr", chunk: string) => Promise<void> | void>(
         (v) => typeof v === "function",

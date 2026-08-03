@@ -213,8 +213,11 @@ __metadata:
     "@aaspai/observability": "workspace:*"
     "@aaspai/sessions": "workspace:*"
     "@aaspai/skills": "workspace:*"
+    "@agentclientprotocol/claude-agent-acp": "npm:^0.60.0"
+    "@agentclientprotocol/codex-acp": "npm:^1.1.5"
     "@biomejs/biome": "npm:^2.1.1"
     "@types/node": "npm:^24.0.0"
+    acpx: "npm:^0.12.0"
     picocolors: "npm:^1.1.1"
     rimraf: "npm:^6.1.3"
     typescript: "npm:^5.8.3"
@@ -458,10 +461,150 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@agentclientprotocol/claude-agent-acp@npm:^0.60.0":
+  version: 0.60.0
+  resolution: "@agentclientprotocol/claude-agent-acp@npm:0.60.0"
+  dependencies:
+    "@agentclientprotocol/sdk": "npm:1.2.1"
+    "@anthropic-ai/claude-agent-sdk": "npm:0.3.215"
+    zod: "npm:^3.25.0 || ^4.0.0"
+  bin:
+    claude-agent-acp: dist/index.js
+  checksum: 10c0/e9dc4945d1fe3147cf971986d99e6408b46a61aec14f97e64e7a1b0640ee0fc876f1a861bfacc36885668ddeff2db290712f9536046326391740bc1d307dbeba
+  languageName: node
+  linkType: hard
+
+"@agentclientprotocol/codex-acp@npm:^1.1.5":
+  version: 1.1.9
+  resolution: "@agentclientprotocol/codex-acp@npm:1.1.9"
+  dependencies:
+    "@agentclientprotocol/sdk": "npm:^1.3.0"
+    "@openai/codex": "npm:^0.145.0"
+    diff: "npm:^9.0.0"
+    open: "npm:^11.0.0"
+    vscode-jsonrpc: "npm:^9.0.1"
+    zod: "npm:^4.0.0"
+  bin:
+    codex-acp: dist/index.js
+  checksum: 10c0/55ffa2c54d0ee4749c13a41e9f7d3959ed9a289bb85f9119e01d36dd5fdadc872d613827337025855ca4a572fe1a2521fdd31b4a1e4979ea30a937d7ca891590
+  languageName: node
+  linkType: hard
+
+"@agentclientprotocol/sdk@npm:1.2.1":
+  version: 1.2.1
+  resolution: "@agentclientprotocol/sdk@npm:1.2.1"
+  peerDependencies:
+    zod: ^3.25.0 || ^4.0.0
+  checksum: 10c0/fd8dede88ece68e8ea1da1f03118dde72c945139fdc21274306366ba4978437bfad2bb41d66bd6b25cb49272d55d0eab2937ff196a0d9972d2bc44bb4b368fca
+  languageName: node
+  linkType: hard
+
+"@agentclientprotocol/sdk@npm:^1.2.1, @agentclientprotocol/sdk@npm:^1.3.0":
+  version: 1.3.0
+  resolution: "@agentclientprotocol/sdk@npm:1.3.0"
+  peerDependencies:
+    zod: ^3.25.0 || ^4.0.0
+  checksum: 10c0/ed65354ead8267f8ff7688967d2172626efde555858d3e162b1685110a3104d07ccc8b420a6bdb5f2a3fade2887c5b11dd6d5e592fb240004a1d52a61bb46588
+  languageName: node
+  linkType: hard
+
 "@alloc/quick-lru@npm:^5.2.0":
   version: 5.2.0
   resolution: "@alloc/quick-lru@npm:5.2.0"
   checksum: 10c0/7b878c48b9d25277d0e1a9b8b2f2312a314af806b4129dc902f2bc29ab09b58236e53964689feec187b28c80d2203aff03829754773a707a8a5987f1b7682d92
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk-darwin-arm64@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk-darwin-arm64@npm:0.3.215"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk-darwin-x64@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk-darwin-x64@npm:0.3.215"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk-linux-arm64-musl@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk-linux-arm64-musl@npm:0.3.215"
+  conditions: os=linux & cpu=arm64 & libc=musl
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk-linux-arm64@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk-linux-arm64@npm:0.3.215"
+  conditions: os=linux & cpu=arm64 & libc=glibc
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk-linux-x64-musl@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk-linux-x64-musl@npm:0.3.215"
+  conditions: os=linux & cpu=x64 & libc=musl
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk-linux-x64@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk-linux-x64@npm:0.3.215"
+  conditions: os=linux & cpu=x64 & libc=glibc
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk-win32-arm64@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk-win32-arm64@npm:0.3.215"
+  conditions: os=win32 & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk-win32-x64@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk-win32-x64@npm:0.3.215"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@anthropic-ai/claude-agent-sdk@npm:0.3.215":
+  version: 0.3.215
+  resolution: "@anthropic-ai/claude-agent-sdk@npm:0.3.215"
+  dependencies:
+    "@anthropic-ai/claude-agent-sdk-darwin-arm64": "npm:0.3.215"
+    "@anthropic-ai/claude-agent-sdk-darwin-x64": "npm:0.3.215"
+    "@anthropic-ai/claude-agent-sdk-linux-arm64": "npm:0.3.215"
+    "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "npm:0.3.215"
+    "@anthropic-ai/claude-agent-sdk-linux-x64": "npm:0.3.215"
+    "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "npm:0.3.215"
+    "@anthropic-ai/claude-agent-sdk-win32-arm64": "npm:0.3.215"
+    "@anthropic-ai/claude-agent-sdk-win32-x64": "npm:0.3.215"
+  peerDependencies:
+    "@anthropic-ai/sdk": ">=0.93.0"
+    "@modelcontextprotocol/sdk": ^1.29.0
+    zod: ^4.0.0
+  dependenciesMeta:
+    "@anthropic-ai/claude-agent-sdk-darwin-arm64":
+      optional: true
+    "@anthropic-ai/claude-agent-sdk-darwin-x64":
+      optional: true
+    "@anthropic-ai/claude-agent-sdk-linux-arm64":
+      optional: true
+    "@anthropic-ai/claude-agent-sdk-linux-arm64-musl":
+      optional: true
+    "@anthropic-ai/claude-agent-sdk-linux-x64":
+      optional: true
+    "@anthropic-ai/claude-agent-sdk-linux-x64-musl":
+      optional: true
+    "@anthropic-ai/claude-agent-sdk-win32-arm64":
+      optional: true
+    "@anthropic-ai/claude-agent-sdk-win32-x64":
+      optional: true
+  checksum: 10c0/d5be0f1a6823a5571e51470eef0bab685103b4e109f6b9308fd023e2c6f85702a6e2f63b0b82a0b8494878531a313a2015a8d30ef34b3fd9968e9e6ae3a90aee
   languageName: node
   linkType: hard
 
@@ -964,6 +1107,28 @@ __metadata:
   version: 2.2.2
   resolution: "@cbor-extract/cbor-extract-win32-x64@npm:2.2.2"
   conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@clack/core@npm:1.4.3":
+  version: 1.4.3
+  resolution: "@clack/core@npm:1.4.3"
+  dependencies:
+    fast-wrap-ansi: "npm:^0.2.0"
+    sisteransi: "npm:^1.0.5"
+  checksum: 10c0/16cda430974bc02844cfa6e3f0e6e19695d97e915a580ab74603d34a1f00dcbdd8dc856adc3f89405e3555b5cf42568ae8687e748cb92c3434fe4d9fc7ebe664
+  languageName: node
+  linkType: hard
+
+"@clack/prompts@npm:^1.0.1":
+  version: 1.7.0
+  resolution: "@clack/prompts@npm:1.7.0"
+  dependencies:
+    "@clack/core": "npm:1.4.3"
+    fast-string-width: "npm:^3.0.2"
+    fast-wrap-ansi: "npm:^0.2.0"
+    sisteransi: "npm:^1.0.5"
+  checksum: 10c0/a11e4f8d4a03cfe2d9eb21c3263f0252648573977b96e495a7d4f159f7efa929fe775a6ac3fe7ae30d8acb72514d94418a2c4335855d05b575a41aa885c9ff26
   languageName: node
   linkType: hard
 
@@ -2123,6 +2288,77 @@ __metadata:
   dependencies:
     semver: "npm:^7.3.5"
   checksum: 10c0/c37a5b4842bfdece3d14dfdb054f73fe15ed2d3da61b34ff76629fb5b1731647c49166fd2a8bf8b56fcfa51200382385ea8909a3cbecdad612310c114d3f6c99
+  languageName: node
+  linkType: hard
+
+"@openai/codex-darwin-arm64@npm:@openai/codex@0.145.0-darwin-arm64":
+  version: 0.145.0-darwin-arm64
+  resolution: "@openai/codex@npm:0.145.0-darwin-arm64"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@openai/codex-darwin-x64@npm:@openai/codex@0.145.0-darwin-x64":
+  version: 0.145.0-darwin-x64
+  resolution: "@openai/codex@npm:0.145.0-darwin-x64"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@openai/codex-linux-arm64@npm:@openai/codex@0.145.0-linux-arm64":
+  version: 0.145.0-linux-arm64
+  resolution: "@openai/codex@npm:0.145.0-linux-arm64"
+  conditions: os=linux & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@openai/codex-linux-x64@npm:@openai/codex@0.145.0-linux-x64":
+  version: 0.145.0-linux-x64
+  resolution: "@openai/codex@npm:0.145.0-linux-x64"
+  conditions: os=linux & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@openai/codex-win32-arm64@npm:@openai/codex@0.145.0-win32-arm64":
+  version: 0.145.0-win32-arm64
+  resolution: "@openai/codex@npm:0.145.0-win32-arm64"
+  conditions: os=win32 & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"@openai/codex-win32-x64@npm:@openai/codex@0.145.0-win32-x64":
+  version: 0.145.0-win32-x64
+  resolution: "@openai/codex@npm:0.145.0-win32-x64"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"@openai/codex@npm:^0.145.0":
+  version: 0.145.0
+  resolution: "@openai/codex@npm:0.145.0"
+  dependencies:
+    "@openai/codex-darwin-arm64": "npm:@openai/codex@0.145.0-darwin-arm64"
+    "@openai/codex-darwin-x64": "npm:@openai/codex@0.145.0-darwin-x64"
+    "@openai/codex-linux-arm64": "npm:@openai/codex@0.145.0-linux-arm64"
+    "@openai/codex-linux-x64": "npm:@openai/codex@0.145.0-linux-x64"
+    "@openai/codex-win32-arm64": "npm:@openai/codex@0.145.0-win32-arm64"
+    "@openai/codex-win32-x64": "npm:@openai/codex@0.145.0-win32-x64"
+  dependenciesMeta:
+    "@openai/codex-darwin-arm64":
+      optional: true
+    "@openai/codex-darwin-x64":
+      optional: true
+    "@openai/codex-linux-arm64":
+      optional: true
+    "@openai/codex-linux-x64":
+      optional: true
+    "@openai/codex-win32-arm64":
+      optional: true
+    "@openai/codex-win32-x64":
+      optional: true
+  bin:
+    codex: bin/codex.js
+  checksum: 10c0/231e69274b32913660bc94fce3785214a198b32bec10cbba1fadbf04fe42f79e9561f22426ae35002efff63111704fbdb1649f399d7d6c5a7d0f92deaca38c6a
   languageName: node
   linkType: hard
 
@@ -3819,6 +4055,21 @@ __metadata:
   languageName: node
   linkType: hard
 
+"acpx@npm:^0.12.0":
+  version: 0.12.1
+  resolution: "acpx@npm:0.12.1"
+  dependencies:
+    "@agentclientprotocol/sdk": "npm:^1.2.1"
+    commander: "npm:^15.0.0"
+    skillflag: "npm:^0.2.0"
+    tsx: "npm:^4.23.0"
+    zod: "npm:^4.4.3"
+  bin:
+    acpx: dist/cli.js
+  checksum: 10c0/c3af73894bd47efbb1176d60101ab3c320e033809cbe698c2a0e06b4e645ae908be16c18bb1393c7547c043cc6183978b7e9519fcfa43724b9d011389f2aa55c
+  languageName: node
+  linkType: hard
+
 "agent-base@npm:6":
   version: 6.0.2
   resolution: "agent-base@npm:6.0.2"
@@ -4196,6 +4447,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"bundle-name@npm:^4.1.0":
+  version: 4.1.0
+  resolution: "bundle-name@npm:4.1.0"
+  dependencies:
+    run-applescript: "npm:^7.0.0"
+  checksum: 10c0/8e575981e79c2bcf14d8b1c027a3775c095d362d1382312f444a7c861b0e21513c0bd8db5bd2b16e50ba0709fa622d4eab6b53192d222120305e68359daece29
+  languageName: node
+  linkType: hard
+
 "busboy@npm:1.6.0, busboy@npm:^1.0.0":
   version: 1.6.0
   resolution: "busboy@npm:1.6.0"
@@ -4455,6 +4715,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"commander@npm:^15.0.0":
+  version: 15.0.0
+  resolution: "commander@npm:15.0.0"
+  checksum: 10c0/539229c171914ea1ccd45ee5f10d924289a12a684ea3a7a44147abe54003c35ed6de9ae4ad198d88c29fdf403dca0428451a388234e6dc01b6faa978fb207206
+  languageName: node
+  linkType: hard
+
 "commander@npm:^4.0.0":
   version: 4.1.1
   resolution: "commander@npm:4.1.1"
@@ -4540,6 +4807,30 @@ __metadata:
   languageName: node
   linkType: hard
 
+"default-browser-id@npm:^5.0.0":
+  version: 5.0.1
+  resolution: "default-browser-id@npm:5.0.1"
+  checksum: 10c0/5288b3094c740ef3a86df9b999b04ff5ba4dee6b64e7b355c0fff5217752c8c86908d67f32f6cba9bb4f9b7b61a1b640c0a4f9e34c57e0ff3493559a625245ee
+  languageName: node
+  linkType: hard
+
+"default-browser@npm:^5.4.0":
+  version: 5.5.0
+  resolution: "default-browser@npm:5.5.0"
+  dependencies:
+    bundle-name: "npm:^4.1.0"
+    default-browser-id: "npm:^5.0.0"
+  checksum: 10c0/576593b617b17a7223014b4571bfe1c06a2581a4eb8b130985d90d253afa3f40999caec70eb0e5776e80d4af6a41cce91018cd3f86e57ad578bf59e46fb19abe
+  languageName: node
+  linkType: hard
+
+"define-lazy-prop@npm:^3.0.0":
+  version: 3.0.0
+  resolution: "define-lazy-prop@npm:3.0.0"
+  checksum: 10c0/5ab0b2bf3fa58b3a443140bbd4cd3db1f91b985cc8a246d330b9ac3fc0b6a325a6d82bddc0b055123d745b3f9931afeea74a5ec545439a1630b9c8512b0eeb49
+  languageName: node
+  linkType: hard
+
 "delayed-stream@npm:~1.0.0":
   version: 1.0.0
   resolution: "delayed-stream@npm:1.0.0"
@@ -4565,6 +4856,13 @@ __metadata:
   version: 1.2.2
   resolution: "didyoumean@npm:1.2.2"
   checksum: 10c0/95d0b53d23b851aacff56dfadb7ecfedce49da4232233baecfeecb7710248c4aa03f0aa8995062f0acafaf925adf8536bd7044a2e68316fd7d411477599bc27b
+  languageName: node
+  linkType: hard
+
+"diff@npm:^9.0.0":
+  version: 9.0.0
+  resolution: "diff@npm:9.0.0"
+  checksum: 10c0/a971cc88f66071a33bd3942db2f51b57d484e9856265ae45cf44fb28ab2fde91f132d9c26d8be0fb6082d2be94d29e1295c1adb251b7461935d6a2dd304cd161
   languageName: node
   linkType: hard
 
@@ -5181,6 +5479,31 @@ __metadata:
   languageName: node
   linkType: hard
 
+"fast-string-truncated-width@npm:^3.0.2":
+  version: 3.0.3
+  resolution: "fast-string-truncated-width@npm:3.0.3"
+  checksum: 10c0/043b8663397d14a3880ce4f3407bcda60b40db9bbeafe62863a35d1f9c69ea17c8da3fcd72de235553e6c9cd053128cde9e24ca0d4a7463208f48db3cd23d981
+  languageName: node
+  linkType: hard
+
+"fast-string-width@npm:^3.0.2":
+  version: 3.0.2
+  resolution: "fast-string-width@npm:3.0.2"
+  dependencies:
+    fast-string-truncated-width: "npm:^3.0.2"
+  checksum: 10c0/c8822d175315bb353ebe782b65214ac53b13e3bf704e03b132ea7bdfa8de6a636375b3ab7a4097545393d109381c37c4f387c72a462c90b61412dbc4632f39a7
+  languageName: node
+  linkType: hard
+
+"fast-wrap-ansi@npm:^0.2.0":
+  version: 0.2.2
+  resolution: "fast-wrap-ansi@npm:0.2.2"
+  dependencies:
+    fast-string-width: "npm:^3.0.2"
+  checksum: 10c0/1aa7be4f7cb86f4bdb14691cb6bcc0b8df8b3b89df142ade3ae1602332dcf6f990cd750a923cd581ca0847808cb4ec1aa5afaafa7a72f849e87a2a62c98fa370
+  languageName: node
+  linkType: hard
+
 "fastq@npm:^1.6.0":
   version: 1.20.1
   resolution: "fastq@npm:1.20.1"
@@ -5632,6 +5955,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"is-docker@npm:^3.0.0":
+  version: 3.0.0
+  resolution: "is-docker@npm:3.0.0"
+  bin:
+    is-docker: cli.js
+  checksum: 10c0/d2c4f8e6d3e34df75a5defd44991b6068afad4835bb783b902fa12d13ebdb8f41b2a199dcb0b5ed2cb78bfee9e4c0bbdb69c2d9646f4106464674d3e697a5856
+  languageName: node
+  linkType: hard
+
 "is-extglob@npm:^2.1.1":
   version: 2.1.1
   resolution: "is-extglob@npm:2.1.1"
@@ -5655,6 +5987,24 @@ __metadata:
   languageName: node
   linkType: hard
 
+"is-in-ssh@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "is-in-ssh@npm:1.0.0"
+  checksum: 10c0/fbb4c25d85c543df09997fbe7aeca410ae0c839c5825bba2d4c672df765e9ce0e7558e781b371c0a21d6ef9bbac39b31875617a68eaaea5504438d07db9a2ffa
+  languageName: node
+  linkType: hard
+
+"is-inside-container@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "is-inside-container@npm:1.0.0"
+  dependencies:
+    is-docker: "npm:^3.0.0"
+  bin:
+    is-inside-container: cli.js
+  checksum: 10c0/a8efb0e84f6197e6ff5c64c52890fa9acb49b7b74fed4da7c95383965da6f0fa592b4dbd5e38a79f87fc108196937acdbcd758fcefc9b140e479b39ce1fcd1cd
+  languageName: node
+  linkType: hard
+
 "is-lambda@npm:^1.0.1":
   version: 1.0.1
   resolution: "is-lambda@npm:1.0.1"
@@ -5666,6 +6016,15 @@ __metadata:
   version: 7.0.0
   resolution: "is-number@npm:7.0.0"
   checksum: 10c0/b4686d0d3053146095ccd45346461bc8e53b80aeb7671cc52a4de02dbbf7dc0d1d2a986e2fe4ae206984b4d34ef37e8b795ebc4f4295c978373e6575e295d811
+  languageName: node
+  linkType: hard
+
+"is-wsl@npm:^3.1.0":
+  version: 3.1.1
+  resolution: "is-wsl@npm:3.1.1"
+  dependencies:
+    is-inside-container: "npm:^1.0.0"
+  checksum: 10c0/7e5023522bfb8f27de4de960b0d82c4a8146c0bddb186529a3616d78b5bbbfc19ef0c5fc60d0b3a3cc0bf95a415fbdedc18454310ea3049587c879b07ace5107
   languageName: node
   linkType: hard
 
@@ -6443,6 +6802,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"open@npm:^11.0.0":
+  version: 11.0.0
+  resolution: "open@npm:11.0.0"
+  dependencies:
+    default-browser: "npm:^5.4.0"
+    define-lazy-prop: "npm:^3.0.0"
+    is-in-ssh: "npm:^1.0.0"
+    is-inside-container: "npm:^1.0.0"
+    powershell-utils: "npm:^0.1.0"
+    wsl-utils: "npm:^0.3.0"
+  checksum: 10c0/7aeeda4131268ed90f90e7728dda5c46bb0c6205b27a4be3e86ea33593e30dd393423e20e31c00802a8e635ef59becaee33ef9749a8ceb027567cd253e9e7b1e
+  languageName: node
+  linkType: hard
+
 "openapi-fetch@npm:^0.14.1":
   version: 0.14.1
   resolution: "openapi-fetch@npm:0.14.1"
@@ -6703,6 +7076,13 @@ __metadata:
   version: 3.4.9
   resolution: "postgres@npm:3.4.9"
   checksum: 10c0/b767dd2258df0f6523ce1ec0bce0a87e93c6fb961c97be0059f8ea2bc4c57c6057689258361a0988f0bb61d636483d35f0c591620566218f7083c78ab7955862
+  languageName: node
+  linkType: hard
+
+"powershell-utils@npm:^0.1.0":
+  version: 0.1.0
+  resolution: "powershell-utils@npm:0.1.0"
+  checksum: 10c0/a64713cf3583259c9ed6be211c06b4b19e8608bcb0f7f6287ffac0a95b8c7582b6b662eea0e201fd659492c8e9f9c5fd0bfc4579645c5add9c1a600075621c95
   languageName: node
   linkType: hard
 
@@ -7053,6 +7433,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"run-applescript@npm:^7.0.0":
+  version: 7.1.0
+  resolution: "run-applescript@npm:7.1.0"
+  checksum: 10c0/ab826c57c20f244b2ee807704b1ef4ba7f566aa766481ae5922aac785e2570809e297c69afcccc3593095b538a8a77d26f2b2e9a1d9dffee24e0e039502d1a03
+  languageName: node
+  linkType: hard
+
 "run-parallel@npm:^1.1.9":
   version: 1.2.0
   resolution: "run-parallel@npm:1.2.0"
@@ -7224,6 +7611,26 @@ __metadata:
   dependencies:
     is-arrayish: "npm:^0.3.1"
   checksum: 10c0/846c3fdd1325318d5c71295cfbb99bfc9edc4c8dffdda5e6e9efe30482bbcd32cf360fc2806f46ac43ff7d09bcfaff20337bb79f826f0e6a8e366efd3cdd7868
+  languageName: node
+  linkType: hard
+
+"sisteransi@npm:^1.0.5":
+  version: 1.0.5
+  resolution: "sisteransi@npm:1.0.5"
+  checksum: 10c0/230ac975cca485b7f6fe2b96a711aa62a6a26ead3e6fb8ba17c5a00d61b8bed0d7adc21f5626b70d7c33c62ff4e63933017a6462942c719d1980bb0b1207ad46
+  languageName: node
+  linkType: hard
+
+"skillflag@npm:^0.2.0":
+  version: 0.2.1
+  resolution: "skillflag@npm:0.2.1"
+  dependencies:
+    "@clack/prompts": "npm:^1.0.1"
+    tar-stream: "npm:^3.1.7"
+  bin:
+    skill-install: dist/bin/skill-install.js
+    skillflag: dist/bin/skillflag.js
+  checksum: 10c0/20005951267caa482c198c4c706d06e0e5ff4df6ae53c58ea8841db061c8d7c4f592acf2e02148588580f297151207894ddc2ff5aa4d0a7ad262d028cc17af5b
   languageName: node
   linkType: hard
 
@@ -7542,7 +7949,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tar-stream@npm:^3.1.5":
+"tar-stream@npm:^3.1.5, tar-stream@npm:^3.1.7":
   version: 3.2.0
   resolution: "tar-stream@npm:3.2.0"
   dependencies:
@@ -7697,6 +8104,21 @@ __metadata:
   bin:
     tsx: dist/cli.mjs
   checksum: 10c0/2f7393c09ffd161701342c87141c6158945967c0fdb6476f157a72e53554cbc983b8e516b441beafde27c9840d8ffd619802acce6b6be5e9e197d693e111a55d
+  languageName: node
+  linkType: hard
+
+"tsx@npm:^4.23.0":
+  version: 4.23.5
+  resolution: "tsx@npm:4.23.5"
+  dependencies:
+    esbuild: "npm:~0.28.0"
+    fsevents: "npm:~2.3.3"
+  dependenciesMeta:
+    fsevents:
+      optional: true
+  bin:
+    tsx: dist/cli.mjs
+  checksum: 10c0/caed1b05eac5fbbb6f8a1ca8b22ae157b74caaba14cc781b023f8baaaa990fa8dfa60a4252eabda1a68c4dcaade3411013998fa001580a2de4ac1f0d78c80c92
   languageName: node
   linkType: hard
 
@@ -7961,6 +8383,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"vscode-jsonrpc@npm:^9.0.1":
+  version: 9.0.1
+  resolution: "vscode-jsonrpc@npm:9.0.1"
+  checksum: 10c0/6ca63393dd78675ed33b5537c147e673865557ff93915cd5189ceae039ca7fe01808ffd9a14016732d4789f2102a037d68d4216f557c3380d1c7f3ea50fd85b4
+  languageName: node
+  linkType: hard
+
 "vscode-languageserver-textdocument@npm:^1.0.8":
   version: 1.0.13
   resolution: "vscode-languageserver-textdocument@npm:1.0.13"
@@ -8070,6 +8499,16 @@ __metadata:
   languageName: node
   linkType: hard
 
+"wsl-utils@npm:^0.3.0":
+  version: 0.3.1
+  resolution: "wsl-utils@npm:0.3.1"
+  dependencies:
+    is-wsl: "npm:^3.1.0"
+    powershell-utils: "npm:^0.1.0"
+  checksum: 10c0/b3ba99cc6b71f66457eef598d529beeb8cb57a72646877fe25993894b808c60b82f6d47df5463f0b6e54632272f62f5eaea105c12784fd09b06f500f3f53aa2e
+  languageName: node
+  linkType: hard
+
 "y18n@npm:^5.0.5":
   version: 5.0.8
   resolution: "y18n@npm:5.0.8"
@@ -8113,7 +8552,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod@npm:^4.3.6":
+"zod@npm:^3.25.0 || ^4.0.0, zod@npm:^4.0.0, zod@npm:^4.3.6, zod@npm:^4.4.3":
   version: 4.4.3
   resolution: "zod@npm:4.4.3"
   checksum: 10c0/7ea31b558e88f9faf44f31dd185e2e1cbf51fed3081787fb96cc2534749b50c0acfc6da7f0922a7353ed092dd358c7d50c28ea96c94d04af64191bd33152eca3

@@ -10,6 +10,12 @@ export const codexLocalConfigSchema = z
     model: z.string().trim().min(1).max(256).optional(),
     modelReasoningEffort: z.enum(["low", "medium", "high"]).optional(),
     engine: codexEngineSchema.default("auto"),
+    agentCommand: z.string().trim().min(1).max(4_096).optional(),
+    mode: z.enum(["persistent", "oneshot"]).optional(),
+    acpPermissionMode: z.enum(["approve-all", "approve-reads", "deny-all"]).optional(),
+    nonInteractivePermissions: z.enum(["deny", "fail"]).optional(),
+    stateDir: z.string().trim().min(1).max(8_192).optional(),
+    acpStateDir: z.string().trim().min(1).max(8_192).optional(),
     sandbox: codexSandboxSchema.default("workspace-write"),
     approvalMode: z.enum(["untrusted", "on-failure", "on-request", "never"]).default("never"),
     maxTurns: positiveIntegerSchema.max(1_000).optional(),
@@ -57,6 +63,11 @@ Core fields:
 - model (string, optional): OpenAI model id (e.g. gpt-5-codex)
 - modelReasoningEffort (string, optional): "low" | "medium" | "high"
 - engine (string, default "auto"): "auto" | "cli" | "acp"
+- agentCommand (string, optional): override the Codex ACP server command
+- mode (string, optional): ACP session mode, "persistent" or "oneshot"
+- acpPermissionMode (string, optional): ACP permission mode
+- nonInteractivePermissions (string, optional): ACP fallback, "deny" or "fail"
+- stateDir/acpStateDir (string, optional): ACP session state directory
 - sandbox (string, default "workspace-write"): "read-only" | "workspace-write" | "danger-full-access"
 - approvalMode (string, default "never"): "untrusted" | "on-failure" | "on-request" | "never"
 - maxTurns (number, optional): cap agent turns per run

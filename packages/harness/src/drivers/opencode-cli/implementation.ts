@@ -206,6 +206,8 @@ interface ResolvedConfig {
   /** Env escape hatches. */
   opencodeConfig?: string;
   opencodeConfigContent?: string;
+  timeoutSec: number;
+  graceSec: number;
   disableDefaultPlugins: boolean;
   disableExternalSkills: boolean;
   disableClaudeCodeSkills: boolean;
@@ -273,6 +275,8 @@ function resolveConfig(ctx: { config: unknown }): ResolvedConfig {
     skillsUrls: asStringArray(cfg.skillsUrls),
     opencodeConfig: asString(cfg.opencodeConfig),
     opencodeConfigContent: asString(cfg.opencodeConfigContent),
+    timeoutSec: Math.max(1, _asNumber(cfg.timeoutSec) ?? 300),
+    graceSec: Math.max(1, _asNumber(cfg.graceSec) ?? 15),
     disableDefaultPlugins: asBool(cfg.disableDefaultPlugins),
     disableExternalSkills: asBool(cfg.disableExternalSkills),
     disableClaudeCodeSkills: asBool(cfg.disableClaudeCodeSkills),
@@ -704,6 +708,7 @@ async function runOpencodeCli(
   }
 
   const { extraEnv, cleanup } = prepareConfigInjection(config, Boolean(options.execution));
+  const timeoutMs = config.timeoutSec * 1_000;
 
   if (options.execution) {
     try {
@@ -716,6 +721,8 @@ async function runOpencodeCli(
         // sends unusable host PATH/HOME values into remote Linux runtimes.
         env: extraEnv,
         signal,
+        timeoutMs,
+        graceMs: config.graceSec * 1_000,
         onLog,
         execution: options.execution,
         tools: options.tools,
@@ -749,8 +756,10 @@ async function runOpencodeCli(
     let inputTokens = 0;
     let outputTokens = 0;
     let cost = 0;
-    const timedOut = false;
+    let timedOut = false;
     let closed = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    let killHandle: NodeJS.Timeout | undefined;
     let thinkingEventCount = 0;
     let toolEventCount = 0;
     const toolsInvoked: string[] = [];
@@ -773,14 +782,31 @@ async function runOpencodeCli(
         await onProgress?.(update);
       });
     };
-    const abort = (): void => {
+    const terminate = (): void => {
       if (closed) return;
       try {
         child.kill("SIGTERM");
+        killHandle = setTimeout(() => {
+          if (!closed) {
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              /* already dead */
+            }
+          }
+        }, config.graceSec * 1_000);
+        killHandle.unref();
       } catch {
         /* already dead */
       }
     };
+    const abort = (): void => terminate();
+
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      terminate();
+    }, timeoutMs);
+    timeoutHandle.unref();
 
     if (signal?.aborted) abort();
     else signal?.addEventListener("abort", abort, { once: true });
@@ -1057,6 +1083,8 @@ async function runOpencodeCli(
     }
 
     child.on("error", (err) => {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (killHandle !== undefined) clearTimeout(killHandle);
       cleanup();
       reject(err);
     });
@@ -1064,6 +1092,8 @@ async function runOpencodeCli(
     child.on("close", async (code, closeSignal) => {
       closed = true;
       signal?.removeEventListener("abort", abort);
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (killHandle !== undefined) clearTimeout(killHandle);
       cleanup();
       // Unregister from the runningSessions map so cancel() won't find a dead child.
       if (sessionId) runningSessions.delete(sessionId);
@@ -1133,6 +1163,8 @@ async function runOpencodeThroughRuntime(input: {
   signal?: AbortSignal;
   onLog?: (stream: "stdout" | "stderr", chunk: string) => Promise<void> | void;
   execution: AdapterRuntimeExecution;
+  timeoutMs?: number;
+  graceMs?: number;
   tools?: {
     invoke(name: string, input: unknown, ctx: unknown): Promise<unknown>;
     get?(name: string): unknown;
@@ -1156,6 +1188,7 @@ async function runOpencodeThroughRuntime(input: {
   const companyActionCalls = new Set<string>();
   let stdoutBuffer = "";
   let companyActionError: string | undefined;
+  let observedStdout = false;
   let pendingTools: Promise<void> = Promise.resolve();
   const parseLine = (line: string): void => {
     if (!line.trim()) return;
@@ -1262,12 +1295,20 @@ async function runOpencodeThroughRuntime(input: {
     cwd: input.cwd,
     env: input.env,
     signal: input.signal,
+    timeoutMs: input.timeoutMs,
+    graceMs: input.graceMs,
     onLog: async (stream, chunk) => {
-      if (stream === "stdout") parse(chunk);
-      else if (!errorMessage) errorMessage = chunk.trim().split(/\r?\n/).find(Boolean);
+      if (stream === "stdout") {
+        observedStdout = observedStdout || chunk.length > 0;
+        parse(chunk);
+      } else if (!errorMessage) errorMessage = chunk.trim().split(/\r?\n/).find(Boolean);
       await input.onLog?.(stream, chunk);
     },
   });
+  if (!observedStdout && result.stdout) parse(result.stdout);
+  if (!errorMessage && result.stderr) {
+    errorMessage = result.stderr.trim().split(/\r?\n/).find(Boolean);
+  }
   parse("", true);
   await pendingTools;
   return {

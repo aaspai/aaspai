@@ -55,3 +55,16 @@ expose:
 
 Optional capabilities follow the same shape as `@paperclipai/adapter-utils`
 and are not part of the foundation slice.
+
+## ACP adapters
+
+`claude_local` and `codex_local` accept `engine: "acp"` for the shared ACPX
+runtime, plus `mode`, `agentCommand`, `acpPermissionMode`,
+`nonInteractivePermissions`, and `stateDir`/`acpStateDir`. ACP sessions retain
+their provider session IDs in `runtime.sessionParams` and emit canonical JSONL
+transcript entries through `onLog`.
+
+`engine: "auto"` uses ACP for direct calls and managed local execution, while
+preserving the CLI lane for non-local targets. Explicit ACP is local-only until
+the runtime contract exposes a bidirectional process-session bridge; non-local
+explicit ACP requests fail closed rather than bypassing the selected runtime.
