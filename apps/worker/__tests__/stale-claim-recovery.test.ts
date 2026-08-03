@@ -117,7 +117,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
       organizationId: "org_test",
       workspaceRoot: tmpDir,
     });
-    await (daemon as unknown as { recoverStaleClaims(): Promise<void> }).recoverStaleClaims();
+    await daemon.recoverStaleClaims();
 
     const all = await (
       handle.db.select().from(wakeupsTable) as {
@@ -156,16 +156,8 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     const { eq, getDefaultDb, wakeups } = await import("@aaspai/db");
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
-    const privateDaemon = daemon as unknown as {
-      recoverStaleClaims(): Promise<void>;
-      markFailed(
-        id: string,
-        reason: string,
-        snapshot?: { claimedAt: string | null; heartbeatAt: string | null },
-      ): Promise<boolean>;
-    };
-    const markFailed = privateDaemon.markFailed.bind(daemon);
-    privateDaemon.markFailed = async (id, reason, snapshot) => {
+    const markFailed = daemon.markFailed.bind(daemon);
+    daemon.markFailed = async (id, reason, snapshot) => {
       await getDefaultDb()
         .db.update(wakeups)
         .set({ heartbeatAt: new Date().toISOString() })
@@ -173,7 +165,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
       return markFailed(id, reason, snapshot);
     };
 
-    await privateDaemon.recoverStaleClaims();
+    await daemon.recoverStaleClaims();
 
     const [row] = await getDefaultDb().db.select().from(wakeups).where(eq(wakeups.id, wakeupId));
     expect(row?.status).toBe("claimed");
@@ -202,16 +194,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     const source = rows.find((row) => row.id === wakeupId);
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
-    await (
-      daemon as unknown as {
-        queueRetryWakeup(
-          wakeup: Record<string, unknown>,
-          request: Record<string, unknown>,
-          attemptNumber: number,
-          retry: { resumeSessionId?: string; failure?: string },
-        ): Promise<void>;
-      }
-    ).queueRetryWakeup(
+    await daemon.queueRetryWakeup(
       source ?? {},
       {
         prompt: "Build the sales playbook",
@@ -235,16 +218,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     expect(payload.prompt).toContain("previous attempt did not pass execution verification");
     expect(payload.prompt).toContain("Unsupported commercial or security claim");
 
-    await (
-      daemon as unknown as {
-        queueRetryWakeup(
-          wakeup: Record<string, unknown>,
-          request: Record<string, unknown>,
-          attemptNumber: number,
-          retry: { resumeSessionId?: string; failure?: string },
-        ): Promise<void>;
-      }
-    ).queueRetryWakeup(
+    await daemon.queueRetryWakeup(
       source ?? {},
       {
         prompt: "Build the sales playbook",
@@ -268,16 +242,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     ) as Record<string, unknown>;
     expect(freshPayload.resumeSessionId).toBeUndefined();
 
-    await (
-      daemon as unknown as {
-        queueRetryWakeup(
-          wakeup: Record<string, unknown>,
-          request: Record<string, unknown>,
-          attemptNumber: number,
-          retry: { resumeSessionId?: string; failure?: string },
-        ): Promise<void>;
-      }
-    ).queueRetryWakeup(
+    await daemon.queueRetryWakeup(
       source ?? {},
       {
         prompt: "Review verified delegated work",
@@ -429,7 +394,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
 
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
-    await (daemon as unknown as { recoverStaleClaims(): Promise<void> }).recoverStaleClaims();
+    await daemon.recoverStaleClaims();
 
     await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "running" });
     const activeWake = (
@@ -444,7 +409,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
       .set({ ts: staleAt })
       .where(eq(sessionEvents.sessionId, session.id));
     await db.update(wakeups).set({ claimedAt: staleAt }).where(eq(wakeups.id, wakeupId));
-    await (daemon as unknown as { recoverStaleClaims(): Promise<void> }).recoverStaleClaims();
+    await daemon.recoverStaleClaims();
 
     await expect(store.getAttempt(attempt.id)).resolves.toMatchObject({ status: "lost" });
     await expect(store.getWorkItem(work.id)).resolves.toMatchObject({ status: "ready" });
@@ -502,11 +467,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     const brokerSecret = "attempt-broker-secret-value";
     expect(lostAttempt).not.toBeNull();
     expect(currentWork).not.toBeNull();
-    await (
-      daemon as unknown as {
-        persistAttemptOutput(input: Record<string, unknown>): Promise<void>;
-      }
-    ).persistAttemptOutput({
+    await daemon.persistAttemptOutput({
       result: { exitCode: 1, timedOut: true, summary: `safe ${brokerSecret}` },
       attempt: lostAttempt,
       workItem: currentWork,
@@ -533,14 +494,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
     });
     const retryWorkspace = join(tmpDir, "retry-workspace");
     await mkdir(retryWorkspace, { recursive: true });
-    await (
-      daemon as unknown as {
-        restorePreviousAttemptArtifacts(
-          attempt: typeof retryAttempt,
-          workspacePath: string,
-        ): Promise<void>;
-      }
-    ).restorePreviousAttemptArtifacts(retryAttempt, retryWorkspace);
+    await daemon.restorePreviousAttemptArtifacts(retryAttempt, retryWorkspace);
     await expect(readFile(join(retryWorkspace, "growth", "lead-list.md"), "utf8")).resolves.toBe(
       "Lead: https://example.test\n",
     );
@@ -551,11 +505,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
       "utf8",
     );
     await expect(
-      (
-        daemon as unknown as {
-          persistAttemptOutput(input: Record<string, unknown>): Promise<void>;
-        }
-      ).persistAttemptOutput({
+      daemon.persistAttemptOutput({
         result: { exitCode: 1, timedOut: true },
         attempt: lostAttempt,
         workItem: currentWork,
@@ -604,7 +554,7 @@ describe("WorkerDaemon claimAndRun failure path (issue #2)", () => {
       organizationId: "org_test",
       workspaceRoot: tmpDir,
     });
-    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     const rows = await (
       handle.db.select().from(wakeupsTable) as {

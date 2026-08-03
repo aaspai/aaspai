@@ -1601,7 +1601,6 @@ describe("e2e: opencode_cli driver", () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const cwd = makeScratchDir("tool-dispatch-");
     const invoked: Array<{ name: string; input: unknown }> = [];
-    const _results: Array<{ name: string; status: string; output: string }> = [];
     const ctx = buildAdapterContext({
       prompt: "do it <e2e:tool> <e2e:response:OK>",
       cwd,

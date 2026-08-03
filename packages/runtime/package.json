@@ -41,7 +41,6 @@
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
     "@aaspai/harness": "workspace:*",
-    "@aaspai/observability": "workspace:*",
     "@daytonaio/sdk": "^0.171.0",
     "@kubernetes/client-node": "^1.0.0",
     "e2b": "^2.19.0",

@@ -133,20 +133,6 @@ console.log(`[setup] registered ${registry.list().length} skills into the regist
 //  A real-tool dispatcher
 // ─────────────────────────────────────────────────────────────────
 const toolCalls: Array<{ scenario: string; name: string; input: unknown; output: string }> = [];
-const _toolDispatcher = {
-  invoke: async (name: string, input: unknown, ctx: unknown) => {
-    const tag = (ctx as { scenario?: string })?.scenario ?? "?";
-    let output: string;
-    if (name === "echo") output = `ECHO:${JSON.stringify(input)}`;
-    else if (name === "now") output = new Date().toISOString();
-    else if (name === "noop") output = "no-op";
-    else output = `unknown-tool:${name}`;
-    toolCalls.push({ scenario: tag, name, input, output });
-    return output;
-  },
-  list: () => ["echo", "now", "noop"],
-};
-
 // ─────────────────────────────────────────────────────────────────
 //  Sessions layer helper
 // ─────────────────────────────────────────────────────────────────
@@ -240,10 +226,6 @@ function dumpJsonl(path: string, lines: Array<unknown>) {
 function dumpText(path: string, text: string) {
   writeFileSync(path, text, "utf8");
 }
-function _dumpFile(path: string, content: string) {
-  writeFileSync(path, content, "utf8");
-}
-
 // ─────────────────────────────────────────────────────────────────
 //  Scenario runner
 // ─────────────────────────────────────────────────────────────────
@@ -668,12 +650,10 @@ allResults.push(
     "../../src/drivers/opencode-cli/index.js"
   );
   const r = await opencodeDbPath({});
-  let _rowCount = 0;
   let sessionRowCount = 0;
   if (r.exitCode === 0 && r.path) {
     try {
       const tsv = await queryOpencodeDb("SELECT count(*) FROM session", { format: "tsv" });
-      _rowCount = tsv.rows.length;
       // Parse the first row's count column.
       const m = tsv.rows[0]?.match(/^(\d+)/);
       if (m) sessionRowCount = Number(m[1]);

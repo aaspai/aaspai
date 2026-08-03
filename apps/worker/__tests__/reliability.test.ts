@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkerDaemon } from "../src/daemon.js";
 
 vi.mock("@aaspai/observability", () => ({
   getLogger: () => ({
@@ -140,7 +141,7 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
 
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
-    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     // Should NOT have called sessions.execute — the wakeup was already claimed
     expect(sessionExecute).not.toHaveBeenCalled();
@@ -154,7 +155,7 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
 
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
-    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     expect(sessionExecute).not.toHaveBeenCalled();
     const { wakeups } = await import("@aaspai/db");
@@ -192,7 +193,7 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
 
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test" });
-    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     expect(sessionExecute).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -221,7 +222,7 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
 
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test" });
-    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     expect(sessionExecute).not.toHaveBeenCalled();
     const { wakeups } = await import("@aaspai/db");
@@ -300,22 +301,16 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
       usageBasis: "per_run",
       clearSession: false,
     });
-    const internals = daemon as unknown as {
-      legacySessionExecutor: undefined;
-      executeDurableAttempt: typeof executeDurableAttempt;
-      recoverMissedExecutableWakeups(): Promise<void>;
-      claimAndRun(id: string): Promise<void>;
-    };
-    internals.legacySessionExecutor = undefined;
-    internals.executeDurableAttempt = executeDurableAttempt;
+    daemon.setLegacySessionExecutorForTests(undefined);
+    daemon.setDurableAttemptExecutorForTests(executeDurableAttempt);
 
-    await internals.recoverMissedExecutableWakeups();
+    await daemon.recoverMissedExecutableWakeups();
     let rows = await handle.db.select().from(wakeups);
     expect(rows.find((row) => row.id === wakeupId)?.status).toBe("queued");
     expect(rows.find((row) => row.id === notificationId)?.status).toBe("completed");
     expect(rows.find((row) => row.id === legacyCompletedId)?.status).toBe("completed");
 
-    await internals.claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     const store = new ExecutionStore(handle.db as never);
     await expect(store.getWorkflowRun(`run:wakeup:${wakeupId}`)).resolves.toMatchObject({
@@ -333,7 +328,7 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
     expect(await store.listAttemptsForWorkItem(`work:wakeup:${wakeupId}`)).toHaveLength(1);
     expect(executeDurableAttempt).toHaveBeenCalledTimes(1);
 
-    await internals.recoverMissedExecutableWakeups();
+    await daemon.recoverMissedExecutableWakeups();
     rows = await handle.db.select().from(wakeups);
     expect(rows.find((row) => row.id === wakeupId)?.status).toBe("completed");
     expect(executeDurableAttempt).toHaveBeenCalledTimes(1);
@@ -369,95 +364,63 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
       durableSessionId?: string;
       resumeSessionId?: string;
     }> = [];
-    const internals = daemon as unknown as {
-      legacySessionExecutor: undefined;
-      executeDurableAttempt(input: {
-        attempt: { id: string; attemptNumber: number };
-        agentId: string;
-        adapter: string;
-        prompt: string;
-        wakeupId?: string;
-        durableSessionId?: string;
-        resumeSessionId?: string;
-        workItem: { workKind: string; deliveryMode: string };
-        beforeAttemptCompletion?: (
-          result: {
-            timedOut: boolean;
-            exitCode: number;
-            summary: string;
-          },
-          durableSessionId: string,
-        ) => Promise<void>;
-      }): Promise<{
-        timedOut: boolean;
-        exitCode: number;
-        summary: string;
-        sessionId: string;
-        errorCode?: string;
-        errorMessage?: string;
-      }>;
-      applyDiscoveryProposal(
-        payload: Record<string, unknown>,
-        summary: string | undefined,
-        sessionId: string,
-        wakeupId: string,
-      ): Promise<void>;
-      claimAndRun(id: string): Promise<void>;
-    };
-    internals.legacySessionExecutor = undefined;
-    internals.executeDurableAttempt = vi.fn(async (input) => {
-      executions.push({
-        attemptNumber: input.attempt.attemptNumber,
-        wakeupId: input.wakeupId,
-        durableSessionId: input.durableSessionId,
-        resumeSessionId: input.resumeSessionId,
-      });
-      const result = {
-        protocolVersion: 1,
-        timedOut: false,
-        exitCode: 0,
-        summary: 'AASPAI_PORTFOLIO_PROPOSAL={"summary":"Start with one project","projects":[]}',
-        sessionId: "provider_discovery",
-        usageBasis: "per_run" as const,
-        clearSession: false,
-      };
-      const session = await store.createHarnessSession({
-        id: input.durableSessionId,
-        organizationId: "org_test",
-        agentId: input.agentId,
-        adapter: input.adapter,
-        prompt: input.prompt,
-        wakeupId: input.wakeupId,
-      });
-      await store.linkHarnessSession(input.attempt.id, session.id);
-      await store.setHarnessSessionProviderIdentity(session.id, result.sessionId);
-      let completedResult:
-        | typeof result
-        | (typeof result & { errorCode: string; errorMessage: string });
-      try {
-        await input.beforeAttemptCompletion?.(result, session.id);
-        completedResult = result;
-      } catch (error) {
-        completedResult = {
-          ...result,
-          exitCode: 1,
-          errorCode: "evidence_persistence_failed",
-          errorMessage: error instanceof Error ? error.message : String(error),
+    const executeDurableAttempt = vi.fn(
+      async (input: Parameters<WorkerDaemon["executeDurableAttempt"]>[0]) => {
+        executions.push({
+          attemptNumber: input.attempt.attemptNumber,
+          wakeupId: input.wakeupId,
+          durableSessionId: input.durableSessionId,
+          resumeSessionId: input.resumeSessionId,
+        });
+        const result = {
+          protocolVersion: 1,
+          timedOut: false,
+          exitCode: 0,
+          summary: 'AASPAI_PORTFOLIO_PROPOSAL={"summary":"Start with one project","projects":[]}',
+          sessionId: "provider_discovery",
+          usageBasis: "per_run" as const,
+          clearSession: false,
         };
-      }
-      await store.completeHarnessSession(
-        session.id,
-        completedResult,
-        completedResult.exitCode === 0 ? "succeeded" : "failed",
-      );
-      return completedResult;
-    });
-    internals.applyDiscoveryProposal = vi
+        const session = await store.createHarnessSession({
+          id: input.durableSessionId,
+          organizationId: "org_test",
+          agentId: input.agentId,
+          adapter: input.adapter,
+          prompt: input.prompt,
+          wakeupId: input.wakeupId,
+        });
+        await store.linkHarnessSession(input.attempt.id, session.id);
+        await store.setHarnessSessionProviderIdentity(session.id, result.sessionId);
+        let completedResult:
+          | typeof result
+          | (typeof result & { errorCode: string; errorMessage: string });
+        try {
+          await input.beforeAttemptCompletion?.(result, session.id);
+          completedResult = result;
+        } catch (error) {
+          completedResult = {
+            ...result,
+            exitCode: 1,
+            errorCode: "evidence_persistence_failed",
+            errorMessage: error instanceof Error ? error.message : String(error),
+          };
+        }
+        await store.completeHarnessSession(
+          session.id,
+          completedResult,
+          completedResult.exitCode === 0 ? "succeeded" : "failed",
+        );
+        return completedResult;
+      },
+    );
+    daemon.setLegacySessionExecutorForTests(undefined);
+    daemon.setDurableAttemptExecutorForTests(executeDurableAttempt);
+    daemon.applyDiscoveryProposal = vi
       .fn()
       .mockRejectedValueOnce(new Error("proposal references an unavailable company goal"))
       .mockResolvedValueOnce(undefined);
 
-    await internals.claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     const { agentAttempts, executionWorkItems, sessions, wakeups } = await import("@aaspai/db");
     const rows = await (
@@ -497,7 +460,7 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
     );
     expect(retrySession?.parentSessionId).toBe(firstAttempt?.harnessSessionId);
 
-    await internals.claimAndRun(retryWakeup?.id ?? "missing");
+    await daemon.claimAndRun(retryWakeup?.id ?? "missing");
 
     expect(executions).toHaveLength(2);
     expect(executions[0]?.wakeupId).toBe(wakeupId);
@@ -511,15 +474,15 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
       status: "completed",
     });
     expect(await store.listAttemptsForWorkItem(`work:wakeup:${wakeupId}`)).toHaveLength(2);
-    expect(internals.applyDiscoveryProposal).toHaveBeenCalledTimes(2);
-    expect(internals.applyDiscoveryProposal).toHaveBeenNthCalledWith(
+    expect(daemon.applyDiscoveryProposal).toHaveBeenCalledTimes(2);
+    expect(daemon.applyDiscoveryProposal).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ command: "start_discovery" }),
       expect.stringContaining("AASPAI_PORTFOLIO_PROPOSAL="),
       firstAttempt?.harnessSessionId,
       `work:wakeup:${wakeupId}`,
     );
-    expect(internals.applyDiscoveryProposal).toHaveBeenNthCalledWith(
+    expect(daemon.applyDiscoveryProposal).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ command: "start_discovery" }),
       expect.stringContaining("AASPAI_PORTFOLIO_PROPOSAL="),
@@ -561,10 +524,10 @@ describe("WorkerDaemon in-flight guard (issue #4)", () => {
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
 
-    const first = (daemon as unknown as { pollWakeups(): Promise<void> }).pollWakeups();
+    const first = daemon.pollWakeups();
     // While the first is in flight (session is 200ms), fire a second tick.
     await new Promise((r) => setTimeout(r, 20));
-    const second = (daemon as unknown as { pollWakeups(): Promise<void> }).pollWakeups();
+    const second = daemon.pollWakeups();
 
     await Promise.all([first, second]);
 
@@ -598,7 +561,7 @@ describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
     const { WorkerDaemon } = await import("../src/daemon.js");
     sessionExecute = vi.fn().mockRejectedValue(new Error("adapter timeout"));
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
-    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     expect(sessionExecute).toHaveBeenCalledTimes(3);
     const { wakeups } = await import("@aaspai/db");
@@ -624,7 +587,7 @@ describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
       .fn()
       .mockResolvedValue({ status: "failed", output: "", sessionId: "sess_failed" });
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
-    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     expect(sessionExecute).toHaveBeenCalledTimes(3);
     const { wakeups } = await import("@aaspai/db");
@@ -654,7 +617,7 @@ describe("WorkerDaemon retry-with-backoff (reliability hardening)", () => {
       return { status: "completed", output: "ok", sessionId: "sess_test" };
     });
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
-    await (daemon as unknown as { claimAndRun(id: string): Promise<void> }).claimAndRun(wakeupId);
+    await daemon.claimAndRun(wakeupId);
 
     expect(sessionExecute).toHaveBeenCalledTimes(2);
     const { wakeups } = await import("@aaspai/db");
@@ -695,7 +658,7 @@ describe("WorkerDaemon graceful shutdown", () => {
     const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
 
     // Start a poll (which fires off an in-flight session)
-    const pollPromise = (daemon as unknown as { pollWakeups(): Promise<void> }).pollWakeups();
+    const pollPromise = daemon.pollWakeups();
     await new Promise((r) => setTimeout(r, 50));
 
     // session.execute is hanging. stop() should NOT complete until

@@ -1,4 +1,5 @@
 import { CompanyFullExportService } from "@aaspai/company";
+import { companyImportBundleSchema } from "@aaspai/contracts";
 import { getDefaultDb, runMigrations } from "@aaspai/db";
 import { NextResponse } from "next/server";
 import { ensureWorkspaceEnv } from "@/lib/aaspai";
@@ -11,9 +12,10 @@ export async function POST(request: Request) {
   const handle = getDefaultDb();
   runMigrations(handle);
   try {
+    const parsed = companyImportBundleSchema.parse(await request.json());
     const data = await new CompanyFullExportService(handle.db).importCompany(
       user.organizationId,
-      await request.json(),
+      parsed,
     );
     return NextResponse.json({ data });
   } catch (error) {

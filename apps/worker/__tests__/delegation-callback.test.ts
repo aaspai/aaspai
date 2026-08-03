@@ -158,18 +158,7 @@ describe("delegated work ownership and manager callback", () => {
     });
     const { WorkerDaemon } = await import("../src/daemon.js");
     const daemon = new WorkerDaemon({ organizationId: "org_test" });
-    const privateDaemon = daemon as unknown as {
-      queueDelegatedWork(
-        action: Record<string, unknown>,
-        workItem: typeof childWork,
-        adapter: string,
-        manager: Record<string, string>,
-      ): Promise<void>;
-      recoverStaleClaims(): Promise<void>;
-      recoverDelegationCallbacks(): Promise<void>;
-      releaseRetainedManagerWorkspace(workspaceId: string, ownerAttemptId: string): Promise<void>;
-    };
-    await privateDaemon.queueDelegatedWork(
+    await daemon.queueDelegatedWork(
       {
         type: "hire_and_delegate",
         agentId: "agent/researcher",
@@ -260,8 +249,8 @@ describe("delegated work ownership and manager callback", () => {
       evidenceIds: [evidence.id],
     });
 
-    await privateDaemon.recoverDelegationCallbacks();
-    await privateDaemon.recoverDelegationCallbacks();
+    await daemon.recoverDelegationCallbacks();
+    await daemon.recoverDelegationCallbacks();
     const allWakeups = await handle.db.select().from(wakeups);
     const callbackWakeups = allWakeups.filter((row) => row.triggerDetail === "delegation-verified");
     expect(callbackWakeups).toHaveLength(1);
@@ -324,7 +313,7 @@ describe("delegated work ownership and manager callback", () => {
       status: "ready",
       maxAttempts: 1,
     });
-    await privateDaemon.queueDelegatedWork(
+    await daemon.queueDelegatedWork(
       {
         type: "hire_and_delegate",
         agentId: "agent/researcher",
@@ -359,8 +348,8 @@ describe("delegated work ownership and manager callback", () => {
       blockedReason: "failed without retry eligibility",
     });
 
-    await privateDaemon.recoverDelegationCallbacks();
-    await privateDaemon.recoverDelegationCallbacks();
+    await daemon.recoverDelegationCallbacks();
+    await daemon.recoverDelegationCallbacks();
     const blockedRun = await store.createWorkflowRun({
       organizationId: "org_test",
       goalId: goal.id,
@@ -385,7 +374,7 @@ describe("delegated work ownership and manager callback", () => {
       idempotencyKey: "blocked-child-work",
       status: "ready",
     });
-    await privateDaemon.queueDelegatedWork(
+    await daemon.queueDelegatedWork(
       {
         type: "hire_and_delegate",
         agentId: "agent/researcher",
@@ -409,7 +398,7 @@ describe("delegated work ownership and manager callback", () => {
     await store.updateWorkItemStatus(blockedWork.id, "blocked", {
       blockedReason: "execution policy denied the assignment",
     });
-    await privateDaemon.recoverDelegationCallbacks();
+    await daemon.recoverDelegationCallbacks();
     const terminalCallbacks = (await handle.db.select().from(wakeups)).filter((row) =>
       ["delegation-verified", "delegation-terminal"].includes(row.triggerDetail ?? ""),
     );
@@ -466,7 +455,7 @@ describe("delegated work ownership and manager callback", () => {
       status: "ready",
       maxAttempts: 1,
     });
-    await privateDaemon.queueDelegatedWork(
+    await daemon.queueDelegatedWork(
       {
         type: "hire_and_delegate",
         agentId: "agent/researcher",
@@ -495,7 +484,7 @@ describe("delegated work ownership and manager callback", () => {
       .update(wakeups)
       .set({ status: "claimed", claimedAt: oldClaimedAt })
       .where(eq(wakeups.id, staleWake?.id ?? "missing"));
-    await privateDaemon.recoverStaleClaims();
+    await daemon.recoverStaleClaims();
     await expect(store.getWorkItem(staleWork.id)).resolves.toMatchObject({ status: "failed" });
 
     const lostRun = await store.createWorkflowRun({
@@ -522,7 +511,7 @@ describe("delegated work ownership and manager callback", () => {
       status: "ready",
       maxAttempts: 1,
     });
-    await privateDaemon.queueDelegatedWork(
+    await daemon.queueDelegatedWork(
       {
         type: "hire_and_delegate",
         agentId: "agent/researcher",
@@ -565,7 +554,7 @@ describe("delegated work ownership and manager callback", () => {
       .update(wakeups)
       .set({ status: "claimed", claimedAt: oldClaimedAt })
       .where(eq(wakeups.id, lostWake?.id ?? "missing"));
-    await privateDaemon.recoverStaleClaims();
+    await daemon.recoverStaleClaims();
     await expect(store.getAttempt(lostAttempt.id)).resolves.toMatchObject({ status: "lost" });
     await expect(store.getWorkItem(lostWork.id)).resolves.toMatchObject({ status: "failed" });
 
@@ -598,7 +587,7 @@ describe("delegated work ownership and manager callback", () => {
     });
 
     await store.updateWorkItemStatus(callbackPayload.workItemId ?? "missing", "completed");
-    await privateDaemon.releaseRetainedManagerWorkspace(managerWorkspace.id, managerAttempt.id);
+    await daemon.releaseRetainedManagerWorkspace(managerWorkspace.id, managerAttempt.id);
     await expect(store.getWorkspace(managerWorkspace.id)).resolves.toMatchObject({
       status: "ready",
     });
@@ -632,7 +621,7 @@ describe("delegated work ownership and manager callback", () => {
       .update(wakeups)
       .set({ status: "claimed", claimedAt: oldClaimedAt })
       .where(eq(wakeups.id, staleCallback?.id ?? "missing"));
-    await privateDaemon.recoverStaleClaims();
+    await daemon.recoverStaleClaims();
     await expect(
       store.getWorkItem(staleCallbackPayload.workItemId ?? "missing"),
     ).resolves.toMatchObject({ status: "failed" });
@@ -640,8 +629,8 @@ describe("delegated work ownership and manager callback", () => {
       status: "ready",
     });
     await store.releaseResourceLock(liveLock?.id ?? "missing");
-    await privateDaemon.recoverDelegationCallbacks();
-    await privateDaemon.recoverDelegationCallbacks();
+    await daemon.recoverDelegationCallbacks();
+    await daemon.recoverDelegationCallbacks();
     await expect(store.getWorkspace(managerWorkspace.id)).resolves.toMatchObject({
       status: "released",
     });

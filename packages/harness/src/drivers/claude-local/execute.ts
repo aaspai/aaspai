@@ -82,7 +82,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const collectedUsage: UsageSummary = {};
   let sessionId: string | undefined = ctx.runtime.sessionId;
   let model: string | undefined = config.model;
-  let _stopReason: string | undefined;
   let timedOut = false;
 
   const onLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
@@ -101,7 +100,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
             if (entry.sessionId) sessionId = entry.sessionId;
             if (entry.model) model = entry.model;
           } else if (entry.kind === "result") {
-            if (entry.stopReason) _stopReason = entry.stopReason;
           }
         }
         await ctx.onLog(stream, line);

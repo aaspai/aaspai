@@ -114,17 +114,7 @@ describe("hired agent tool inheritance", () => {
       } as unknown as Readonly<AgentConfig>;
       let reportsTo: string | null = manager.id;
       const daemon = new WorkerDaemon({ organizationId: "org_test" });
-      const privateDaemon = daemon as unknown as {
-        agentSource: {
-          has(id: string): Promise<boolean>;
-          get(id: string): Promise<Readonly<AgentConfig>>;
-        };
-        writeHiredAgent(
-          action: Record<string, unknown>,
-          manager: Readonly<AgentConfig>,
-        ): Promise<unknown>;
-      };
-      privateDaemon.agentSource = {
+      daemon.setAgentLookupForTests({
         async has() {
           return true;
         },
@@ -135,7 +125,7 @@ describe("hired agent tool inheritance", () => {
             reportsTo,
           } as unknown as Readonly<AgentConfig>;
         },
-      };
+      });
       const action = {
         type: "hire_and_delegate",
         agentId: "agent/researcher",
@@ -146,14 +136,14 @@ describe("hired agent tool inheritance", () => {
         workDescription: "Return evidence",
       };
 
-      await privateDaemon.writeHiredAgent(action, manager);
-      await privateDaemon.writeHiredAgent({ ...action, agentId: "agent/analyst" }, manager);
+      await daemon.writeHiredAgent(action, manager);
+      await daemon.writeHiredAgent({ ...action, agentId: "agent/analyst" }, manager);
       await expect(readFile(join(root, "manager", "relations.yaml"), "utf8")).resolves.toBe(
         'reportsTo: null\nmanages: ["agent/researcher","agent/analyst"]\npeers: ["agent/peer"]\n',
       );
 
       reportsTo = "agent/other-manager";
-      await expect(privateDaemon.writeHiredAgent(action, manager)).rejects.toThrow(
+      await expect(daemon.writeHiredAgent(action, manager)).rejects.toThrow(
         "reports to agent/other-manager",
       );
     } finally {

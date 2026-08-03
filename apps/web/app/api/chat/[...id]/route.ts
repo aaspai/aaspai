@@ -45,8 +45,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   const adapter = body.adapter ?? agent.adapter;
-  const _model = body.model ?? agent.model ?? "default";
-
   const root = workspaceRoot();
   const agentSource = new FileAgentConfigSource(join(root, DEFAULT_AGENTS_DIR));
   const knowledgeSource = new FileKnowledgeSource(join(root, DEFAULT_KNOWLEDGE_DIR));

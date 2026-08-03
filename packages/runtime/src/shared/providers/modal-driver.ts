@@ -1,7 +1,7 @@
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
 import type { App, Image as ModalImage, Sandbox as ModalSandbox } from "modal";
 import { ModalClient } from "modal";
-import type { SandboxClient, SandboxLease } from "../sandbox-client.js";
+import type { SandboxClient } from "../sandbox-client.js";
 import {
   buildLoginShellScript,
   SdkSandboxDriver,
@@ -119,8 +119,7 @@ export class ModalSandboxDriver extends SdkSandboxDriver<ModalSandbox> {
     return raw.sandboxId;
   }
 
-  protected override buildClient(raw: ModalSandbox, lease: SandboxLease): SandboxClient {
-    const _remoteCwd = lease.remoteCwd;
+  protected override buildClient(raw: ModalSandbox): SandboxClient {
     const execCommand = async (options: RunProcessOptions): Promise<RunProcessResult> => {
       const startedAt = new Date();
       // Modal's exec takes a pre-parsed argv, so we wrap the user's

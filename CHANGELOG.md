@@ -84,6 +84,23 @@ adheres to [Semantic Versioning](https://semver.org/).
   CLI uses a single SQLite database (`opencode.db`) and concurrent
   invocations can race on writes.
 
+### Removed
+- Production mock and feature-placeholder pages, plus the unused `@aaspai/crypto`
+  workspace package.
+
+### Changed
+- **Predictable workspace verification** — the root test command now runs testable
+  workspaces in parallel with isolated temporary database state, and dependency
+  hygiene is checked with a lightweight repository script.
+- **Validated web request boundaries** — company, knowledge, work-status, and
+  company-import JSON bodies now reuse the existing contract schemas.
+- **Stable internal module boundaries** — worker, execution-store, and OpenCode
+  adapter implementations now sit behind their existing public entrypoints.
+- **Strict TypeScript hygiene** — unused locals and parameters are checked across
+  the monorepo, with missing test-only workspace dependencies declared explicitly.
+- Worker behavior tests use public behavior and narrow test seams instead of
+  reaching through private implementation casts.
+
 ### Fixed
 - `Sessions.execute` no longer sets `errorMessage` to the success-path
   summary; only set for actual failures.
