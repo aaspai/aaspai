@@ -12,6 +12,53 @@ export type FrontendProvider = (typeof frontendProviderTypes)[number];
 export const frontendRuntimeTypes = ["local"] as const;
 export type FrontendRuntime = (typeof frontendRuntimeTypes)[number];
 
+const defaultOpencodeModel = { id: "opencode/big-pickle", label: "Big Pickle" };
+
+export function filterOpencodeModels(models: string[], authenticatedProviders: Iterable<string>) {
+  const authenticated = new Set(
+    [...authenticatedProviders].map((provider) => provider.trim().toLowerCase()),
+  );
+  const allowed = models.filter((model) => {
+    const separator = model.indexOf("/");
+    if (separator <= 0) return false;
+    const provider = model.slice(0, separator).toLowerCase();
+    return provider === "opencode" || authenticated.has(provider);
+  });
+  return [defaultOpencodeModel.id, ...allowed]
+    .filter((model, index, all) => all.indexOf(model) === index)
+    .map((model) =>
+      model === defaultOpencodeModel.id ? defaultOpencodeModel : { id: model, label: model },
+    );
+}
+
+export function configuredOpencodeProviders(auth: unknown) {
+  if (!auth || typeof auth !== "object" || Array.isArray(auth)) return [];
+  return Object.entries(auth)
+    .filter(
+      ([provider, value]) =>
+        provider.trim().length > 0 &&
+        value !== null &&
+        typeof value === "object" &&
+        Object.keys(value).length > 0,
+    )
+    .map(([provider]) => provider);
+}
+
+async function authenticatedOpencodeProviders() {
+  try {
+    const dataHome = process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share");
+    const auth = JSON.parse(
+      await readFile(
+        process.env.OPENCODE_AUTH_PATH ?? join(dataHome, "opencode", "auth.json"),
+        "utf8",
+      ),
+    ) as unknown;
+    return configuredOpencodeProviders(auth);
+  } catch {
+    return [];
+  }
+}
+
 async function codexModels() {
   const fallback = listAdapters().find((adapter) => adapter.type === "codex_local")?.models ?? [];
   try {
@@ -76,12 +123,12 @@ export async function listFrontendProviders() {
                 : [],
             )
           : [];
+      const authenticatedProviders =
+        type === "opencode_cli" ? await authenticatedOpencodeProviders() : [];
       const models =
         type === "codex_local"
           ? await codexModels()
-          : discovered.length > 0
-            ? discovered.map((model) => ({ id: model, label: model }))
-            : (info?.models ?? []);
+          : filterOpencodeModels(discovered, authenticatedProviders);
       const installed = !environment.checks.some(
         (check) => check.name.endsWith("_cli") && /not found|enoent/i.test(check.message),
       );

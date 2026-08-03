@@ -6,7 +6,9 @@
 
 `WorkerDaemon.claimAndRun` sets `wakeups.status = "claimed"` and `claimedAt = now()` **before** creating the session row. If the worker is killed (Ctrl+C, OOM, machine restart) between the claim and the session insert, the wakeup is permanently stuck in `claimed` with no associated session. There is no retry or recovery path — the wakeup never gets processed again.
 
-The current production DB has **181 wakeups in `claimed` state** accumulated from previous test runs. They block the queue, distort statistics, and silently absorb any future retry attempts that match by id.
+At the time of the report, the local test DB had **181 wakeups in `claimed`
+state** accumulated from previous test runs. They blocked queue inspection and
+could silently absorb future retry attempts that matched by id.
 
 ## Reproduction
 

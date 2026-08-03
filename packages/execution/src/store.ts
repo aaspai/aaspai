@@ -965,6 +965,7 @@ export class ExecutionStore {
       attemptNumber: input.attemptNumber ?? 1,
       timeoutMs: input.timeoutMs ?? null,
       cancelRequestedAt: null,
+      interruptRequestedAt: null,
       heartbeatAt: null,
       startedAt: null,
       finishedAt: null,
@@ -3046,6 +3047,43 @@ export class ExecutionStore {
         .where(and(eq(resourceLocks.ownerAttemptId, attempt.id), isNull(resourceLocks.releasedAt)));
       reconciled++;
     }
+
+    const lostSessions = await this.db
+      .select({
+        id: harnessSessions.id,
+        attemptFinishedAt: agentAttempts.finishedAt,
+      })
+      .from(agentAttempts)
+      .innerJoin(harnessSessions, eq(harnessSessions.id, agentAttempts.harnessSessionId))
+      .where(
+        organizationId
+          ? and(
+              eq(agentAttempts.organizationId, organizationId),
+              eq(agentAttempts.status, "lost"),
+              inArray(harnessSessions.status, ["queued", "running"]),
+            )
+          : and(
+              eq(agentAttempts.status, "lost"),
+              inArray(harnessSessions.status, ["queued", "running"]),
+            ),
+      );
+    for (const session of lostSessions) {
+      await this.db
+        .update(harnessSessions)
+        .set({
+          status: "failed",
+          finishedAt: session.attemptFinishedAt ?? now(),
+          errorFamily: "internal",
+          errorCode: "executor_lost",
+          errorMessage: "Executor was lost before the harness session completed.",
+        })
+        .where(
+          and(
+            eq(harnessSessions.id, session.id),
+            inArray(harnessSessions.status, ["queued", "running"]),
+          ),
+        );
+    }
     return reconciled;
   }
 
@@ -3071,17 +3109,46 @@ export class ExecutionStore {
     } else if (current.status === "preparing" || current.status === "running") {
       await this.db
         .update(agentAttempts)
-        .set({ cancelRequestedAt: now() })
+        .set({ cancelRequestedAt: now(), interruptRequestedAt: null })
         .where(eq(agentAttempts.id, attemptId));
       await this.transitionAttempt(attemptId, "cancelling");
     } else if (current.status === "cancelling") {
       await this.db
         .update(agentAttempts)
-        .set({ cancelRequestedAt: current.cancelRequestedAt ?? now() })
+        .set({ cancelRequestedAt: current.cancelRequestedAt ?? now(), interruptRequestedAt: null })
         .where(eq(agentAttempts.id, attemptId));
     }
     const requested = await this.getAttempt(attemptId);
     if (!requested) throw new Error(`Agent attempt ${attemptId} disappeared during cancellation`);
+    return requested;
+  }
+
+  /** Persist a retryable operator interrupt; the live runner settles it as timed_out. */
+  async requestInterruptAttempt(attemptId: string): Promise<AgentAttempt> {
+    const current = await this.getAttempt(attemptId);
+    if (!current) throw new Error(`Agent attempt ${attemptId} not found`);
+    if (isTerminalAttemptStatus(current.status)) return current;
+    if (current.status === "queued") {
+      throw new Error(`Agent attempt ${attemptId} has not started and cannot be interrupted`);
+    }
+    if (current.cancelRequestedAt) return current;
+    await this.db
+      .update(agentAttempts)
+      .set({ interruptRequestedAt: current.interruptRequestedAt ?? now() })
+      .where(
+        and(
+          eq(agentAttempts.id, attemptId),
+          inArray(agentAttempts.status, ["preparing", "running", "cancelling"]),
+          isNull(agentAttempts.cancelRequestedAt),
+        ),
+      );
+    const marked = await this.getAttempt(attemptId);
+    if (!marked) throw new Error(`Agent attempt ${attemptId} disappeared during interruption`);
+    if (marked.status === "preparing" || marked.status === "running") {
+      await this.transitionAttempt(attemptId, "cancelling");
+    }
+    const requested = await this.getAttempt(attemptId);
+    if (!requested) throw new Error(`Agent attempt ${attemptId} disappeared during interruption`);
     return requested;
   }
 

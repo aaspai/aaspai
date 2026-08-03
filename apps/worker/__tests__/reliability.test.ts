@@ -65,6 +65,31 @@ async function teardownDb(tmpDir: string): Promise<void> {
   vi.resetModules();
 }
 
+it("gives delegated agents exact durable context without platform archaeology", async () => {
+  const { contextualizeDelegatedPrompt } = await import("../src/daemon.js");
+  const prompt = contextualizeDelegatedPrompt("Do the assigned work.", "agent/growth-manager", {
+    id: "work/growth",
+    projectId: "project/growth",
+    parentWorkItemId: "work/ceo",
+    metadata: {
+      requiredCompanyActions: [
+        { type: "create_milestone", projectId: "project/growth" },
+        { type: "define_and_start_process", projectId: "project/growth" },
+      ],
+      declaredArtifacts: [{ path: "artifacts/result.md", kind: "other" }],
+      evidencePolicy: { citationPaths: ["artifacts/result.md"] },
+    },
+  });
+
+  expect(prompt).toContain("Your agent ID: agent/growth-manager");
+  expect(prompt).toContain("Project ID: project/growth");
+  expect(prompt).toContain('"type":"create_milestone"');
+  expect(prompt).toContain("artifacts/result.md");
+  expect(prompt).toContain("Do not execute specialist research");
+  expect(prompt).toContain("AASPAI source code");
+  expect(prompt).toContain("state database");
+});
+
 async function insertQueued(
   handle: { db: { insert: (t: unknown) => { values: (v: unknown) => Promise<unknown> } } },
   wakeupsTable: unknown,
@@ -206,6 +231,304 @@ describe("WorkerDaemon atomic claim (issue #2 reinforcement)", () => {
       }
     ).all();
     expect(rows.find((row) => row.id === wakeupId)?.status).toBe("completed");
+    await teardownDb(tmpDir);
+  });
+
+  it("recovers missed prompted company work into one durable agent attempt", async () => {
+    const { tmpDir, wakeupsTable, handle } = await setupDb();
+    const wakeupId = `wup_${randomUUID()}`;
+    const notificationId = `wup_${randomUUID()}`;
+    const legacyCompletedId = `wup_${randomUUID()}`;
+    const requestedAt = new Date().toISOString();
+    await (handle.db.insert(wakeupsTable) as { values: (v: unknown) => Promise<unknown> }).values([
+      {
+        id: wakeupId,
+        organizationId: "org_test",
+        loopId: "loop/company-control/org-test",
+        source: "on_demand",
+        agentId: "agent/ceo",
+        payloadJson: JSON.stringify({
+          command: "activate_company",
+          adapter: "dry_run_local",
+          prompt: "Staff the approved projects.",
+          requiredCompanyActions: [{ type: "hire_and_delegate", projectId: "project/growth" }],
+        }),
+        status: "completed",
+        finishedAt: requestedAt,
+        requestedAt,
+        idempotencyKey: randomUUID(),
+      },
+      {
+        id: notificationId,
+        organizationId: "org_test",
+        loopId: "loop/company-control/org-test",
+        source: "on_demand",
+        agentId: "agent/ceo",
+        payloadJson: JSON.stringify({ command: "create_milestone" }),
+        status: "completed",
+        finishedAt: requestedAt,
+        requestedAt,
+        idempotencyKey: randomUUID(),
+      },
+      {
+        id: legacyCompletedId,
+        organizationId: "org_test",
+        loopId: "loop/company-control/org-test",
+        source: "on_demand",
+        agentId: "agent/ceo",
+        payloadJson: JSON.stringify({
+          command: "activate_company",
+          prompt: "Already executed by the legacy session.",
+        }),
+        status: "completed",
+        sessionId: "sess_legacy_completed",
+        finishedAt: requestedAt,
+        requestedAt,
+        idempotencyKey: randomUUID(),
+      },
+    ]);
+
+    const { WorkerDaemon } = await import("../src/daemon.js");
+    const { ExecutionStore } = await import("@aaspai/execution");
+    const { wakeups } = await import("@aaspai/db");
+    const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
+    const executeDurableAttempt = vi.fn().mockResolvedValue({
+      protocolVersion: 1,
+      exitCode: 0,
+      timedOut: false,
+      summary: "Staffed the approved projects.",
+      usageBasis: "per_run",
+      clearSession: false,
+    });
+    const internals = daemon as unknown as {
+      legacySessionExecutor: undefined;
+      executeDurableAttempt: typeof executeDurableAttempt;
+      recoverMissedExecutableWakeups(): Promise<void>;
+      claimAndRun(id: string): Promise<void>;
+    };
+    internals.legacySessionExecutor = undefined;
+    internals.executeDurableAttempt = executeDurableAttempt;
+
+    await internals.recoverMissedExecutableWakeups();
+    let rows = await handle.db.select().from(wakeups);
+    expect(rows.find((row) => row.id === wakeupId)?.status).toBe("queued");
+    expect(rows.find((row) => row.id === notificationId)?.status).toBe("completed");
+    expect(rows.find((row) => row.id === legacyCompletedId)?.status).toBe("completed");
+
+    await internals.claimAndRun(wakeupId);
+
+    const store = new ExecutionStore(handle.db as never);
+    await expect(store.getWorkflowRun(`run:wakeup:${wakeupId}`)).resolves.toMatchObject({
+      sourceType: "wakeup",
+      sourceId: wakeupId,
+    });
+    await expect(store.getWorkItem(`work:wakeup:${wakeupId}`)).resolves.toMatchObject({
+      status: "completed",
+      workKind: "general",
+      deliveryMode: "none",
+      metadata: {
+        requiredCompanyActions: [{ type: "hire_and_delegate", projectId: "project/growth" }],
+      },
+    });
+    expect(await store.listAttemptsForWorkItem(`work:wakeup:${wakeupId}`)).toHaveLength(1);
+    expect(executeDurableAttempt).toHaveBeenCalledTimes(1);
+
+    await internals.recoverMissedExecutableWakeups();
+    rows = await handle.db.select().from(wakeups);
+    expect(rows.find((row) => row.id === wakeupId)?.status).toBe("completed");
+    expect(executeDurableAttempt).toHaveBeenCalledTimes(1);
+    await teardownDb(tmpDir);
+  });
+
+  it("retries failed CEO discovery in a new durable session and applies the proposal", async () => {
+    const { tmpDir, wakeupsTable, handle } = await setupDb();
+    const wakeupId = `wup_${randomUUID()}`;
+    await (handle.db.insert(wakeupsTable) as { values: (v: unknown) => Promise<unknown> }).values({
+      id: wakeupId,
+      organizationId: "org_test",
+      loopId: "loop/company-control/org-test",
+      source: "on_demand",
+      agentId: "agent/ceo",
+      payloadJson: JSON.stringify({
+        command: "start_discovery",
+        adapter: "dry_run_local",
+        prompt: "Propose the smallest useful project portfolio.",
+      }),
+      status: "queued",
+      requestedAt: new Date().toISOString(),
+      idempotencyKey: randomUUID(),
+    });
+
+    const { WorkerDaemon } = await import("../src/daemon.js");
+    const daemon = new WorkerDaemon({ organizationId: "org_test", workspaceRoot: tmpDir });
+    const { ExecutionStore } = await import("@aaspai/execution");
+    const store = new ExecutionStore(handle.db as never);
+    const executions: Array<{
+      attemptNumber: number;
+      wakeupId?: string;
+      durableSessionId?: string;
+      resumeSessionId?: string;
+    }> = [];
+    const internals = daemon as unknown as {
+      legacySessionExecutor: undefined;
+      executeDurableAttempt(input: {
+        attempt: { id: string; attemptNumber: number };
+        agentId: string;
+        adapter: string;
+        prompt: string;
+        wakeupId?: string;
+        durableSessionId?: string;
+        resumeSessionId?: string;
+        workItem: { workKind: string; deliveryMode: string };
+        beforeAttemptCompletion?: (
+          result: {
+            timedOut: boolean;
+            exitCode: number;
+            summary: string;
+          },
+          durableSessionId: string,
+        ) => Promise<void>;
+      }): Promise<{
+        timedOut: boolean;
+        exitCode: number;
+        summary: string;
+        sessionId: string;
+        errorCode?: string;
+        errorMessage?: string;
+      }>;
+      applyDiscoveryProposal(
+        payload: Record<string, unknown>,
+        summary: string | undefined,
+        sessionId: string,
+        wakeupId: string,
+      ): Promise<void>;
+      claimAndRun(id: string): Promise<void>;
+    };
+    internals.legacySessionExecutor = undefined;
+    internals.executeDurableAttempt = vi.fn(async (input) => {
+      executions.push({
+        attemptNumber: input.attempt.attemptNumber,
+        wakeupId: input.wakeupId,
+        durableSessionId: input.durableSessionId,
+        resumeSessionId: input.resumeSessionId,
+      });
+      const result = {
+        protocolVersion: 1,
+        timedOut: false,
+        exitCode: 0,
+        summary: 'AASPAI_PORTFOLIO_PROPOSAL={"summary":"Start with one project","projects":[]}',
+        sessionId: "provider_discovery",
+        usageBasis: "per_run" as const,
+        clearSession: false,
+      };
+      const session = await store.createHarnessSession({
+        id: input.durableSessionId,
+        organizationId: "org_test",
+        agentId: input.agentId,
+        adapter: input.adapter,
+        prompt: input.prompt,
+        wakeupId: input.wakeupId,
+      });
+      await store.linkHarnessSession(input.attempt.id, session.id);
+      await store.setHarnessSessionProviderIdentity(session.id, result.sessionId);
+      let completedResult:
+        | typeof result
+        | (typeof result & { errorCode: string; errorMessage: string });
+      try {
+        await input.beforeAttemptCompletion?.(result, session.id);
+        completedResult = result;
+      } catch (error) {
+        completedResult = {
+          ...result,
+          exitCode: 1,
+          errorCode: "evidence_persistence_failed",
+          errorMessage: error instanceof Error ? error.message : String(error),
+        };
+      }
+      await store.completeHarnessSession(
+        session.id,
+        completedResult,
+        completedResult.exitCode === 0 ? "succeeded" : "failed",
+      );
+      return completedResult;
+    });
+    internals.applyDiscoveryProposal = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("proposal references an unavailable company goal"))
+      .mockResolvedValueOnce(undefined);
+
+    await internals.claimAndRun(wakeupId);
+
+    const { agentAttempts, executionWorkItems, sessions, wakeups } = await import("@aaspai/db");
+    const rows = await (
+      (await import("@aaspai/db")).getDefaultDb().db.select().from(executionWorkItems) as {
+        all: () => Promise<
+          Array<{
+            id: string;
+            workKind: string;
+            deliveryMode: string;
+            maxAttempts: number;
+            status: string;
+          }>
+        >;
+      }
+    ).all();
+    expect(rows.find((row) => row.id === `work:wakeup:${wakeupId}`)).toMatchObject({
+      workKind: "general",
+      deliveryMode: "none",
+      maxAttempts: 3,
+      status: "ready",
+    });
+    const queuedWakeups = await handle.db.select().from(wakeups);
+    const retryWakeup = queuedWakeups.find((row) => row.triggerDetail === "attempt-retry");
+    expect(retryWakeup?.status).toBe("queued");
+    const retryPayload = JSON.parse(String(retryWakeup?.payloadJson)) as Record<string, unknown>;
+    expect(retryPayload).toMatchObject({
+      command: "start_discovery",
+      workItemId: `work:wakeup:${wakeupId}`,
+      workflowRunId: `run:wakeup:${wakeupId}`,
+      resumeSessionId: "provider_discovery",
+    });
+    const firstAttempt = (await handle.db.select().from(agentAttempts)).find(
+      (attempt) => attempt.attemptNumber === 1,
+    );
+    const retrySession = (await handle.db.select().from(sessions)).find(
+      (session) => session.wakeupId === retryWakeup?.id,
+    );
+    expect(retrySession?.parentSessionId).toBe(firstAttempt?.harnessSessionId);
+
+    await internals.claimAndRun(retryWakeup?.id ?? "missing");
+
+    expect(executions).toHaveLength(2);
+    expect(executions[0]?.wakeupId).toBe(wakeupId);
+    expect(executions[1]).toMatchObject({
+      attemptNumber: 2,
+      wakeupId: retryWakeup?.id,
+      durableSessionId: retrySession?.id,
+      resumeSessionId: "provider_discovery",
+    });
+    await expect(store.getWorkItem(`work:wakeup:${wakeupId}`)).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(await store.listAttemptsForWorkItem(`work:wakeup:${wakeupId}`)).toHaveLength(2);
+    expect(internals.applyDiscoveryProposal).toHaveBeenCalledTimes(2);
+    expect(internals.applyDiscoveryProposal).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ command: "start_discovery" }),
+      expect.stringContaining("AASPAI_PORTFOLIO_PROPOSAL="),
+      firstAttempt?.harnessSessionId,
+      `work:wakeup:${wakeupId}`,
+    );
+    expect(internals.applyDiscoveryProposal).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ command: "start_discovery" }),
+      expect.stringContaining("AASPAI_PORTFOLIO_PROPOSAL="),
+      retrySession?.id,
+      `work:wakeup:${wakeupId}`,
+    );
+    expect(
+      (await handle.db.select().from(wakeups)).find((row) => row.id === retryWakeup?.id),
+    ).toMatchObject({ status: "completed" });
     await teardownDb(tmpDir);
   });
 });

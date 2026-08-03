@@ -318,6 +318,7 @@ export const dryRunLocal: ServerAdapterModule = {
         "stdout",
         `${JSON.stringify({
           kind: "assistant",
+          sessionID: sessionId,
           ts: new Date().toISOString(),
           text: response,
         })}\n`,

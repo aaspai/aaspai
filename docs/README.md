@@ -15,6 +15,11 @@ kept in a database.
 | [Harnesses and runtimes](./execution-runtimes.md) | Understand where agentic CLIs run, credential direction, and remote-runtime acceptance. |
 | [Deployment](./deployment.md) | Run the current system and understand its production-readiness limits. |
 
+When present in a development checkout, the internal `study/` directory
+contains the implementation snapshot, ADRs, plans, dated validation, and
+imported reference systems. Only the public behavior documented here is a
+product promise.
+
 ## Core definitions
 
 | Definition | Location | Guide |
@@ -24,6 +29,8 @@ kept in a database.
 | Loops | `.aaspai/loops/` | [Loops](./concepts/loops.md) |
 | Project config | `.aaspai/aaspai.config.ts` | [Getting started](./getting-started.md) |
 | Local runtime state | `.aaspai/state.db` | [Architecture](./architecture.md#sources-of-truth) |
+| Company work | Database goals, projects, milestones, processes, and work items | [Architecture](./architecture.md#durable-domain-flow) |
+| Execution evidence | Database events/output/artifacts plus verification | [Architecture](./architecture.md#attempt-execution) |
 
 `aaspai init` keeps the complete workspace under `.aaspai/`. Definitions and
 config may be committed; runtime files such as `state.db`, logs, and PID files
@@ -34,7 +41,7 @@ must remain ignored.
 The public `docs/` directory describes behavior available in the current
 repository. Forward-looking design and engineering evidence live in the
 internal `study/` directory and are not public product promises. Files under
-`docs/issues/` are historical issue records.
+`docs/issues/` are historical issue records, not an active backlog.
 
 ## License
 

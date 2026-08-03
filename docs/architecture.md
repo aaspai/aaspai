@@ -1,149 +1,180 @@
 # Architecture
 
-This document describes the current repository. Future architecture is
-tracked separately and is not implied by this page.
+This page describes the architecture implemented by this repository. Design
+proposals and dated validation reports live in the internal `study/` directory
+when present and are not product guarantees.
 
 ## System shape
 
 ```text
 Human / automation
-        |
-        v
-CLI ----+---- Web command center
-        |             |
-        v             v
-             API control plane
-                    |
-                    v
-          durable database state
-                    ^
-                    |
-       Worker: scheduler + executor
-                    |
-                    v
- workspace -> runtime -> agentic CLI
-                    |
-                    v
-       events, artifacts, verification
+       |
+       +---------------- CLI ------------------+
+       |                                       |
+       +---------------- Web ------------------+---> API control plane
+                                               |       (Hono)
+                                               v
+                                      durable SQLite state
+                                               ^
+                                               |
+                                   worker scheduler/executor
+                                               |
+                         workspace -> runtime -> harness -> agentic CLI
+                                               |
+                                  events, output, artifacts, evidence
 ```
 
-The repository has four applications:
+The API and web app control state and enqueue work. The worker is the only
+autonomous execution owner.
 
-| Application | Current responsibility |
+## Applications
+
+| Application | Responsibility |
 |---|---|
-| `@aaspai/api` | Hono HTTP control plane for health, loops, sessions, providers, execution, and company operations. Mutating execution routes require an injected auth verifier. |
-| `@aaspai/worker` | Long-running scheduler and autonomous executor. Claims durable work, manages capacity and workspaces, invokes harnesses, and records evidence. |
-| `@aaspai/cli` | Workspace setup, definition inspection, manual sessions/chat, durable goal creation, provider checks, and local daemon operation. |
-| `@aaspai/web` | Next.js command center for onboarding, company goals, agents, execution, governance, sessions, memory, knowledge, and state. It currently uses server-side local workspace/database access. |
+| `@aaspai/api` | Hono control plane for health, loops, sessions, providers, execution, strategic views, and company operations. |
+| `@aaspai/worker` | Durable wakeup recovery, scheduling, capacity/lease handling, company-action brokerage, attempts, retries, and execution. |
+| `@aaspai/cli` | Workspace setup, database operations, definitions, manual sessions, provider checks, goals, loops, state, and daemon operation. |
+| `@aaspai/web` | Next.js command center for onboarding, company/portfolio, goals/projects, execution, governance, knowledge, memory, and evidence. It currently uses trusted server-side local workspace/database access. |
+
+## Durable domain flow
+
+Strategic company work uses this hierarchy:
+
+```text
+Company profile
+  -> Goal
+  -> Project
+  -> Milestone
+  -> Process definition + process binding
+  -> WorkflowRun
+  -> OperatorRun + control decisions
+  -> WorkItems + dependencies
+  -> AgentAttempt(s)
+  -> HarnessSession + Workspace + Runtime lease
+  -> events / raw output / artifacts
+  -> verification / approval / delivery or escalation
+```
+
+Not every manual session has the complete strategic hierarchy. A manual chat
+is a bounded session path. Autonomous work must use durable work items and
+attempts so retries, cancellation, evidence, and recovery remain queryable.
+
+## Control lanes
+
+Execution observation separates three lanes:
+
+| Lane | Meaning | Examples |
+|---|---|---|
+| `company` | A validated organizational mutation | `hire_and_delegate`, `create_milestone`, `define_and_start_process`, `company_action` |
+| `work` | Agent work inside an assigned attempt | file edits, shell/tool calls, research, declared deliverables |
+| `system` | Runtime and control-plane lifecycle | claim, workspace setup, CLI start, retry, cancel, failure, cleanup |
+
+Agent prose is not a company mutation. A native CLI must submit a typed
+company action through the attempt-scoped broker; the worker validates and
+records the resulting durable IDs. The observer is a read model over durable
+execution/company records, not a second state store.
 
 ## Sources of truth
 
-| Information | Canonical source |
+| Concern | Canonical source |
 |---|---|
-| Agent, loop, and knowledge definitions | Git-backed files under `.aaspai/`; documented sidecars override matching frontmatter fields |
+| Agent, loop, and knowledge definitions | Git-backed files under `.aaspai/` |
 | Project configuration | `.aaspai/aaspai.config.ts` |
-| Goals, work items, attempts, approvals, sessions, events, and audit records | Database |
-| Raw execution output and artifacts | Durable execution evidence referenced by database records |
-| Accepted organizational knowledge | Reviewed files under `.aaspai/knowledge/` |
-| Product deliverables | Governed artifacts, commits, pull requests, or approved external actions |
+| Goals, projects, work items, runs, attempts, claims, approvals, budgets, and governance | SQLite database by default; Postgres support exists but is not fully production-verified |
+| Company departments, authority, routing, delegations, escalations, service agents, and autonomy proposals | Database company/control tables |
+| Raw execution output and normalized events | Execution evidence tables, with durable artifact files referenced by database rows |
+| Operational memory | Scoped database records with provenance |
+| Accepted knowledge | Reviewed Markdown files under `.aaspai/knowledge/` |
+| Product deliverables | Governed commits, pull requests, artifacts, or approved external actions |
+| Provider credentials | Native CLI/platform credential stores or short-lived attempt/runtime credentials; never definition files |
 
-The practical rule is: definitions are reviewed in Git; operational
-transitions are recorded in the database. Runtime output must not silently
-rewrite a definition.
+Definitions describe desired behavior and are pinned by revision for a run.
+Runtime state must not silently rewrite Git-backed definitions.
 
-Local state defaults to `.aaspai/state.db`. Environment variables can override
-definition paths and preserve compatibility with legacy layouts.
+## Package ownership
 
-## Package layers
-
-The code is organized by ownership rather than by UI feature:
-
-| Layer | Responsibilities | Main packages |
+| Layer | Main packages | Owns |
 |---|---|---|
-| Foundation | contracts, config, persistence, identity, auth, audit, observability, Git | `contracts`, `config`, `db`, `identity`, `auth`, `audit`, `observability`, `crypto`, `git`, `testing` |
-| Execution fabric | harness capabilities, runtimes, sessions, isolated workspaces, execution plans | `harness`, `runtime`, `sessions`, `execution` |
-| Agents and processes | definitions, skills, tools, knowledge, loops | `file-loader`, `skills`, `tools`, `knowledge`, `loops` |
-| Functional work state | goals, work items, attempts, dependencies, verification, approvals | `execution`, `db` |
-| Company control plane | departments, service agents, authority, routing, delegation, escalation, autonomy changes | `company`, `api`, `db` |
+| Foundation | `contracts`, `config`, `db`, `identity`, `auth`, `audit`, `crypto`, `git`, `observability`, `testing` | Schemas, persistence, identity, authorization, audit, logging, and provider-neutral contracts |
+| Definitions and agent capabilities | `file-loader`, `skills`, `tools`, `knowledge` | Git-backed definitions and resolved agent inputs |
+| Coordination and company control | `loops`, `company` | Schedules, process compilation, strategic projections, authority, company commands, governance views |
+| Execution fabric | `execution`, `sessions`, `harness`, `runtime` | Work-item lifecycle, plans, attempts, workspaces, leases, CLI invocation, restore, cancellation, and evidence |
+| Applications | `apps/cli`, `apps/api`, `apps/worker`, `apps/web` | User/control surfaces and process ownership |
 
-The implementation order is foundation, execution fabric, agents/processes,
-functional work state, then company control plane. The conceptual company
-layer sits above the other layers even though its code is being delivered
-incrementally.
+`@aaspai/execution` remains the source of truth for work-item and attempt
+state. `@aaspai/company` may project and mutate company-level records, but it
+must not create a competing task queue.
 
-## Execution paths
+## Attempt execution
 
-Autonomous work follows one governed path:
+Every governed attempt pins an immutable execution plan containing the
+definition revision, agent/profile inputs, repository target, harness, runtime
+configuration, prompt, timeout, and workspace policy.
 
 ```text
-Goal / workflow
-  -> WorkItem and dependencies
-  -> scheduler claim and capacity locks
-  -> AgentAttempt
-  -> immutable ExecutionPlan
-  -> isolated Workspace
-  -> Runtime
-  -> HarnessAdapter / external CLI
-  -> normalized events and artifacts
-  -> post-run diff policy
-  -> independent checker attempt
-  -> completion, retry, approval, delivery, or escalation
+claim WorkItem and capacity locks
+  -> create AgentAttempt
+  -> create immutable ExecutionPlan
+  -> acquire isolated Workspace / EnvironmentLease
+  -> materialize skills, knowledge, instructions, and tools
+  -> run HarnessAdapter in the selected RuntimeTarget
+  -> persist lifecycle/events/raw output
+  -> restore changes and collect declared artifacts
+  -> verify and apply approval/delivery policy
+  -> complete, retry, cancel, or escalate
 ```
 
-The API enqueues work; it does not execute agent sessions inside request
-handlers. The worker owns autonomous execution.
+The harness owns CLI command construction, provider parsing, usage, and
+provider session IDs. The runtime owns environment identity, workspace
+transfer, process execution, and cleanup. The worker/execution store owns
+durable control, not the CLI.
 
-File-defined loops use this same path. Their Git-owned schedule, autonomy
-level, gate, and budget replace starter defaults. Durable loop controls,
-run history, work items, attempts, approvals, and budget use feed the next
-discovery/decision cycle.
+Retries create a new attempt and preserve the original attempt/session
+evidence. Cancellation and interruption are durable requests that the worker
+propagates to the live process when it is running.
 
-Direct session execution remains available for explicit chat and bounded
-manual runs. It is a compatibility/user-interaction path, not a shortcut for
-autonomous work.
+## Loops and recurring processes
 
-### Execution responsibility
+File-defined loops are scheduled into durable `WorkflowRun`/wakeup state. A
+process binding can start a repeatable project process, and a valid interval or
+cron policy can queue its next occurrence after the current run settles. The
+same operator/workflow lineage is retained where the process supports resume.
 
-The harness adapter defines how to invoke and interpret an agentic CLI. The
-runtime target defines where that CLI executes. For a sandbox target such as
-Daytona, the intended execution boundary places the CLI and mutable repository
-inside the sandbox while the worker retains durable control and evidence.
+Wakeups are scheduler signals, not the business work model. Startup recovery
+reconciles stale claims and missed executable wakeups before normal polling.
 
-The current Daytona integration proves the real worker claim, selected-skill
-use, prebuilt snapshot execution, workspace round-trip, streamed CLI execution,
-timeout, cancellation, same-lease provider-session resume, external
-session/log persistence, durable branches and declared artifacts,
-attempt-scoped gateway credentials, runtime identity, and cleanup. See
-[Harnesses and execution runtimes](./execution-runtimes.md) for the current
-boundary and acceptance criteria.
+## Runtime and authentication boundaries
 
-## Important identities
+The selected agentic CLI runs inside the selected runtime target: local,
+Docker, SSH, or a configured sandbox provider. Harness adapters do not own
+runtime behavior, and runtime targets do not interpret provider output.
 
-These records are intentionally distinct:
+The control plane does not call an LLM API directly. Local Codex/OpenCode runs
+use each CLI's native authentication. Managed remote execution is intended to
+use short-lived, attempt-scoped credentials; permanent host credentials are
+not copied into disposable sandboxes.
 
-- `AgentDefinition`: versioned role and capability configuration.
-- `WorkItem`: durable unit of coordination.
-- `AgentAttempt`: one governed attempt to complete a work item.
-- `HarnessSession`: one provider/CLI invocation.
-- `Workspace`: isolated mutable checkout.
-- `EnvironmentLease`: allocated execution environment.
-- `Verification`: independent assessment of submitted evidence.
+Use the executable capability and doctor commands before real work:
 
-Keeping them separate provides retry history, provider lineage, workspace
-ownership, and auditable verification.
+```sh
+yarn workspace @aaspai/cli start provider capabilities
+yarn workspace @aaspai/cli start provider doctor
+```
 
 ## Current boundaries
 
-- SQLite is the default and best-verified local operating mode.
-- Postgres support exists in the database package, but the complete
-  multi-process production topology is not yet claimed as verified.
-- `dry_run_local` proves orchestration deterministically; it does not prove a
-  real provider integration.
-- Real-provider support must be checked with `provider capabilities`,
-  `provider doctor`, and the opt-in real test suites.
-- The web app is currently a trusted local/server-side control surface, not a
-  separately deployable stateless frontend.
-- Default worker concurrency is deliberately conservative.
+- SQLite at `.aaspai/state.db` is the default and best-verified topology.
+- Postgres primitives exist, but full autonomous/company-control parity is not
+  a production claim.
+- `dry_run_local` validates orchestration deterministically; it is not proof of
+  a real provider integration.
+- Remote runtime acceptance is environment-dependent. Local company-control
+  execution is validated; remote company-control parity still requires the
+  selected runtime's authenticated bridge and acceptance tests.
+- The web app is a trusted local/server-side control surface, not a separately
+  hardened stateless multi-tenant frontend.
+- Worker concurrency is intentionally conservative and should be increased
+  only with measured provider/runtime capacity and recovery evidence.
 
-See [Deployment](./deployment.md) before exposing the system beyond a trusted
-development environment.
+See [Deployment](./deployment.md), [Getting started](./getting-started.md),
+and [Harnesses and execution runtimes](./execution-runtimes.md).

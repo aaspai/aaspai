@@ -281,6 +281,7 @@ export const agentAttemptSchema = z
     attemptNumber: positiveIntegerSchema.default(1),
     timeoutMs: positiveIntegerSchema.nullable().default(null),
     cancelRequestedAt: isoTimestampSchema.nullable().default(null),
+    interruptRequestedAt: isoTimestampSchema.nullable().default(null),
     heartbeatAt: isoTimestampSchema.nullable().default(null),
     startedAt: isoTimestampSchema.nullable().default(null),
     finishedAt: isoTimestampSchema.nullable().default(null),
@@ -447,7 +448,7 @@ export type ExecutionTransition = {
 
 const ATTEMPT_TRANSITIONS: Readonly<Record<AttemptStatus, readonly AttemptStatus[]>> = {
   queued: ["preparing", "cancelled"],
-  preparing: ["running", "failed", "cancelled", "lost"],
+  preparing: ["running", "cancelling", "failed", "cancelled", "lost"],
   running: ["cancelling", "succeeded", "failed", "timed_out", "lost"],
   cancelling: ["cancelled", "failed", "timed_out", "lost"],
   succeeded: [],

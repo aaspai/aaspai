@@ -65,7 +65,9 @@ export class StrategicReadModelService {
         .where(eq(processBindings.organizationId, organizationId)),
     ]);
 
-    const objectiveSummaries = goalRows.map((goal) => {
+    const companyGoals = goalRows.filter((goal) => !goal.id.startsWith("goal:loops:"));
+    const companyGoalIds = new Set(companyGoals.map((goal) => goal.id));
+    const objectiveSummaries = companyGoals.map((goal) => {
       const summary = {
         id: goal.id,
         organizationId: goal.organizationId,
@@ -85,38 +87,41 @@ export class StrategicReadModelService {
       return companyObjectiveSummarySchema.parse(summary);
     });
 
-    const projectSummaries = projectRows.map((project) => {
-      const summary = {
-        id: project.id,
-        organizationId: project.organizationId,
-        goalId: project.goalId,
-        title: project.title,
-        description: project.description,
-        status: project.status,
-        managerAgentId: project.managerAgentId,
-        budget: parseJsonObject(project.budgetJson),
-        riskLevel: project.riskLevel,
-        reviewCadence: project.reviewCadence,
-        healthStatus: project.healthStatus,
-        successCriteria: parseJsonValue(project.successCriteriaJson, []),
-        objectiveIds: links
-          .filter((link) => link.projectId === project.id)
-          .map((link) => link.goalId),
-        assignments: assignments
-          .filter((assignment) => assignment.projectId === project.id)
-          .map((assignment) => projectAssignmentSchema.parse(assignment)),
-        milestones: milestoneRows
-          .filter((milestone) => milestone.projectId === project.id)
-          .sort((a, b) => a.sequence - b.sequence)
-          .map(({ acceptanceJson, ...milestone }) => ({
-            ...milestone,
-            acceptance: parseJsonObject(acceptanceJson),
-          }))
-          .map((milestone) => milestoneSchema.parse(milestone)),
-        processBindingCount: bindings.filter((binding) => binding.projectId === project.id).length,
-      } satisfies CompanyProjectSummary;
-      return companyProjectSummarySchema.parse(summary);
-    });
+    const projectSummaries = projectRows
+      .filter((project) => companyGoalIds.has(project.goalId))
+      .map((project) => {
+        const summary = {
+          id: project.id,
+          organizationId: project.organizationId,
+          goalId: project.goalId,
+          title: project.title,
+          description: project.description,
+          status: project.status,
+          managerAgentId: project.managerAgentId,
+          budget: parseJsonObject(project.budgetJson),
+          riskLevel: project.riskLevel,
+          reviewCadence: project.reviewCadence,
+          healthStatus: project.healthStatus,
+          successCriteria: parseJsonValue(project.successCriteriaJson, []),
+          objectiveIds: links
+            .filter((link) => link.projectId === project.id)
+            .map((link) => link.goalId),
+          assignments: assignments
+            .filter((assignment) => assignment.projectId === project.id)
+            .map((assignment) => projectAssignmentSchema.parse(assignment)),
+          milestones: milestoneRows
+            .filter((milestone) => milestone.projectId === project.id)
+            .sort((a, b) => a.sequence - b.sequence)
+            .map(({ acceptanceJson, ...milestone }) => ({
+              ...milestone,
+              acceptance: parseJsonObject(acceptanceJson),
+            }))
+            .map((milestone) => milestoneSchema.parse(milestone)),
+          processBindingCount: bindings.filter((binding) => binding.projectId === project.id)
+            .length,
+        } satisfies CompanyProjectSummary;
+        return companyProjectSummarySchema.parse(summary);
+      });
 
     const profile = profileRows[0]
       ? (() => {

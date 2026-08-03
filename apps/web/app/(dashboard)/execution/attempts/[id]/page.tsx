@@ -27,6 +27,7 @@ export default async function ExecutionAttemptPage({
   const detail = await getExecutionAttemptDetail(decodeURIComponent(id));
   if (!detail) notFound();
   const json = (value: unknown) => JSON.stringify(value, null, 2);
+  const generalWork = detail.workItem?.workKind === "general";
   return (
     <div className="space-y-6">
       <Button asChild variant="ghost" size="sm" className="-ml-2">
@@ -71,14 +72,19 @@ export default async function ExecutionAttemptPage({
       <div className="grid gap-4 md:grid-cols-3">
         <LineageCard
           icon={<Layers3 className="h-4 w-4" />}
-          title="Goal / project"
-          value={`${String(detail.goal?.title ?? "—")} / ${String(detail.project?.title ?? "—")}`}
+          title={detail.source?.label ? "Execution scope" : "Goal / project"}
+          value={
+            detail.source?.label ??
+            `${String(detail.goal?.title ?? "—")} / ${String(detail.project?.title ?? "—")}`
+          }
         />
-        <LineageCard
-          icon={<GitBranch className="h-4 w-4" />}
-          title="Repository"
-          value={String(detail.repository?.localPath ?? "—")}
-        />
+        {!generalWork ? (
+          <LineageCard
+            icon={<GitBranch className="h-4 w-4" />}
+            title="Repository"
+            value={String(detail.repository?.localPath ?? "—")}
+          />
+        ) : null}
         <LineageCard
           icon={<Clock3 className="h-4 w-4" />}
           title="Attempt"
@@ -128,6 +134,12 @@ export default async function ExecutionAttemptPage({
               value={`${String(detail.revision?.id ?? "—")} @ ${String(detail.revision?.commitSha ?? "—")}`}
               mono
             />
+            <Field
+              label="Technical goal / project"
+              value={`${String(detail.goal?.id ?? "—")} / ${String(detail.project?.id ?? "—")}`}
+              mono
+            />
+            <Field label="Execution source" value={json(detail.source ?? {})} code />
             <Field label="Source snapshot" value={json(detail.plan?.sourceSnapshot ?? {})} code />
             <Field label="Workspace" value={json(detail.workspace ?? {})} code />
             <Field label="Harness session" value={json(detail.harnessSession ?? {})} code />

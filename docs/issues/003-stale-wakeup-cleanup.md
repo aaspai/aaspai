@@ -6,7 +6,9 @@
 
 When a worker is killed mid-session (Ctrl+C, OOM, machine restart), any wakeup it was processing is left in `claimed` state. On worker restart, the worker polls `queued` wakeups and never touches the stale `claimed` ones. The wakeup queue grows forever.
 
-The current production DB has **181 stale `claimed` wakeups** from previous test runs. They pollute metrics, block queue inspection, and confuse users.
+At the time of the report, the local test DB had **181 stale `claimed`
+wakeups** from previous test runs. They polluted metrics, blocked queue
+inspection, and confused users.
 
 ## Reproduction
 

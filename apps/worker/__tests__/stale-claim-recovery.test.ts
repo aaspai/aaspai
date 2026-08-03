@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -354,6 +354,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
       status: "ready",
     });
     const attempt = await store.createAttempt({
+      id: `attempt:wakeup:wakeup/${randomUUID()}`,
       organizationId: "org_test",
       workflowRunId: run.id,
       workItemId: work.id,
@@ -515,7 +516,11 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
       repositoryWork: false,
       ephemeralSecrets: [brokerSecret],
     });
-    const persistedResult = await readFile(join(artifactRoot, attempt.id, "result.json"), "utf8");
+    const artifactDirectory = createHash("sha256").update(attempt.id).digest("hex");
+    const persistedResult = await readFile(
+      join(artifactRoot, artifactDirectory, "result.json"),
+      "utf8",
+    );
     expect(persistedResult).toContain("[REDACTED]");
     expect(persistedResult).not.toContain(brokerSecret);
     const retryAttempt = await store.createAttempt({
@@ -562,7 +567,7 @@ describe("WorkerDaemon stale-claim recovery (issue #3)", () => {
       }),
     ).rejects.toThrow("Attempt output contains an ephemeral secret");
     await expect(
-      readFile(join(artifactRoot, attempt.id, "files", "growth", "lead-list.md"), "utf8"),
+      readFile(join(artifactRoot, artifactDirectory, "files", "growth", "lead-list.md"), "utf8"),
     ).resolves.toBe("Lead: https://example.test\n");
 
     await teardownDb(tmpDir);

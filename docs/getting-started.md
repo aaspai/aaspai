@@ -124,7 +124,26 @@ yarn workspace @aaspai/cli start session list
 
 Manual chat uses the bounded session path. Autonomous work uses the durable
 `WorkItem -> AgentAttempt -> ExecutionPlan` path described in
-[Architecture](./architecture.md#execution-paths).
+[Architecture](./architecture.md#attempt-execution).
+
+## Validate company orchestration
+
+The deterministic company simulation exercises the real database, worker,
+company-action broker, process binding, delegation, verification, and roll-up
+paths without calling a paid provider:
+
+```sh
+yarn test:simulate:company
+```
+
+For native CLI acceptance, authenticate the selected CLI first and then run:
+
+```sh
+yarn workspace @aaspai/worker test:real:company:local
+```
+
+Remote runtime acceptance is separate and environment-dependent; see
+[Harnesses and execution runtimes](./execution-runtimes.md).
 
 ## Use a real agentic CLI
 

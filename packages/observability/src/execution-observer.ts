@@ -96,15 +96,23 @@ export function observeExecution(input: {
     const kind =
       event.kind === "tool_call" || event.kind === "tool_result" ? event.kind : "progress";
     const classification = tool ? classifyTool(tool) : null;
+    const systemEvent = ["init", "system", "stderr", "stdout"].includes(event.kind);
     observed.push({
       id: `session:${event.id}`,
       seq: event.seq,
       ts: event.ts,
-      lane: classification?.lane ?? "work",
-      origin: classification?.origin ?? "agent_native",
+      lane: classification?.lane ?? (systemEvent ? "system" : "work"),
+      origin: classification?.origin ?? (systemEvent ? "runtime" : "agent_native"),
       kind,
       name: tool ?? event.kind,
-      status: typeof event.payload.status === "string" ? event.payload.status : undefined,
+      status:
+        typeof event.payload.status === "string"
+          ? event.payload.status
+          : event.kind === "tool_result"
+            ? event.payload.isError === true
+              ? "failed"
+              : "completed"
+            : undefined,
       payload: event.payload,
     });
   }

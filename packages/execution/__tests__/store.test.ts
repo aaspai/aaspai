@@ -252,6 +252,35 @@ describe("ExecutionStore", () => {
     );
   });
 
+  it("persists retryable interrupt intent while permanent cancel remains authoritative", async () => {
+    const attempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_interrupt",
+      workItemId: "work_interrupt",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+      id: "attempt_interrupt",
+    });
+    await store.transitionAttempt(attempt.id, "preparing");
+    await store.transitionAttempt(attempt.id, "running");
+
+    const interrupted = await store.requestInterruptAttempt(attempt.id);
+    expect(interrupted).toMatchObject({
+      status: "cancelling",
+      interruptRequestedAt: expect.any(String),
+      cancelRequestedAt: null,
+    });
+    await expect(store.requestInterruptAttempt(attempt.id)).resolves.toMatchObject({
+      interruptRequestedAt: interrupted.interruptRequestedAt,
+    });
+
+    await expect(store.requestCancelAttempt(attempt.id)).resolves.toMatchObject({
+      status: "cancelling",
+      cancelRequestedAt: expect.any(String),
+      interruptRequestedAt: null,
+    });
+  });
+
   it("prevents duplicate active resource ownership and reconciles expired locks", async () => {
     const first = await store.acquireResourceLock({
       organizationId: "org_test",
@@ -368,6 +397,76 @@ describe("ExecutionStore", () => {
     await expect(
       store.findResourceLock("org_test", "workspace", "workspace:attempt_lost"),
     ).resolves.toBeNull();
+  });
+
+  it("terminalizes live sessions for newly and already lost attempts", async () => {
+    const newlyLostAttempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_newly_lost",
+      workItemId: "work_newly_lost",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+      id: "attempt_newly_lost",
+    });
+    const newlyLostSession = await store.createHarnessSession({
+      organizationId: "org_test",
+      agentId: "agent_test",
+      adapter: "dry_run_local",
+      prompt: "newly lost work",
+    });
+    await store.linkHarnessSession(newlyLostAttempt.id, newlyLostSession.id);
+    await store.transitionAttempt(newlyLostAttempt.id, "preparing");
+    await store.transitionAttempt(newlyLostAttempt.id, "running");
+    await handle.db
+      .update(agentAttempts)
+      .set({
+        startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+        heartbeatAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+      })
+      .where(eq(agentAttempts.id, newlyLostAttempt.id));
+
+    const alreadyLostAttempt = await store.createAttempt({
+      organizationId: "org_test",
+      workflowRunId: "run_already_lost",
+      workItemId: "work_already_lost",
+      agentId: "agent_test",
+      harness: "dry_run_local",
+      id: "attempt_already_lost",
+    });
+    const alreadyLostSession = await store.createHarnessSession({
+      organizationId: "org_test",
+      agentId: "agent_test",
+      adapter: "dry_run_local",
+      prompt: "already lost work",
+    });
+    await store.linkHarnessSession(alreadyLostAttempt.id, alreadyLostSession.id);
+    await store.transitionAttempt(alreadyLostAttempt.id, "preparing");
+    await store.transitionAttempt(alreadyLostAttempt.id, "running");
+    await store.transitionAttempt(alreadyLostAttempt.id, "lost");
+    await handle.db
+      .update(sessions)
+      .set({ status: "queued", startedAt: null })
+      .where(eq(sessions.id, alreadyLostSession.id));
+
+    const cutoff = new Date(Date.now() - 5 * 60_000).toISOString();
+    await expect(store.reconcileLostAttempts(cutoff, "org_test")).resolves.toBe(1);
+    const lostAttempts = await Promise.all([
+      store.getAttempt(newlyLostAttempt.id),
+      store.getAttempt(alreadyLostAttempt.id),
+    ]);
+    expect(lostAttempts).toEqual([
+      expect.objectContaining({ status: "lost", finishedAt: expect.any(String) }),
+      expect.objectContaining({ status: "lost", finishedAt: expect.any(String) }),
+    ]);
+    for (const [index, sessionId] of [newlyLostSession.id, alreadyLostSession.id].entries()) {
+      await expect(store.getHarnessSession(sessionId)).resolves.toMatchObject({
+        status: "failed",
+        finishedAt: lostAttempts[index]?.finishedAt,
+        errorFamily: "internal",
+        errorCode: "executor_lost",
+        errorMessage: "Executor was lost before the harness session completed.",
+      });
+    }
   });
 
   it("does not lose a quiet attempt with a current executor heartbeat", async () => {

@@ -69,6 +69,9 @@ function codexEventToTranscript(event: CodexStreamEvent, ts: string): Transcript
             status?: string;
             input?: unknown;
             output?: unknown;
+            command?: string;
+            aggregated_output?: string;
+            exit_code?: number | null;
             is_error?: boolean;
           }
         | undefined;
@@ -81,25 +84,36 @@ function codexEventToTranscript(event: CodexStreamEvent, ts: string): Transcript
       }
       if (item.type === "command_execution" || item.type === "tool_call") {
         const name = item.name ?? (item.type === "command_execution" ? "command" : "tool");
-        const status =
-          event.type === "item.completed"
-            ? "completed"
-            : event.type === "item.started"
-              ? "started"
+        const failed = item.status === "failed" || (item.exit_code ?? 0) !== 0;
+        const status = failed
+          ? "failed"
+          : item.status === "cancelled"
+            ? "cancelled"
+            : event.type === "item.completed" || item.status === "completed"
+              ? "completed"
               : "started";
         const input: JsonObject | undefined = isObject(item.input)
           ? (item.input as JsonObject)
-          : undefined;
-        return [
-          {
-            kind: "tool_call",
+          : typeof item.command === "string"
+            ? { command: redactHomePath(item.command) }
+            : undefined;
+        const entries: TranscriptEntry[] = [
+          { kind: "tool_call", ts, name, id: item.id, status, input },
+        ];
+        if (event.type === "item.completed" && item.type === "command_execution") {
+          entries.push({
+            kind: "tool_result",
             ts,
             name,
             id: item.id,
-            status,
-            input,
-          },
-        ];
+            output: redactHomePath(
+              item.aggregated_output ??
+                (typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "")),
+            ),
+            isError: failed,
+          });
+        }
+        return entries;
       }
       if (item.type === "command_execution_output" || item.type === "tool_result") {
         const output =

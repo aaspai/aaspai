@@ -128,6 +128,27 @@ describe("parseCodexStreamLine", () => {
     expect(out[0]?.kind).toBe("tool_call");
   });
 
+  it("preserves failed command status and output", () => {
+    const out = parseCodexStreamLine(
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          type: "command_execution",
+          id: "c1",
+          command: "node --version",
+          aggregated_output: "sandbox failed",
+          exit_code: -1,
+          status: "failed",
+        },
+      }),
+      ts,
+    );
+    expect(out).toEqual([
+      expect.objectContaining({ kind: "tool_call", status: "failed" }),
+      expect.objectContaining({ kind: "tool_result", output: "sandbox failed", isError: true }),
+    ]);
+  });
+
   it("returns an assistant for item.completed/agent_message", () => {
     const out = parseCodexStreamLine(
       JSON.stringify({

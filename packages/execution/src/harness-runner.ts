@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ExecutionPlan, ExecutionWorkspace } from "@aaspai/contracts/execution";
+import type { ExecutionPlan, ExecutionWorkspace, WorkKind } from "@aaspai/contracts/execution";
 import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
@@ -10,7 +10,7 @@ import { adapterTypeSchema, HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/h
 import type { JsonObject } from "@aaspai/contracts/primitives";
 import { type ResolvedAgentProfile, resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
 import type { ExecutionTarget, RunProcessResult } from "@aaspai/contracts/runtime";
-import { getAdapter } from "@aaspai/harness";
+import { getAdapter, parseClaudeStreamLine, parseCodexStreamLine } from "@aaspai/harness";
 import { resolveTarget } from "@aaspai/runtime";
 import { assertHarnessExecutable, assertRuntimeReady } from "./capabilities.js";
 import type { ExecutionStore } from "./store.js";
@@ -91,6 +91,7 @@ export class HarnessExecutionPlanRunner {
           { ...agent.adapterConfig, ...input.plan.harnessConfig },
           profile,
           agent.tools,
+          input.plan.runtimeConfig.workKind as WorkKind | undefined,
         )
       : {
           adapterConfig: { ...agent.adapterConfig, ...input.plan.harnessConfig },
@@ -277,19 +278,11 @@ export class HarnessExecutionPlanRunner {
                   observedProviderSessionId = providerSessionId;
                   await this.store.setHarnessSessionProviderIdentity(session.id, providerSessionId);
                 }
-                const canonicalKinds = new Set([
-                  "assistant",
-                  "thinking",
-                  "tool_call",
-                  "tool_result",
-                  "init",
-                  "result",
-                  "stderr",
-                  "system",
-                  "stdout",
-                ]);
-                if (parsed.kind && canonicalKinds.has(parsed.kind)) {
-                  await recordSessionEvent(parsed.kind as TranscriptEntry["kind"], parsed);
+                const entries = normalizeSessionLine(adapterType, line, parsed);
+                if (entries.length > 0) {
+                  for (const entry of entries) {
+                    await recordSessionEvent(entry.kind, entry);
+                  }
                   continue;
                 }
               } catch {
@@ -351,6 +344,23 @@ export class HarnessExecutionPlanRunner {
       };
     }
 
+    const settlementAttempt = await this.store.getAttempt(input.plan.attemptId);
+    const interrupted = Boolean(
+      settlementAttempt?.interruptRequestedAt && !settlementAttempt.cancelRequestedAt,
+    );
+    if (interrupted) {
+      result = {
+        ...result,
+        exitCode: result.exitCode === 0 ? 1 : result.exitCode,
+        timedOut: true,
+        errorCode: "session_interrupted",
+        errorFamily: "transient_upstream",
+        errorMessage: "Session was interrupted by an operator and will resume in a retry",
+        summary: "CLI session was interrupted for resumable retry",
+        clearSession: false,
+      };
+    }
+
     if (
       result.exitCode === 0 &&
       requiresRuntimeExecution(adapterType) &&
@@ -385,7 +395,7 @@ export class HarnessExecutionPlanRunner {
     }
     if (actualRuntimeIdentity) result = { ...result, runtimeIdentity: actualRuntimeIdentity };
 
-    const status = terminalStatus(result, input.signal);
+    const status = terminalStatus(result, input.signal, interrupted);
     await this.store.completeHarnessSession(session.id, result, status);
     await this.store.appendNextEvent({
       organizationId: input.plan.organizationId,
@@ -399,7 +409,7 @@ export class HarnessExecutionPlanRunner {
         runtimeIdentity: result.runtimeIdentity ?? null,
       },
     });
-    await this.completeAttempt(input.plan.attemptId, status, input.signal);
+    await this.completeAttempt(input.plan.attemptId, status, input.signal, interrupted);
     return result;
   }
 
@@ -407,7 +417,15 @@ export class HarnessExecutionPlanRunner {
     attemptId: string,
     status: "succeeded" | "failed" | "cancelled" | "timed_out",
     signal?: AbortSignal,
+    interrupted = false,
   ): Promise<void> {
+    if (interrupted) {
+      const current = await this.store.getAttempt(attemptId);
+      if (current && (current.status === "running" || current.status === "cancelling")) {
+        await this.store.transitionAttempt(attemptId, "timed_out");
+      }
+      return;
+    }
     if (signal?.aborted || status === "cancelled") {
       const requested = await this.store.requestCancelAttempt(attemptId);
       if (requested.status === "cancelling")
@@ -425,6 +443,106 @@ export class HarnessExecutionPlanRunner {
       throw new Error(`Execution workspace is not ready: ${input.workspace.status}`);
     }
   }
+}
+
+type CanonicalSessionEvent = Record<string, unknown> & { kind: TranscriptEntry["kind"] };
+
+const CANONICAL_TRANSCRIPT_KINDS = new Set<TranscriptEntry["kind"]>([
+  "assistant",
+  "thinking",
+  "user",
+  "tool_call",
+  "tool_result",
+  "init",
+  "result",
+  "stderr",
+  "system",
+  "stdout",
+  "diff",
+]);
+
+function normalizeSessionLine(
+  adapter: AdapterType,
+  line: string,
+  parsed: Record<string, unknown>,
+): CanonicalSessionEvent[] {
+  if (
+    typeof parsed.kind === "string" &&
+    CANONICAL_TRANSCRIPT_KINDS.has(parsed.kind as TranscriptEntry["kind"])
+  ) {
+    return [parsed as CanonicalSessionEvent];
+  }
+  const ts = new Date().toISOString();
+  if (adapter === "codex_local") return withToolResultStatus(parseCodexStreamLine(line, ts));
+  if (adapter === "claude_local") return withToolResultStatus(parseClaudeStreamLine(line, ts));
+  if (adapter !== "opencode_cli") return [];
+
+  const part = isRecord(parsed.part) ? parsed.part : {};
+  const state = isRecord(part.state) ? part.state : {};
+  const type = typeof parsed.type === "string" ? parsed.type : "event";
+  if (type === "text" && typeof part.text === "string") {
+    return [{ kind: "assistant", ts, text: part.text }];
+  }
+  if (
+    (type === "thinking" || part.type === "thinking" || part.type === "reasoning") &&
+    typeof part.text === "string"
+  ) {
+    return [{ kind: "thinking", ts, text: part.text }];
+  }
+  if (type === "tool_use" || type === "tool" || part.type === "tool") {
+    const name = typeof part.tool === "string" ? part.tool : String(part.name ?? "unknown");
+    const id = typeof part.callID === "string" ? part.callID : undefined;
+    const providerStatus = String(state.status);
+    const status =
+      providerStatus === "error"
+        ? "failed"
+        : ["completed", "failed", "cancelled"].includes(providerStatus)
+          ? providerStatus
+          : "started";
+    const input = isRecord(state.input) ? state.input : {};
+    if (status !== "started") {
+      const output =
+        typeof state.output === "string"
+          ? state.output
+          : typeof state.error === "string"
+            ? state.error
+            : undefined;
+      return [
+        { kind: "tool_call", ts, name, ...(id ? { id } : {}), status, input },
+        {
+          kind: "tool_result",
+          ts,
+          name,
+          ...(id ? { id } : {}),
+          status,
+          ...(output ? { output } : {}),
+          isError: status === "failed",
+        },
+      ];
+    }
+    return [{ kind: "tool_call", ts, name, ...(id ? { id } : {}), status, input }];
+  }
+  if (type === "step_finish") {
+    return [{ kind: "result", ts, stopReason: String(part.reason ?? "step_finished") }];
+  }
+  if (type === "error") {
+    const error = isRecord(parsed.error) ? parsed.error.message : parsed.error;
+    return [{ kind: "stderr", ts, text: typeof error === "string" ? error : "OpenCode error" }];
+  }
+  return [{ kind: "system", ts, text: `OpenCode ${type}` }];
+}
+
+function withToolResultStatus(entries: TranscriptEntry[]): CanonicalSessionEvent[] {
+  return entries.map((entry) => ({
+    ...entry,
+    ...(entry.kind === "tool_result"
+      ? { status: entry.isError === true ? "failed" : "completed" }
+      : {}),
+  })) as CanonicalSessionEvent[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function redactValues(value: string, secrets: readonly string[]): string {
@@ -631,6 +749,7 @@ export function enforceRuntimeToolPolicy(
   adapterConfig: JsonObject,
   profile: ResolvedAgentProfile,
   tools?: AdapterExecutionContext["tools"],
+  _workKind?: WorkKind,
 ): { adapterConfig: JsonObject; tools?: AdapterExecutionContext["tools"] } {
   const approvalRequired = profile.tools.filter(
     (decision) => decision.allowed && decision.requiresApproval,
@@ -724,6 +843,7 @@ export function enforceRuntimeToolPolicy(
         permissions: Object.fromEntries([
           ["*", "deny"],
           ...boundedNativeAllowed.map((name) => [name, "allow"]),
+          ["external_directory", "deny"],
         ]),
       },
       tools: guardedTools,
@@ -765,7 +885,9 @@ function assertNoPolicyOverrides(value: unknown, deniedFlags: string[]): void {
 function terminalStatus(
   result: AdapterExecutionResult,
   signal?: AbortSignal,
+  interrupted = false,
 ): "succeeded" | "failed" | "cancelled" | "timed_out" {
+  if (interrupted) return "timed_out";
   if (signal?.aborted) return "cancelled";
   if (result.timedOut) return "timed_out";
   return result.exitCode === 0 ? "succeeded" : "failed";

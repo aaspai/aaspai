@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +13,14 @@ import type { listFrontendProviders, listFrontendRuntimes } from "@/lib/provider
 type Provider = Awaited<ReturnType<typeof listFrontendProviders>>[number];
 type Runtime = Awaited<ReturnType<typeof listFrontendRuntimes>>[number];
 
+function firstProviderStatusMessage(checks: Provider["environment"]["checks"]) {
+  return (
+    checks.find((check) => check.level === "error") ??
+    checks.find((check) => check.level === "warn") ??
+    checks[0]
+  )?.message;
+}
+
 export function OnboardingWizard({
   companyName,
   providers,
@@ -23,9 +31,9 @@ export function OnboardingWizard({
   runtimes: Runtime[];
 }) {
   const router = useRouter();
-  const firstReady = providers.find((item) => item.ready)?.type ?? "opencode_cli";
-  const [provider, setProvider] = useState(firstReady);
-  const selectedProvider = providers.find((item) => item.type === provider) ?? providers[0];
+  const firstReady = providers.find((item) => item.ready && item.models.length > 0);
+  const [provider, setProvider] = useState(firstReady?.type ?? "");
+  const selectedProvider = providers.find((item) => item.type === provider && item.ready);
   const firstReadyRuntime = runtimes.find((item) => item.ready)?.type ?? runtimes[0]?.type;
   const [runtime, setRuntime] = useState(firstReadyRuntime);
   const selectedRuntime = runtimes.find((item) => item.type === runtime) ?? runtimes[0];
@@ -36,6 +44,21 @@ export function OnboardingWizard({
   const [firstPriority, setFirstPriority] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const nextProvider =
+      providers.find((item) => item.type === provider && item.ready && item.models.length > 0) ??
+      providers.find((item) => item.ready && item.models.length > 0);
+    if (!nextProvider) {
+      setProvider("");
+      setModel("");
+      return;
+    }
+    if (provider !== nextProvider.type) setProvider(nextProvider.type);
+    if (!nextProvider.models.some((item) => item.id === model)) {
+      setModel(nextProvider.models[0]?.id ?? "");
+    }
+  }, [model, provider, providers]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -96,13 +119,14 @@ export function OnboardingWizard({
                 {providers.map((item) => (
                   <label
                     key={item.type}
-                    className={`cursor-pointer rounded-lg border p-4 transition-colors ${provider === item.type ? "border-primary bg-primary/5" : "bg-card hover:bg-accent/40"}`}
+                    className={`rounded-lg border p-4 transition-colors ${item.ready && item.models.length > 0 ? "cursor-pointer" : "cursor-not-allowed opacity-70"} ${provider === item.type ? "border-primary bg-primary/5" : "bg-card hover:bg-accent/40"}`}
                   >
                     <input
                       type="radio"
                       name="provider"
                       value={item.type}
                       checked={provider === item.type}
+                      disabled={!item.ready || item.models.length === 0}
                       onChange={() => {
                         setProvider(item.type);
                         setModel(item.models[0]?.id ?? "");
@@ -123,7 +147,8 @@ export function OnboardingWizard({
                       </Badge>
                     </div>
                     <p className="mt-3 text-xs text-muted-foreground">
-                      {item.environment.checks[0]?.message ?? "Available for local execution."}
+                      {firstProviderStatusMessage(item.environment.checks) ??
+                        "Available for local execution."}
                     </p>
                   </label>
                 ))}
@@ -327,7 +352,12 @@ export function OnboardingWizard({
           )}
           <Button
             className="w-full"
-            disabled={busy || !selectedProvider?.ready || !selectedRuntime?.ready}
+            disabled={
+              busy ||
+              !selectedProvider?.ready ||
+              !selectedProvider.models.some((item) => item.id === model) ||
+              !selectedRuntime?.ready
+            }
           >
             {busy ? "Launching company..." : "Launch company"}
           </Button>

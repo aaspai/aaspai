@@ -333,6 +333,9 @@ export const companyCommandSchema = z.discriminatedUnion("type", [
     operatorAgentId: identifierSchema,
     sourceCommitSha: z.string().nullable().default(null),
     definition: processDefinitionSchema,
+    parentWorkItemId: identifierSchema.nullable().default(null),
+    parentAttemptId: identifierSchema.nullable().default(null),
+    parentSessionId: identifierSchema.nullable().default(null),
   }),
   commandBase.extend({
     type: z.literal("record_measurement"),

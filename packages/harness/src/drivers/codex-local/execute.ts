@@ -204,7 +204,13 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
   const auth = installed
     ? await runProcess({ command: config.command, args: ["login", "status"], cwd: ctx.cwd })
     : null;
-  const ok = installed && auth?.exitCode === 0;
+  const authenticated = installed && auth?.exitCode === 0;
+  const sandboxArgs = codexSandboxProbeArgs(config.sandbox);
+  const sandbox =
+    authenticated && sandboxArgs
+      ? await runProcess({ command: config.command, args: sandboxArgs, cwd: ctx.cwd })
+      : null;
+  const ok = authenticated && (!sandboxArgs || sandbox?.exitCode === 0);
   return {
     ok,
     checks: [
@@ -219,15 +225,38 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
         ? [
             {
               name: "codex_auth" as const,
-              level: (ok ? "info" : "error") as "info" | "error",
-              message: ok
+              level: (authenticated ? "info" : "error") as "info" | "error",
+              message: authenticated
                 ? auth?.stdout.trim() || "codex authenticated"
                 : auth?.stderr.trim() || auth?.stdout.trim() || "codex is not authenticated",
             },
           ]
         : []),
+      ...(sandboxArgs && authenticated
+        ? [
+            {
+              name: "codex_sandbox" as const,
+              level: (sandbox?.exitCode === 0 ? "info" : "error") as "info" | "error",
+              message:
+                sandbox?.exitCode === 0
+                  ? "Codex local sandbox is ready"
+                  : `Codex local sandbox failed: ${redactHomePath(
+                      sandbox?.stderr.trim() || sandbox?.stdout.trim() || "unknown error",
+                    )}`,
+            },
+          ]
+        : []),
     ],
   };
+}
+
+export function codexSandboxProbeArgs(
+  sandbox: CodexLocalConfig["sandbox"],
+  platform = process.platform,
+): string[] | null {
+  return platform === "win32"
+    ? ["sandbox", "-c", `sandbox_mode="${sandbox}"`, "--", "cmd.exe", "/d", "/c", "exit", "0"]
+    : null;
 }
 
 function buildCodexArgs(config: CodexLocalConfig, ctx: AdapterExecutionContext): string[] {

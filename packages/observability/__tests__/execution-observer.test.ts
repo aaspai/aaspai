@@ -34,4 +34,46 @@ describe("execution observer", () => {
       ["company", "company.action.completed"],
     ]);
   });
+
+  it("keeps runtime metadata separate and preserves normalized tool outcomes", () => {
+    const timeline = observeExecution({
+      executionEvents: [],
+      sessionEvents: [
+        {
+          id: 1,
+          seq: 1,
+          ts: "2026-08-01T00:00:01.000Z",
+          kind: "system",
+          payload: { meta: { adapter: "opencode_cli" } },
+        },
+        {
+          id: 2,
+          seq: 2,
+          ts: "2026-08-01T00:00:02.000Z",
+          kind: "tool_result",
+          payload: { name: "company_action", status: "completed", isError: false },
+        },
+        {
+          id: 3,
+          seq: 3,
+          ts: "2026-08-01T00:00:03.000Z",
+          kind: "tool_result",
+          payload: { name: "bash", isError: true },
+        },
+      ],
+    });
+
+    expect(
+      timeline.map(({ lane, origin, name, status }) => ({ lane, origin, name, status })),
+    ).toEqual([
+      { lane: "system", origin: "runtime", name: "system", status: undefined },
+      {
+        lane: "company",
+        origin: "aaspai",
+        name: "company_action",
+        status: "completed",
+      },
+      { lane: "work", origin: "agent_native", name: "bash", status: "failed" },
+    ]);
+  });
 });

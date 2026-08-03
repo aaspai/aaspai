@@ -5,6 +5,7 @@ import {
   companyActionPayload,
   companyActions,
   missingRequiredCompanyActions,
+  requiredCompanyActionsForHire,
 } from "../src/company-actions.js";
 
 describe("company actions", () => {
@@ -21,7 +22,15 @@ describe("company actions", () => {
   });
 
   it("requires a persisted milestone sequence when starting a process", () => {
-    expect(COMPANY_ACTION_TOOL_SOURCE).toContain("milestoneSequence,definition");
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain('"milestoneSequence":1');
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain('"definition":{');
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain("ceo, cto, cmo, cfo");
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain('"role":"pm"');
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain('"workKind":"general"');
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain('"createdAt":"');
+    expect(COMPANY_ACTION_TOOL_SOURCE).toContain(
+      '"steps":[{"id":"step/execute","agent":"agent/project-specialist"',
+    );
     const action = {
       type: "define_and_start_process",
       projectId: "project/growth",
@@ -59,6 +68,30 @@ describe("company actions", () => {
     const missingSequence = { ...action } as Record<string, unknown>;
     delete missingSequence.milestoneSequence;
     expect(() => companyActionPayload({ actions: [missingSequence] })).toThrow("invalid");
+    expect(
+      companyActionPayload({
+        actions: [{ ...action, policy: { schedule: { kind: "interval", seconds: 86_400 } } }],
+      }),
+    ).toHaveLength(1);
+    expect(() =>
+      companyActionPayload({
+        actions: [{ ...action, policy: { schedule: { kind: "interval" } } }],
+      }),
+    ).toThrow("policy.schedule must be a valid interval or cron schedule");
+    expect(() =>
+      companyActionPayload({
+        actions: [{ ...action, policy: { schedule: { kind: "manual" } } }],
+      }),
+    ).toThrow("policy.schedule must be a valid interval or cron schedule");
+  });
+
+  it("requires a new project manager to hire a specialist before starting its process", () => {
+    expect(requiredCompanyActionsForHire({ projectRole: "manager" }, "project/growth")).toEqual([
+      { type: "hire_and_delegate", projectId: "project/growth" },
+      { type: "create_milestone", projectId: "project/growth" },
+      { type: "define_and_start_process", projectId: "project/growth" },
+    ]);
+    expect(requiredCompanyActionsForHire({ projectRole: "member" }, "project/growth")).toEqual([]);
   });
 
   it("accepts a typed final-line action from a CLI without custom tools", () => {
@@ -147,7 +180,9 @@ describe("company actions", () => {
           },
         ],
       }),
-    ).toThrow("invalid");
+    ).toThrow(
+      "commercial work requires non-empty artifactPaths, citationPaths, and commercialClaimPaths",
+    );
   });
 
   it("matches every required action to one submitted project action", () => {
