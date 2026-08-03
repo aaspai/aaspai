@@ -6,6 +6,7 @@ import {
   claudeLocalConfigSchema,
   codexLocalConfigSchema,
   getAdapter,
+  getAdapterCapabilities,
   HARNESS_PROTOCOL_VERSION,
   isAdapterReady,
   listAdapters,
@@ -168,6 +169,19 @@ describe("buildAgentEnv", () => {
     expect(env.AASPAI_SESSION_ID).toBe("s1");
     expect(env.AASPAI_CWD).toBe("/tmp");
   });
+
+  it("does not allow adapter config to overwrite harness identity", () => {
+    const env = buildAgentEnv(
+      { id: "a1", organizationId: "o1", name: "agent", adapterType: "claude_local" },
+      {
+        runId: "r1",
+        additionalEnv: { AASPAI_RUN_ID: "forged", AASPAI_AGENT_ID: "forged", SAFE: "ok" },
+      },
+    );
+    expect(env.AASPAI_RUN_ID).toBe("r1");
+    expect(env.AASPAI_AGENT_ID).toBe("a1");
+    expect(env.SAFE).toBe("ok");
+  });
 });
 
 describe("adapter registry", () => {
@@ -192,5 +206,21 @@ describe("adapter registry", () => {
     expect(isAdapterReady("cursor_cloud")).toBe(false);
     expect(isAdapterReady("openclaw_gateway")).toBe(false);
     expect(isAdapterReady("hermes_gateway")).toBe(false);
+  });
+
+  it("reports declared adapter capabilities instead of generic optimistic values", () => {
+    expect(getAdapterCapabilities("claude_local")).toMatchObject({
+      execute: true,
+      streaming: true,
+      cancellation: false,
+      timeout: true,
+      resume: true,
+      billing: "subscription",
+    });
+    expect(getAdapterCapabilities("dry_run_local")).toMatchObject({
+      execute: true,
+      timeout: false,
+      billing: "free",
+    });
   });
 });

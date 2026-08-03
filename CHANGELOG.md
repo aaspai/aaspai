@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **ACP execution for Claude and Codex** (`packages/harness`) — shared `acpx`
+  runtime support now provides persistent/one-shot sessions, streaming
+  transcripts, session resume, usage deltas, permission policy, timeouts, and
+  explicit ACP environment checks. CLI execution remains available through
+  `engine: "cli"` and managed non-local targets fail closed when no
+  bidirectional ACP channel exists.
 - **Verified autonomous-company work cycle** — local OpenCode managers can apply
   governed company actions synchronously, delegate to separate employee sessions,
   require independent checking, and resume the original manager conversation with

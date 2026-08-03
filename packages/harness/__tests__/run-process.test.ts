@@ -2,9 +2,37 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createJsonlFramer } from "../src/shared/jsonl";
 import { runProcess } from "../src/shared/run-process";
 
+describe("JSONL framing", () => {
+  it("keeps partial lines until the next chunk or flush", () => {
+    const framer = createJsonlFramer();
+    expect(framer.push('{"a":1')).toEqual([]);
+    expect(framer.push('}\r\n{"b":2')).toEqual(['{"a":1}']);
+    expect(framer.flush()).toEqual(['{"b":2']);
+  });
+});
+
 describe("runProcess cancellation", () => {
+  it("waits for asynchronous log listeners after the final data event", async () => {
+    const observed: string[] = [];
+    const result = await runProcess({
+      command: process.execPath,
+      args: [
+        "-e",
+        "process.stdout.write('first');setTimeout(()=>process.stdout.write('second'),10)",
+      ],
+      onLog: async (_stream, chunk) => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        observed.push(chunk);
+      },
+    });
+
+    expect(result.stdout).toBe("firstsecond");
+    expect(observed.join("")).toBe(result.stdout);
+  });
+
   it("terminates an aborted local process", async () => {
     const controller = new AbortController();
     const promise = runProcess({

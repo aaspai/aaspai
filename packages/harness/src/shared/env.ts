@@ -34,6 +34,9 @@ export function buildAgentEnv(
   };
   if (extras.additionalEnv) {
     for (const [k, v] of Object.entries(extras.additionalEnv)) {
+      // Adapter config is untrusted input; it must not forge the run
+      // identity injected by the harness.
+      if (k.startsWith("AASPAI_")) continue;
       env[k] = v;
     }
   }

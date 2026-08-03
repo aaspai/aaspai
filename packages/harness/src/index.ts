@@ -31,7 +31,14 @@ export {
   isAdapterReady,
   listAdapters,
 } from "./registry.js";
+export {
+  executeAcp,
+  nodeVersionMeetsAcpMinimum,
+  parseAcpConfig,
+  testAcpEnvironment,
+} from "./shared/acp.js";
 export { buildAgentEnv } from "./shared/env.js";
+export { createJsonlFramer } from "./shared/jsonl.js";
 export type {
   CreateRuntimeProgressReporterOptions,
   RuntimeProgressReporter,

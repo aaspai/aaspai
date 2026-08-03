@@ -21,7 +21,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunProcessOptions } from "@aaspai/contracts/runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildAdapterContext,
@@ -251,6 +251,40 @@ describe("e2e: opencode_cli driver", () => {
     const invalid = await run("{");
     expect(invalid.exitCode).toBe(1);
     expect(invalid.errorMessage).toContain("JSON");
+    rmRf(cwd);
+  });
+
+  it("parses buffered managed stdout and forwards the OpenCode timeout", async () => {
+    const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
+    const cwd = makeScratchDir("managed-buffered-");
+    const run = vi.fn(async (_options: RunProcessOptions) => {
+      const now = new Date().toISOString();
+      return {
+        exitCode: 0,
+        timedOut: false,
+        stdout: `${JSON.stringify({
+          type: "text",
+          sessionID: "session-buffered",
+          part: { type: "text", text: "buffered" },
+        })}\n`,
+        stderr: "",
+        startedAt: now,
+        finishedAt: now,
+        durationMs: 1,
+      };
+    });
+    const result = await opencodeCli.execute({
+      ...buildAdapterContext({
+        prompt: "managed fallback",
+        cwd,
+        runId: `run_managed_buffered_${Date.now()}`,
+      }),
+      execution: { run },
+    } as never);
+
+    expect(run.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 300_000, graceMs: 15_000 });
+    expect(result.sessionId).toBe("session-buffered");
+    expect(result.summary).toBe("buffered");
     rmRf(cwd);
   });
 

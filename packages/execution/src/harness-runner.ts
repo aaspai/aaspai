@@ -366,6 +366,19 @@ export class HarnessExecutionPlanRunner {
       requiresRuntimeExecution(adapterType) &&
       actualRuntimeIdentity === undefined
     ) {
+      if (result.runtimeIdentity) {
+        const reportedRuntimeIdentity =
+          result.runtimeIdentity as unknown as RunProcessResult["runtimeIdentity"];
+        assertRuntimeIdentity(input.plan.target, input.workspace.path, reportedRuntimeIdentity);
+        actualRuntimeIdentity = reportedRuntimeIdentity;
+      }
+    }
+
+    if (
+      result.exitCode === 0 &&
+      requiresRuntimeExecution(adapterType) &&
+      actualRuntimeIdentity === undefined
+    ) {
       result = {
         ...result,
         exitCode: 1,

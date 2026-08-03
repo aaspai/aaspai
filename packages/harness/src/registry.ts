@@ -33,7 +33,8 @@ const ADAPTERS: Readonly<Record<AdapterType, ServerAdapterModule>> = Object.free
   opencode_cli: opencodeCli,
 });
 
-function capabilitiesFor(info: AdapterInfo): ProviderCapabilities {
+function capabilitiesFor(module: ServerAdapterModule): ProviderCapabilities {
+  const info = module.info;
   if (info.status !== "ready") {
     return {
       execute: false,
@@ -47,28 +48,38 @@ function capabilitiesFor(info: AdapterInfo): ProviderCapabilities {
       billing: "unknown",
     };
   }
+  const description = module.describe?.();
+  const supports = description && !(description instanceof Promise) ? description : undefined;
+  const billing =
+    info.type === "dry_run_local"
+      ? "free"
+      : info.type === "claude_local"
+        ? "subscription"
+        : info.type === "codex_local" || info.type === "opencode_cli"
+          ? "api"
+          : "unknown";
   return {
     execute: true,
-    streaming: true,
-    cancellation: true,
-    timeout: true,
+    streaming: info.transport !== "cloud_sdk",
+    cancellation: supports?.supportsCancel ?? false,
+    timeout: info.transport === "local_subprocess" && info.type !== "dry_run_local",
     workspaceIsolation: false,
     restore: false,
-    resume: false,
+    resume: supports?.supportsResume ?? false,
     artifacts: false,
-    billing: info.type === "dry_run_local" ? "free" : "unknown",
+    billing,
   };
 }
 
 export function listAdapters(): AdapterInfo[] {
   return Object.values(ADAPTERS).map((m) => ({
     ...m.info,
-    capabilities: capabilitiesFor(m.info),
+    capabilities: capabilitiesFor(m),
   }));
 }
 
 export function getAdapterCapabilities(type: AdapterType): ProviderCapabilities {
-  return capabilitiesFor(getAdapter(type).info);
+  return capabilitiesFor(getAdapter(type));
 }
 
 export function getAdapter(type: AdapterType): ServerAdapterModule {

@@ -17,6 +17,12 @@ export const claudeLocalConfigSchema = z
     effort: claudeEffortSchema.optional(),
     permissionMode: claudePermissionModeSchema.default("bypass-permissions"),
     engine: claudeEngineSchema.default("auto"),
+    agentCommand: z.string().trim().min(1).max(4_096).optional(),
+    mode: z.enum(["persistent", "oneshot"]).optional(),
+    acpPermissionMode: z.enum(["approve-all", "approve-reads", "deny-all"]).optional(),
+    nonInteractivePermissions: z.enum(["deny", "fail"]).optional(),
+    stateDir: z.string().trim().min(1).max(8_192).optional(),
+    acpStateDir: z.string().trim().min(1).max(8_192).optional(),
     maxTurns: positiveIntegerSchema.max(1_000).optional(),
     timeoutSec: positiveIntegerSchema.max(86_400).optional(),
     graceSec: positiveIntegerSchema.max(300).default(15),
@@ -65,6 +71,11 @@ Core fields:
 - effort (string, optional): "low" | "medium" | "high"
 - permissionMode (string, default "bypass-permissions"): how Claude asks for approvals
 - engine (string, default "auto"): "auto" | "cli" | "acp"
+- agentCommand (string, optional): override the Claude ACP server command
+- mode (string, optional): ACP session mode, "persistent" or "oneshot"
+- acpPermissionMode (string, optional): ACP permission mode
+- nonInteractivePermissions (string, optional): ACP fallback, "deny" or "fail"
+- stateDir/acpStateDir (string, optional): ACP session state directory
 - maxTurns (number, optional): cap agent turns per run
 - timeoutSec (number, optional): hard timeout in seconds
 - graceSec (number, default 15): SIGTERM grace before SIGKILL

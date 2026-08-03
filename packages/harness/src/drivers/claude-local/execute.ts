@@ -6,7 +6,9 @@ import type {
   UsageSummary,
 } from "@aaspai/contracts/harness";
 import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
+import { executeAcp, testAcpEnvironment } from "../../shared/acp.js";
 import { buildAgentEnv } from "../../shared/env.js";
+import { createJsonlFramer } from "../../shared/jsonl.js";
 import { redactCommandText, redactHomePath } from "../../shared/redact.js";
 import { runProcess } from "../../shared/run-process.js";
 import type { ClaudeStreamEvent } from "./config.js";
@@ -62,6 +64,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       err instanceof Error ? err.message : String(err),
     );
   }
+  if (
+    config.engine === "acp" ||
+    (config.engine === "auto" && (!ctx.execution || ctx.execution.identity?.kind === "local"))
+  ) {
+    return executeAcp(ctx, "claude", { timeoutSec: config.timeoutSec });
+  }
   const command = config.command;
   const args = buildClaudeArgs(config, ctx);
   const env = {
@@ -83,6 +91,23 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let sessionId: string | undefined = ctx.runtime.sessionId;
   let model: string | undefined = config.model;
   let timedOut = false;
+  const stdoutFramer = createJsonlFramer();
+  let sawStdoutLine = false;
+
+  const processLine = async (line: string, emit: boolean): Promise<void> => {
+    if (line.length === 0) return;
+    sawStdoutLine = true;
+    const entries = parseClaudeStreamLine(line, new Date().toISOString());
+    for (const entry of entries) {
+      if (entry.kind === "assistant" && typeof entry.text === "string") {
+        collectedText.push(entry.text);
+      } else if (entry.kind === "init") {
+        if (entry.sessionId) sessionId = entry.sessionId;
+        if (entry.model) model = entry.model;
+      }
+    }
+    if (emit) await ctx.onLog("stdout", line);
+  };
 
   const onLog = async (stream: "stdout" | "stderr", chunk: string): Promise<void> => {
     if (stream === "stderr") {
@@ -90,20 +115,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       collectedErrors.push(redacted);
       await ctx.onLog(stream, redacted);
     } else {
-      for (const line of chunk.split(/\r?\n/)) {
-        if (line.length === 0) continue;
-        const entries = parseClaudeStreamLine(line, new Date().toISOString());
-        for (const entry of entries) {
-          if (entry.kind === "assistant" && typeof entry.text === "string") {
-            collectedText.push(entry.text);
-          } else if (entry.kind === "init") {
-            if (entry.sessionId) sessionId = entry.sessionId;
-            if (entry.model) model = entry.model;
-          } else if (entry.kind === "result") {
-          }
-        }
-        await ctx.onLog(stream, line);
-      }
+      for (const line of stdoutFramer.push(chunk)) await processLine(line, true);
     }
   };
 
@@ -115,14 +127,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     stdin,
     signal: ctx.signal,
     timeoutMs,
+    graceMs: config.graceSec * 1_000,
     onLog,
   });
 
   timedOut = result.timedOut;
+  for (const line of stdoutFramer.flush()) await processLine(line, true);
 
-  // Post-hoc parse of full stdout for usage + sessionId, in case events
-  // were buffered and not surfaced through onLog.
-  for (const line of result.stdout.split(/\r?\n/)) {
+  // Managed runtimes may return buffered stdout without invoking onLog.
+  // Parse it for the same live summary/session data in that case.
+  if (!sawStdoutLine && result.stdout) {
+    const fallbackFramer = createJsonlFramer();
+    for (const line of [...fallbackFramer.push(result.stdout), ...fallbackFramer.flush()]) {
+      await processLine(line, false);
+    }
+  }
+
+  // Post-hoc parse of full stdout for usage + sessionId.
+  const metadataFramer = createJsonlFramer();
+  for (const line of [...metadataFramer.push(result.stdout), ...metadataFramer.flush()]) {
     if (line.trim().length === 0) continue;
     let parsed: unknown;
     try {
@@ -210,6 +233,12 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
   checks: { name: string; level: "info" | "warn" | "error"; message: string }[];
 }> {
   const config = parseClaudeLocalConfig(ctx.config);
+  if (config.engine === "acp") {
+    return testAcpEnvironment("claude", {
+      config: ctx.config,
+      cwd: ctx.cwd,
+    });
+  }
   const result = await runProcess({ command: config.command, args: ["--version"], cwd: ctx.cwd });
   const installed = result.exitCode === 0;
   const auth = installed

@@ -4,6 +4,44 @@ import { describe, expect, it, vi } from "vitest";
 import { execute } from "../src/drivers/claude-local/execute";
 
 describe("claude_local runtime execution", () => {
+  it("frames JSON events split across runtime log chunks", async () => {
+    const runtimeRun = vi.fn<NonNullable<AdapterExecutionContext["execution"]>["run"]>(
+      async (options) => {
+        await options.onLog?.("stdout", '{"type":"assistant","message":{"content":[');
+        await options.onLog?.("stdout", '{"type":"text","text":"split"}]}}\n');
+        const now = new Date().toISOString();
+        return {
+          exitCode: 0,
+          timedOut: false,
+          stdout: "",
+          stderr: "",
+          startedAt: now,
+          finishedAt: now,
+          durationMs: 0,
+        };
+      },
+    );
+    const result = await execute({
+      protocolVersion: HARNESS_PROTOCOL_VERSION,
+      runId: "run_split",
+      organizationId: "org_test",
+      agent: {
+        id: "agent_claude",
+        organizationId: "org_test",
+        name: "Claude",
+        adapterType: "claude_local",
+        adapterConfig: {},
+      },
+      runtime: {},
+      config: {},
+      context: { cwd: "/workspace", prompt: "test" },
+      execution: { run: runtimeRun },
+      onLog: () => undefined,
+    });
+
+    expect(result.summary).toBe("split");
+  });
+
   it("uses the managed runtime process boundary when provided", async () => {
     const runtimeRun = vi.fn<NonNullable<AdapterExecutionContext["execution"]>["run"]>(
       async (options) => {

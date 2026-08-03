@@ -59,7 +59,7 @@ describe("HarnessExecutionPlanRunner", () => {
         id: "agent_codex",
         name: "Codex fixture",
         adapterType: "codex_local",
-        adapterConfig: { command: process.execPath },
+        adapterConfig: { command: process.execPath, engine: "cli" },
       },
       onExecuted: async () => {
         const runningAttempt = await store.getAttempt(attemptId);
@@ -129,7 +129,7 @@ describe("HarnessExecutionPlanRunner", () => {
         id: "agent_codex",
         name: "Codex fixture",
         adapterType: "codex_local",
-        adapterConfig: { command: process.execPath },
+        adapterConfig: { command: process.execPath, engine: "cli" },
       },
     });
 

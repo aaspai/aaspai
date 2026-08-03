@@ -13,6 +13,8 @@
     "./shared/redact": "./src/shared/redact.ts",
     "./shared/progress": "./src/shared/progress.ts",
     "./shared/env": "./src/shared/env.ts",
+    "./shared/jsonl": "./src/shared/jsonl.ts",
+    "./shared/acp": "./src/shared/acp.ts",
     "./shared/ssh": "./src/shared/ssh.ts",
     "./shared/sandbox": "./src/shared/sandbox.ts",
     "./drivers/claude-local": "./src/drivers/claude-local/index.ts",
@@ -34,6 +36,9 @@
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
     "@aaspai/observability": "workspace:*",
+    "@agentclientprotocol/claude-agent-acp": "^0.60.0",
+    "@agentclientprotocol/codex-acp": "^1.1.5",
+    "acpx": "^0.12.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {

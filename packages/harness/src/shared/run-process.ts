@@ -83,6 +83,7 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
     inheritEnv,
     stdin,
     timeoutMs,
+    graceMs,
     signal: abortSignal,
   } = options;
   const workingDir = cwd ?? process.cwd();
@@ -141,7 +142,7 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
       stopReason = reason;
       timedOut = reason === "timeout";
       terminate("SIGTERM");
-      killHandle = setTimeout(() => terminate("SIGKILL"), 5_000);
+      killHandle = setTimeout(() => terminate("SIGKILL"), graceMs ?? 5_000);
       killHandle.unref();
     };
     const onAbort = (): void => stop("aborted");
@@ -185,19 +186,27 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
       }
     };
 
-    const drain = (stream: NodeJS.ReadableStream | null, streamName: "stdout" | "stderr"): void => {
-      if (!stream) return;
+    const drain = (
+      stream: NodeJS.ReadableStream | null,
+      streamName: "stdout" | "stderr",
+    ): (() => Promise<void>) => {
+      if (!stream) return () => Promise.resolve();
       const sink = streamName === "stdout" ? stdoutChunks : stderrChunks;
       const state = streamName === "stdout" ? stdoutState : stderrState;
       let pending: Promise<void> = Promise.resolve();
       stream.on("data", (buf: Buffer) => {
-        pending = pending.then(() => onChunk(streamName, sink, state, buf));
+        stream.pause();
+        pending = pending
+          .then(() => onChunk(streamName, sink, state, buf))
+          .finally(() => {
+            stream.resume();
+          });
       });
-      (stream as unknown as { _aaspaiDrained?: Promise<void> })._aaspaiDrained = pending;
+      return () => pending;
     };
 
-    drain(child.stdout, "stdout");
-    drain(child.stderr, "stderr");
+    const stdoutDrain = drain(child.stdout, "stdout");
+    const stderrDrain = drain(child.stderr, "stderr");
 
     child.on("error", (err) => {
       stderrChunks.push(`[spawn error] ${err.message}\n`);
@@ -208,13 +217,7 @@ export async function runProcess(options: RunProcessOptions): Promise<RunProcess
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
       if (killHandle !== undefined) clearTimeout(killHandle);
       abortSignal?.removeEventListener("abort", onAbort);
-      const stdoutDrained =
-        (child.stdout as unknown as { _aaspaiDrained?: Promise<void> })?._aaspaiDrained ??
-        Promise.resolve();
-      const stderrDrained =
-        (child.stderr as unknown as { _aaspaiDrained?: Promise<void> })?._aaspaiDrained ??
-        Promise.resolve();
-      await Promise.all([stdoutDrained, stderrDrained]);
+      await Promise.all([stdoutDrain(), stderrDrain()]);
 
       const finishedAt = new Date();
       const result: RunProcessResult = {
