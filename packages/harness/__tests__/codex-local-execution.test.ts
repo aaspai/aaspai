@@ -460,9 +460,11 @@ describe("codex_local runtime execution", () => {
     expect(native.exitCode).toBe(0);
 
     const emptySandbox = process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL_EMPTY;
+    const emptySandboxPlatform = process.platform;
     process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL = "1";
     process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL_EMPTY = "1";
     try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
       const result = await testEnvironment({
         config: { engine: "cli", command: fakeOpencodeCli(), sandbox: "read-only" },
         cwd: process.cwd(),
@@ -474,6 +476,10 @@ describe("codex_local runtime execution", () => {
         }),
       );
     } finally {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: emptySandboxPlatform,
+      });
       if (emptySandbox === undefined) delete process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL_EMPTY;
       else process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL_EMPTY = emptySandbox;
       delete process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL;
