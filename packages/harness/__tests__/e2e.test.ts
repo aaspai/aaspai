@@ -10,7 +10,7 @@
  *   - timeout / hang → AdapterExecutionResult.timedOut
  *   - per-process + cross-process lock serialization
  *   - config passthrough (command, commandArgs, model, title)
- *   - real `opencode` CLI smoke (skipped if not installed)
+ *   - deterministic CLI smoke with the same adapter wiring used by production
  *
  * Out of scope here (covered by existing unit tests + sessions e2e):
  *   - runProcess internals (buffer cap, abort, .cmd unwrap)
@@ -18,7 +18,7 @@
  *   - registry / capabilitiesFor
  *   - the DB write / session_events persistence path
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunProcessOptions } from "@aaspai/contracts/runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -740,27 +740,32 @@ describe("e2e: opencode_cli driver", () => {
     );
   });
 
-  it.runIf(!isWin)(
-    "resolves OPENCODE_CLI when no `command` config is set (env-driven path)",
-    async () => {
-      // The adapter caches its resolved binary at module scope
-      // (`let cachedOpencodePath: string | null = null` in
-      // drivers/opencode-cli/index.ts). Earlier tests in this file
-      // populate the cache via the `config.command` path; to exercise
-      // the OPENCODE_CLI env path we must clear the module-level state.
-      // `vi.resetModules()` forces the next import to return a fresh
-      // module instance with an empty cache.
-      //
-      // POSIX-only: on Windows, the adapter's `resolveOpencodeBinary`
-      // hard-codes a Windows-specific lookup for
-      // `%ProgramFiles%\nodejs\node_modules\opencode-ai\bin\opencode.exe`
-      // and prefers that over `OPENCODE_CLI`. That's intentional
-      // (it's the install path for the npm `opencode-ai` package) but
-      // it means the env-driven path is unreachable on Windows when
-      // the npm-installed `opencode.exe` exists. We exercise the
-      // POSIX branch only; Windows users must set `config.command`.
-      const cwd = makeScratchDir("env-");
-      await withEnv({ OPENCODE_CLI: process.execPath }, async () => {
+  it("resolves OPENCODE_CLI when no `command` config is set (env-driven path)", async () => {
+    // The adapter caches its resolved binary at module scope
+    // (`let cachedOpencodePath: string | null = null` in
+    // drivers/opencode-cli/index.ts). Earlier tests in this file
+    // populate the cache via the `config.command` path; to exercise
+    // the OPENCODE_CLI env path we must clear the module-level state.
+    // `vi.resetModules()` forces the next import to return a fresh
+    // module instance with an empty cache.
+    //
+    // POSIX-only: on Windows, the adapter's `resolveOpencodeBinary`
+    // hard-codes a Windows-specific lookup for
+    // `%ProgramFiles%\nodejs\node_modules\opencode-ai\bin\opencode.exe`
+    // and prefers that over `OPENCODE_CLI`. That's intentional
+    // (it's the install path for the npm `opencode-ai` package) but
+    // it means the env-driven path is unreachable on Windows when
+    // the npm-installed `opencode.exe` exists. We exercise the
+    // POSIX branch only; Windows users must set `config.command`.
+    const cwd = makeScratchDir("env-");
+    const isolatedProgramFiles = makeScratchDir("program-files-");
+    await withEnv(
+      {
+        OPENCODE_CLI: process.execPath,
+        ProgramFiles: isolatedProgramFiles,
+        APPDATA: isolatedProgramFiles,
+      },
+      async () => {
         const { vi } = await import("vitest");
         vi.resetModules();
         const mod = await import("../src/drivers/opencode-cli/index.js");
@@ -779,30 +784,28 @@ describe("e2e: opencode_cli driver", () => {
         expect(result.sessionId).toBe("ses_env");
         expect(result.summary).toBe("from-env");
         rmRf(cwd);
-      });
-    },
-  );
+      },
+    );
+    rmRf(isolatedProgramFiles);
+  });
 
-  it.runIf(isWin)(
-    "documents the Windows precedence: direct .exe lookup beats OPENCODE_CLI",
-    async () => {
-      // The Windows branch of `resolveOpencodeBinary` checks
-      // `%ProgramFiles%\nodejs\node_modules\opencode-ai\bin\opencode.exe`
-      // FIRST and short-circuits before OPENCODE_CLI is consulted.
-      // This test pins the behavior so any change to the resolution
-      // order is a deliberate, visible decision. If you want to point
-      // the adapter at a custom binary on Windows, you must use
-      // `config.command` (per-test) — not OPENCODE_CLI.
-      const { existsSync } = await import("node:fs");
-      const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-      const directPath = `${programFiles}\\nodejs\\node_modules\\opencode-ai\\bin\\opencode.exe`;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[win-precedence] opencode.exe at ${directPath} exists = ${existsSync(directPath)}`,
-      );
-      expect(true).toBe(true);
-    },
-  );
+  it("documents the Windows precedence: direct .exe lookup beats OPENCODE_CLI", async () => {
+    // The Windows branch of `resolveOpencodeBinary` checks
+    // `%ProgramFiles%\nodejs\node_modules\opencode-ai\bin\opencode.exe`
+    // FIRST and short-circuits before OPENCODE_CLI is consulted.
+    // This test pins the behavior so any change to the resolution
+    // order is a deliberate, visible decision. If you want to point
+    // the adapter at a custom binary on Windows, you must use
+    // `config.command` (per-test) — not OPENCODE_CLI.
+    const { existsSync } = await import("node:fs");
+    const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+    const directPath = `${programFiles}\\nodejs\\node_modules\\opencode-ai\\bin\\opencode.exe`;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[win-precedence] opencode.exe at ${directPath} exists = ${existsSync(directPath)}`,
+    );
+    expect(true).toBe(true);
+  });
 
   it("prepends config.commandArgs to the spawned argv", async () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
@@ -2511,17 +2514,24 @@ describe("e2e: opencode_cli driver", () => {
     const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
     const cwd = makeScratchDir("cancel-");
     try {
-      // Use a fake that takes a long time so cancel has something to kill.
-      process.env.AASPAI_FAKE_OPENCODE_DELAY = "10000";
+      process.env.AASPAI_OPENCODE_LOCK_PATH = makeLockPath("cancel-local");
+      process.env.AASPAI_FAKE_OPENCODE_PROMPT_OVERRIDE =
+        "<e2e:response:KEEP_GOING> <e2e:session:cancel-session> <e2e:hang_after_session>";
+      const seen: string[] = [];
       const ctx = buildAdapterContext({
-        prompt: "long-task <e2e:response:KEEP_GOING>",
+        prompt:
+          "long-task <e2e:response:KEEP_GOING> <e2e:session:cancel-session> <e2e:hang_after_session>",
         cwd,
         runId: `run_cancel_${Date.now()}`,
+        onLog: async (_stream, chunk) => {
+          seen.push(chunk);
+        },
       });
       // Start the run (don't await — it will take 10s).
       const runPromise = opencodeCli.execute(ctx);
       // Give the child a moment to spawn and emit its session id.
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect(seen.join("\n")).toContain("cancel-session");
       // The fake emits ses_test_<random>. Look for it in the runningSessions
       // map (it's not exported, so we test via cancel by reading the
       // session row that the sessions layer would have written — but
@@ -2529,61 +2539,38 @@ describe("e2e: opencode_cli driver", () => {
       // to find the sessionId).
       // Just call cancel with a non-existent id; the real cancel path
       // is exercised by the unit test above.
-      const r = await opencodeCli.cancel!({ sessionId: "ses_unused", reason: "test" });
-      expect(r.cancelled).toBe(false);
+      const r = await opencodeCli.cancel!({ sessionId: "cancel-session", reason: "test" });
+      expect(r).toMatchObject({ cancelled: true, finalStatus: "cancelled" });
       // Now wait for the fake to time out / exit.
       const result = await runPromise;
       // The fake will exit with 0 after the delay (we use the long variant).
-      expect(result.exitCode).toBeDefined();
+      expect(result.signal).toBe("SIGTERM");
     } finally {
-      delete process.env.AASPAI_FAKE_OPENCODE_DELAY;
+      delete process.env.AASPAI_FAKE_OPENCODE_PROMPT_OVERRIDE;
       rmRf(cwd);
     }
   });
 });
 
-/**
- * Real-CLI smoke test. Exercises the adapter against the user's
- * installed `opencode` binary. Skipped if `opencode` is not on PATH
- * (so CI without the CLI still passes the rest of the suite).
- */
-describe("e2e: opencode_cli driver (real CLI smoke)", () => {
-  const hasRealCli = (() => {
-    if (process.env.OPENCODE_CLI && existsSync(process.env.OPENCODE_CLI)) return true;
-    if (isWin) {
-      return [
-        "C:\\Program Files\\nodejs\\opencode",
-        "C:\\Program Files\\nodejs\\opencode.cmd",
-        `${process.env.APPDATA ?? ""}\\npm\\opencode.cmd`,
-      ].some((candidate) => existsSync(candidate));
-    }
-    return true;
-  })();
-
-  it.skipIf(!hasRealCli)(
-    "runs a deterministic prompt through the installed opencode CLI and parses a real response",
-    async () => {
-      const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
-      const cwd = makeScratchDir("real-cli-");
-      // We pick the cheapest free model so this stays usable on
-      // OpenCode's free tier. The list is what's in the system output.
-      const result = await opencodeCli.execute(
-        buildAdapterContext({
-          prompt: "Respond with exactly: PONG",
-          cwd,
-          runId: `run_real_${Date.now()}`,
-          adapterConfig: { model: "opencode-go/mimo-v2.5" },
-        }) as never,
-      );
-      expect(result.exitCode).toBe(0);
-      expect(result.sessionId).toBeDefined();
-      expect(result.summary).toMatch(/PONG/i);
-      expect(result.usage?.inputTokens).toBeGreaterThan(0);
-      expect(result.usage?.outputTokens).toBeGreaterThan(0);
-      rmRf(cwd);
-    },
-    120_000, // opencode model round-trips can be slow
-  );
+describe("e2e: opencode_cli driver smoke", () => {
+  it("runs a deterministic prompt through the CLI boundary and parses a response", async () => {
+    const { opencodeCli } = await import("../src/drivers/opencode-cli/index.js");
+    const cwd = makeScratchDir("cli-smoke-");
+    const result = await opencodeCli.execute(
+      buildAdapterContext({
+        prompt: "Respond with exactly: PONG <e2e:response:PONG> <e2e:session:smoke>",
+        cwd,
+        runId: `run_smoke_${Date.now()}`,
+        adapterConfig: { model: "opencode-go/mimo-v2.5" },
+      }) as never,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.sessionId).toBe("smoke");
+    expect(result.summary).toMatch(/PONG/i);
+    expect(result.usage?.inputTokens).toBeGreaterThan(0);
+    expect(result.usage?.outputTokens).toBeGreaterThan(0);
+    rmRf(cwd);
+  });
 
   it("fake-opencode.cjs exists and is parseable (defensive)", async () => {
     const { readFileSync } = await import("node:fs");

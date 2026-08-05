@@ -106,22 +106,21 @@ export const cursorCloud: ServerAdapterModule = {
         (agentId ? `${endpoint.replace(/\/$/, "")}/${encodeURIComponent(agentId)}` : undefined);
       let result = initial;
       const terminal = new Set(["completed", "failed", "cancelled", "error"]);
-      while (
-        statusUrl &&
-        !terminal.has((stringValue(result.status) ?? "completed").toLowerCase())
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 1_000));
-        const polled = await fetch(statusUrl, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-          signal: controller.signal,
-        });
-        result = await readJson(polled);
-        const delta = stringValue(result.delta) ?? stringValue(result.message);
-        if (delta)
-          await ctx.onLog(
-            "stdout",
-            `${JSON.stringify({ kind: "assistant", ts: new Date().toISOString(), text: delta, delta: true })}\n`,
-          );
+      if (statusUrl) {
+        while (!terminal.has((stringValue(result.status) ?? "completed").toLowerCase())) {
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+          const polled = await fetch(statusUrl, {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: controller.signal,
+          });
+          result = await readJson(polled);
+          const delta = stringValue(result.delta) ?? stringValue(result.message);
+          if (delta)
+            await ctx.onLog(
+              "stdout",
+              `${JSON.stringify({ kind: "assistant", ts: new Date().toISOString(), text: delta, delta: true })}\n`,
+            );
+        }
       }
       const summary =
         stringValue(result.result) ??

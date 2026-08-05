@@ -52,7 +52,14 @@ function emit(event) {
   process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
+function emitDiagnosticStderr() {
+  if (process.env.AASPAI_FAKE_OPENCODE_STDERR) {
+    process.stderr.write(`${process.env.AASPAI_FAKE_OPENCODE_STDERR}\n`);
+  }
+}
+
 function parsePrompt(rawPrompt) {
+  if (process.env.AASPAI_FAKE_OPENCODE_PROMPT_OVERRIDE) return rawPrompt || "";
   // Strip the `run` subcommand, --format, --model, --title, and any
   // additional flags; the prompt is whatever's left at the tail. We
   // accept it as the last argv, but be defensive: the adapter passes
@@ -222,6 +229,10 @@ async function runSuccessStream(prompt) {
     }
   }
 
+  if (/<e2e:hang_after_session>/.test(prompt)) {
+    return runHang();
+  }
+
   if (/<e2e:tool>/.test(prompt)) {
     emit(toolUseEvent(sessionID, "bash"));
   }
@@ -232,6 +243,13 @@ async function runSuccessStream(prompt) {
     emit(
       toolUseEvent(sessionID, "company_action", {
         payload: '{"actions":[{"type":"hire_and_delegate"}]}',
+      }),
+    );
+  }
+  if (/<e2e:company-action-invalid>/.test(prompt)) {
+    emit(
+      toolUseEvent(sessionID, "company_action", {
+        payload: "not-json",
       }),
     );
   }
@@ -280,7 +298,131 @@ function runHang() {
 
 async function main() {
   if (process.argv.includes("--version")) {
+    if (process.env.AASPAI_FAKE_OPENCODE_VERSION_FAIL) {
+      process.exit(1);
+      return;
+    }
     process.stdout.write(`${process.version}\n`);
+    return;
+  }
+  if (
+    (process.argv.includes("auth") || process.argv.includes("login")) &&
+    process.argv.includes("status")
+  ) {
+    if (process.env.AASPAI_FAKE_OPENCODE_AUTH_FAIL_EMPTY) {
+      process.exit(1);
+      return;
+    }
+    if (process.env.AASPAI_FAKE_OPENCODE_AUTH_EMPTY) return;
+  }
+
+  if (process.argv.includes("serve")) {
+    if (process.env.AASPAI_FAKE_OPENCODE_SERVE_HANG) {
+      setInterval(() => {}, 1 << 30);
+      return;
+    }
+    process.stdout.write("listening on http://127.0.0.1:4321\n");
+    setInterval(() => {}, 1 << 30);
+    return;
+  }
+  if (process.argv.includes("providers")) {
+    emitDiagnosticStderr();
+    process.stdout.write("anthropic\nopenai\n\n");
+    return;
+  }
+  if (process.argv.includes("stats")) {
+    emitDiagnosticStderr();
+    process.stdout.write(
+      `${JSON.stringify(
+        process.env.AASPAI_FAKE_OPENCODE_STATS_PARTIAL
+          ? {}
+          : {
+              inputTokens: 3,
+              outputTokens: 2,
+              cachedInputTokens: 1,
+              reasoningTokens: 1,
+              costUsd: 0.4,
+              durationMs: 12,
+            },
+      )}\n`,
+    );
+    return;
+  }
+  if (process.argv.includes("session")) {
+    if (process.argv.includes("list")) {
+      emitDiagnosticStderr();
+      if (process.env.AASPAI_FAKE_OPENCODE_SESSION_LIST_FAIL) {
+        process.stderr.write("session list failed\n");
+        process.exit(1);
+        return;
+      }
+      if (process.env.AASPAI_FAKE_OPENCODE_SESSION_LIST_MALFORMED) {
+        process.stdout.write("{");
+        return;
+      }
+      process.stdout.write(
+        (process.env.AASPAI_FAKE_OPENCODE_SESSION_LIST_NO_ID
+          ? '{"title":"No id"}'
+          : '{"id":"ses-one","title":"One","startedAt":"2026-01-01T00:00:00.000Z"}') +
+          "\nnot-json\n",
+      );
+      return;
+    }
+    if (process.argv.includes("export")) {
+      emitDiagnosticStderr();
+      process.stdout.write('{"session":"exported"}\n');
+      return;
+    }
+    if (process.argv.includes("import")) {
+      emitDiagnosticStderr();
+      process.stdout.write("ses-imported\n");
+      return;
+    }
+  }
+
+  if (process.argv.includes("mcp") && process.argv.includes("list")) {
+    if (process.env.AASPAI_FAKE_OPENCODE_MCP_LIST_FAIL) {
+      process.stderr.write("mcp list failed\n");
+      process.exit(1);
+      return;
+    }
+    if (process.env.AASPAI_FAKE_OPENCODE_MCP_LIST_MALFORMED) {
+      process.stdout.write("{");
+      return;
+    }
+    process.stdout.write("mcp-server\n");
+    return;
+  }
+
+  if (process.argv.includes("debug") && process.argv.includes("paths")) {
+    if (process.env.AASPAI_FAKE_OPENCODE_DEBUG_PATH_FAIL) {
+      process.exit(1);
+      return;
+    }
+    process.stdout.write("\n");
+    return;
+  }
+
+  if (process.argv.includes("debug") && process.argv.includes("config")) {
+    if (process.env.AASPAI_FAKE_OPENCODE_DEBUG_CONFIG_FAIL) {
+      process.exit(1);
+      return;
+    }
+    process.stdout.write(process.env.AASPAI_FAKE_OPENCODE_DEBUG_CONFIG_MALFORMED ? "{" : "{}\n");
+    return;
+  }
+  if (process.argv.includes("debug") && process.argv.includes("skill")) {
+    if (process.env.AASPAI_FAKE_OPENCODE_DEBUG_SKILL_FAIL) {
+      process.exit(1);
+      return;
+    }
+    process.stdout.write(
+      process.env.AASPAI_FAKE_OPENCODE_DEBUG_SKILL_MALFORMED
+        ? "{"
+        : process.env.AASPAI_FAKE_OPENCODE_DEBUG_SKILL_OBJECT
+          ? '[{"name":"skill","description":1,"location":"loc","content":1},{"content":"body"}]\n'
+          : "[]\n",
+    );
     return;
   }
 
@@ -288,6 +430,63 @@ async function main() {
   // for the prompt — useful when the test wants to drive behavior
   // without polluting the user-visible prompt.
   const prompt = parsePrompt(process.env.AASPAI_FAKE_OPENCODE_PROMPT_OVERRIDE || "");
+
+  if (/<e2e:local-branches>/.test(prompt)) {
+    const events = [
+      { type: "tool_use", sessionID: "local-branches", part: {} },
+      { type: "tool_use", sessionID: "local-branches", part: {} },
+      {
+        type: "tool_use",
+        sessionID: "local-branches",
+        part: { state: { status: "cancelled", output: 1 } },
+      },
+      { type: "step_finish", sessionID: "local-branches", part: { tokens: {}, cost: 0 } },
+      { type: "error", error: null },
+      { type: "error", error: "" },
+      { type: "error", error: "first local error" },
+      { type: "error", error: "second local error" },
+    ];
+    process.stdout.write(`${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+    return;
+  }
+
+  if (/<e2e:tail-only>/.test(prompt)) {
+    process.stdout.write(
+      JSON.stringify({
+        type: "text",
+        sessionID: "tail-session",
+        part: { type: "text", text: "tail" },
+      }),
+    );
+    process.exit(0);
+    return;
+  }
+  if (/<e2e:tail-malformed>/.test(prompt)) {
+    process.stdout.write("not-json");
+    process.exit(0);
+    return;
+  }
+  if (/<e2e:tail-lines>/.test(prompt)) {
+    process.stdout.write("\nnot-json\n");
+    process.exit(0);
+    return;
+  }
+
+  if (process.argv.includes("models") && process.env.AASPAI_FAKE_OPENCODE_MODELS_FAIL) {
+    process.stderr.write("models unavailable\n");
+    process.exit(1);
+    return;
+  }
+  if (process.argv.includes("models") && process.env.AASPAI_FAKE_OPENCODE_PROMPT_OVERRIDE) {
+    process.stdout.write("provider/model-a\nprovider/model-b\n");
+    return;
+  }
+  if (process.argv.includes("sandbox") && process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL) {
+    if (!process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL_EMPTY)
+      process.stderr.write("sandbox unavailable\n");
+    process.exit(1);
+    return;
+  }
 
   // Diagnostic: write the full argv to a file. The harness e2e
   // suite uses this to verify that `--session <id>` (and other
@@ -334,6 +533,7 @@ async function main() {
   }
 
   if (/<e2e:hang>/.test(prompt)) {
+    if (/<e2e:ignore_term>/.test(prompt)) process.on("SIGTERM", () => {});
     return runHang();
   }
   if (/<e2e:error:auth>/.test(prompt)) {

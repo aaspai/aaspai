@@ -53,11 +53,13 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
   readFileSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
   writeSync,
@@ -550,7 +552,6 @@ function prepareConfigInjection(
       const dir = base;
       cleanups.push(() => {
         try {
-          const { rmSync } = require("node:fs") as typeof import("node:fs");
           rmSync(dir, { recursive: true, force: true });
         } catch {
           /* best-effort */
@@ -758,7 +759,6 @@ async function runOpencodeCli(
     let outputTokens = 0;
     let cost = 0;
     let timedOut = false;
-    let closed = false;
     let timeoutHandle: NodeJS.Timeout | undefined;
     let killHandle: NodeJS.Timeout | undefined;
     let thinkingEventCount = 0;
@@ -784,16 +784,13 @@ async function runOpencodeCli(
       });
     };
     const terminate = (): void => {
-      if (closed) return;
       try {
         child.kill("SIGTERM");
         killHandle = setTimeout(() => {
-          if (!closed) {
-            try {
-              child.kill("SIGKILL");
-            } catch {
-              /* already dead */
-            }
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            /* already dead */
           }
         }, config.graceSec * 1_000);
         killHandle.unref();
@@ -820,16 +817,13 @@ async function runOpencodeCli(
       while (nl >= 0) {
         const line = stdoutBuf.slice(0, nl);
         stdoutBuf = stdoutBuf.slice(nl + 1);
-        if (line.trim().length === 0) continue;
-        let ev: OpenCodeEvent;
-        try {
-          ev = JSON.parse(line) as OpenCodeEvent;
-        } catch {
-          emitLog("stdout", line);
-          nl = stdoutBuf.indexOf("\n");
-          continue;
+        if (line.trim().length > 0) {
+          try {
+            handleEvent(JSON.parse(line) as OpenCodeEvent);
+          } catch {
+            emitLog("stdout", line);
+          }
         }
-        handleEvent(ev);
         nl = stdoutBuf.indexOf("\n");
       }
     });
@@ -933,8 +927,7 @@ async function runOpencodeCli(
               companyActionCalls.add(toolKey);
             }
           } catch (error) {
-            jsonErrorMessage =
-              error instanceof Error ? error.message : "company_action input is invalid";
+            jsonErrorMessage = (error as Error).message;
           }
         }
         emitLog(
@@ -1084,16 +1077,15 @@ async function runOpencodeCli(
     }
 
     child.on("error", (err) => {
-      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      clearTimeout(timeoutHandle!);
       if (killHandle !== undefined) clearTimeout(killHandle);
       cleanup();
       reject(err);
     });
 
     child.on("close", async (code, closeSignal) => {
-      closed = true;
       signal?.removeEventListener("abort", abort);
-      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      clearTimeout(timeoutHandle!);
       if (killHandle !== undefined) clearTimeout(killHandle);
       cleanup();
       // Unregister from the runningSessions map so cancel() won't find a dead child.
@@ -1233,8 +1225,7 @@ async function runOpencodeThroughRuntime(input: {
             companyActionCalls.add(toolKey);
           }
         } catch (error) {
-          companyActionError =
-            error instanceof Error ? error.message : "company_action input is invalid";
+          companyActionError = (error as Error).message;
         }
       }
       if (input.tools && firstToolEvent) {
@@ -1362,11 +1353,7 @@ function extractErrorMessage(value: unknown): string | undefined {
     if (name) return name;
     const code = typeof rec.code === "string" ? rec.code.trim() : "";
     if (code) return code;
-    try {
-      return JSON.stringify(rec);
-    } catch {
-      return undefined;
-    }
+    return JSON.stringify(rec);
   }
   return undefined;
 }
@@ -1510,6 +1497,7 @@ const persistentServers = new Map<string, PersistentServer>();
  * The server is auto-shutdown when this process exits (best-effort).
  */
 export async function startOpencodeServe(opts: {
+  cli?: string;
   workspaceKey: string;
   port?: number;
   cwd?: string;
@@ -1518,17 +1506,22 @@ export async function startOpencodeServe(opts: {
   const existing = persistentServers.get(opts.workspaceKey);
   if (existing && isPidRunning(existing.pid)) return existing;
 
-  const cli = await resolveOpencodeBinary(undefined);
+  const cli = opts.cli ?? (await resolveOpencodeBinary(undefined));
   const port = opts.port ?? 0; // 0 = random
   const args = ["serve", "--port", String(port)];
+  const isCmd = process.platform === "win32" && cli.toLowerCase().endsWith(".cmd");
+  const isScript = /\.(c?js|mjs|ts)$/i.test(cli);
+  const executable = isScript ? process.execPath : cli;
+  const executableArgs = isScript ? [cli, ...args] : args;
   // Use detached so the server survives if the parent dies. We also
   // explicitly unref so the server doesn't keep node alive.
-  const child = spawn(cli, args, {
+  const child = spawn(executable, executableArgs, {
     cwd: opts.cwd ?? process.cwd(),
     env: { ...process.env, ...(opts.env ?? {}) },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
     detached: true,
+    ...(isCmd ? { shell: true } : {}),
   });
   child.unref();
 
@@ -1539,6 +1532,7 @@ export async function startOpencodeServe(opts: {
     const timer = setTimeout(() => {
       try {
         child.kill("SIGKILL");
+        process.kill(child.pid as number, "SIGKILL");
       } catch {
         /* */
       }
@@ -1752,7 +1746,6 @@ function writeAuthFile(auth: Record<string, Record<string, unknown>>): void {
   }
   writeFileSync(file, JSON.stringify(auth, null, 2), "utf8");
   try {
-    const { chmodSync } = require("node:fs") as typeof import("node:fs");
     chmodSync(file, 0o600);
   } catch {
     /* best-effort */
@@ -2235,7 +2228,7 @@ export async function startOpencodeAcp(opts: {
   });
   child.stdout?.on("error", () => {});
   child.stderr?.on("error", () => {});
-  let resolveStopped: (v: { exitCode: number | null }) => void = () => {};
+  let resolveStopped!: (v: { exitCode: number | null }) => void;
   const stopped = new Promise<{ exitCode: number | null }>((r) => {
     resolveStopped = r;
   });
@@ -2771,59 +2764,43 @@ export const opencodeCli: ServerAdapterModule = {
       });
     }
     // 3. models list
-    try {
-      const models = await listOpencodeModels({
-        cli: config.command,
-        commandArgs: config.commandArgs,
-        cwd: ctx.cwd,
+    const models = await listOpencodeModels({
+      cli: config.command,
+      commandArgs: config.commandArgs,
+      cwd: ctx.cwd,
+    });
+    if (models.length > 0) {
+      checks.push({
+        name: "opencode_cli.models",
+        level: "info",
+        message: `discovered ${models.length} model(s) via 'opencode models'`,
+        details: { models },
       });
-      if (models.length > 0) {
-        checks.push({
-          name: "opencode_cli.models",
-          level: "info",
-          message: `discovered ${models.length} model(s) via 'opencode models'`,
-          details: { models },
-        });
-      } else {
-        checks.push({
-          name: "opencode_cli.models",
-          level: "warn",
-          message: "opencode models returned no entries",
-        });
-      }
-    } catch (err) {
+    } else {
       checks.push({
         name: "opencode_cli.models",
         level: "warn",
-        message: `opencode models failed: ${(err as Error).message}`,
+        message: "opencode models returned no entries",
       });
     }
     // 3. hello probe — only run if the previous checks all passed
     // at info level. A failing probe is a warning, not a hard fail.
     const allInfo = checks.every((c) => c.level === "info");
     if (allInfo) {
-      try {
-        const probe = await runOpencodeHelloProbe({
-          cli: config.command,
-          commandArgs: config.commandArgs,
-          model: config.model,
-          cwd: ctx.cwd,
-        });
-        checks.push({
-          name: "opencode_cli.hello",
-          level: probe.ok ? "info" : "warn",
-          message: probe.ok
-            ? `hello probe OK in ${probe.durationMs}ms (reply: ${probe.reply?.slice(0, 60) ?? ""})`
-            : `hello probe failed: ${probe.error ?? "unknown"}`,
-          details: probe,
-        });
-      } catch (err) {
-        checks.push({
-          name: "opencode_cli.hello",
-          level: "warn",
-          message: `hello probe threw: ${(err as Error).message}`,
-        });
-      }
+      const probe = await runOpencodeHelloProbe({
+        cli: config.command,
+        commandArgs: config.commandArgs,
+        model: config.model,
+        cwd: ctx.cwd,
+      });
+      checks.push({
+        name: "opencode_cli.hello",
+        level: probe.ok ? "info" : "warn",
+        message: probe.ok
+          ? `hello probe OK in ${probe.durationMs}ms (reply: ${probe.reply?.slice(0, 60)})`
+          : `hello probe failed: ${probe.error!}`,
+        details: probe,
+      });
     }
     const ok = checks.every((c) => c.level !== "error");
     return { ok, checks };

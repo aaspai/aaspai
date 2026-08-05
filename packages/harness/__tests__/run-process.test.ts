@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createJsonlFramer } from "../src/shared/jsonl";
 import { runProcess } from "../src/shared/run-process";
 
@@ -124,6 +124,84 @@ describe("runProcess cancellation", () => {
       expect(result.stdout).toBe("inherited");
     } finally {
       delete process.env.AASPAI_TEST_DIRECT_ENV;
+    }
+  });
+
+  it("covers spawn errors, timeout, stdin, and listener failures", async () => {
+    const missing = await runProcess({
+      command: "missing-aaspai-process",
+      args: [],
+      onLog: async () => {
+        throw new Error("listener");
+      },
+    });
+    expect(missing.exitCode).not.toBe(0);
+    expect(missing.stderr).toContain("spawn error");
+
+    const spawned = vi.fn(() => {
+      throw new Error("ignored spawn listener");
+    });
+    const timed = await runProcess({
+      command: process.execPath,
+      args: ["-e", "process.stdin.resume();setTimeout(()=>{},1000)"],
+      stdin: "input",
+      timeoutMs: 20,
+      graceMs: 10,
+      onSpawn: spawned,
+      onLog: async () => {
+        throw new Error("ignored log listener");
+      },
+    });
+    expect(spawned).toHaveBeenCalled();
+    expect(timed).toMatchObject({ timedOut: true, exitCode: null });
+  });
+
+  it("handles an already-aborted signal and truncates each stream", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const aborted = await runProcess({
+      command: process.execPath,
+      args: ["-e", "setTimeout(()=>{},1000)"],
+      signal: controller.signal,
+      graceMs: 10,
+    });
+    expect(aborted.exitCode).toBeNull();
+
+    const previous = process.env.AASPAI_RUN_MAX_BUFFER_BYTES;
+    process.env.AASPAI_RUN_MAX_BUFFER_BYTES = "8";
+    try {
+      vi.resetModules();
+      const isolated = await import("../src/shared/run-process");
+      const result = await isolated.runProcess({
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write('abcdefghijk');process.stderr.write('123456789');setTimeout(()=>{process.stdout.write('z');process.stderr.write('z')},0)",
+        ],
+      });
+      expect(result.stdout).toContain("truncated");
+      expect(result.stderr).toContain("truncated");
+    } finally {
+      if (previous === undefined) delete process.env.AASPAI_RUN_MAX_BUFFER_BYTES;
+      else process.env.AASPAI_RUN_MAX_BUFFER_BYTES = previous;
+    }
+  });
+
+  it("falls back to the default buffer for invalid buffer configuration", async () => {
+    const previous = process.env.AASPAI_RUN_MAX_BUFFER_BYTES;
+    process.env.AASPAI_RUN_MAX_BUFFER_BYTES = "not-a-number";
+    try {
+      vi.resetModules();
+      const isolated = await import("../src/shared/run-process");
+      await expect(
+        isolated.runProcess({
+          command: process.execPath,
+          args: ["-e", "process.stdout.write('ok')"],
+        }),
+      ).resolves.toMatchObject({ stdout: "ok" });
+    } finally {
+      if (previous === undefined) delete process.env.AASPAI_RUN_MAX_BUFFER_BYTES;
+      else process.env.AASPAI_RUN_MAX_BUFFER_BYTES = previous;
     }
   });
 });

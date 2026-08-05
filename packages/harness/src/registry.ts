@@ -46,7 +46,7 @@ const ADAPTERS: Readonly<Record<AdapterType, ServerAdapterModule>> = Object.free
   },
 });
 
-function capabilitiesFor(module: ServerAdapterModule): ProviderCapabilities {
+export function capabilitiesFor(module: ServerAdapterModule): ProviderCapabilities {
   const info = module.info;
   if (info.status !== "ready") {
     return {

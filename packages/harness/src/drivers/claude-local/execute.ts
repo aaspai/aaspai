@@ -317,9 +317,7 @@ export async function testEnvironment(ctx: { config: unknown; cwd?: string }): P
 
 function buildClaudeArgs(config: ClaudeLocalConfig, ctx: AdapterExecutionContext): string[] {
   const args: string[] = ["--output-format", "stream-json", "--verbose"];
-  if (config.permissionMode) {
-    args.push("--permission-mode", config.permissionMode);
-  }
+  args.push("--permission-mode", config.permissionMode);
   if (config.dangerouslySkipPermissions && config.permissionMode === "bypass-permissions") {
     args.push("--dangerously-skip-permissions");
   }
