@@ -23,7 +23,7 @@ function createSessionCodec(options: SessionCodecOptions): AdapterSessionCodec {
     const id = options.idKeys.map((key) => stringValue(input[key])).find(Boolean);
     if (!id) return null;
     const result: Record<string, unknown> = { [options.canonicalId]: id };
-    for (const key of options.fields ?? []) {
+    for (const key of options.fields!) {
       const value = input[key];
       if (typeof value === "string" && value.trim()) result[key] = value.trim();
       else if (Array.isArray(value) && value.length > 0) result[key] = value;

@@ -79,13 +79,15 @@ function normalizeAgentCommand(command: string | undefined): string | undefined 
 export function nodeVersionMeetsAcpMinimum(agent: AcpAgent, version = process.version): boolean {
   const match = version.match(/^v?(\d+)\.(\d+)\.(\d+)/);
   if (!match) return false;
-  const actual = match.slice(1, 4).map(Number);
-  const minimum = MIN_NODE_VERSION[agent];
-  for (let i = 0; i < minimum.length; i += 1) {
-    const current = actual[i] ?? 0;
-    const required = minimum[i] ?? 0;
-    if (current !== required) return current > required;
-  }
+  const [actualMajor, actualMinor, actualPatch] = match.slice(1, 4).map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const [requiredMajor, requiredMinor, requiredPatch] = MIN_NODE_VERSION[agent];
+  if (actualMajor !== requiredMajor) return actualMajor > requiredMajor;
+  if (actualMinor !== requiredMinor) return actualMinor > requiredMinor;
+  if (actualPatch !== requiredPatch) return actualPatch > requiredPatch;
   return true;
 }
 
@@ -245,6 +247,10 @@ function localAgentCommand(agent: AcpAgent, config: JsonObject = {}): string | u
   }
 }
 
+function agentCommandOverride(agent: string, command: string | undefined): Record<string, string> {
+  return command === undefined ? {} : { [agent]: command };
+}
+
 function runtimeEnv(ctx: AdapterExecutionContext): Record<string, string> {
   const managed = ctx.execution?.environment;
   const hostEnv =
@@ -305,7 +311,7 @@ function statusUsage(status: AcpRuntimeStatus | undefined): UsageSummary | undef
   if (typeof usage.inputTokens === "number") result.inputTokens = usage.inputTokens;
   if (typeof usage.outputTokens === "number") result.outputTokens = usage.outputTokens;
   if (typeof usage.cachedReadTokens === "number") result.cachedInputTokens = usage.cachedReadTokens;
-  return Object.keys(result).length > 0 ? result : undefined;
+  return result;
 }
 
 function diffUsage(
@@ -529,9 +535,6 @@ async function acpPrerequisiteFailure(
   const unsupported = unsupportedAcpConfiguration(agent, input.config);
   if (unsupported) return unsupported;
   const agentCommand = parsed.agentCommand ?? localAgentCommand(agent, input.config);
-  if (!agentCommand) {
-    return `${agent} ACP command is unavailable; install the ACP package or configure agentCommand`;
-  }
   try {
     const cwd = resolve(
       input.cwd ?? (typeof input.config.cwd === "string" ? input.config.cwd : process.cwd()),
@@ -540,7 +543,7 @@ async function acpPrerequisiteFailure(
     const runtime = (options.createRuntime ?? createAcpRuntime)({
       cwd,
       sessionStore: createRuntimeStore({ stateDir: parsed.stateDir }),
-      agentRegistry: createAgentRegistry({ overrides: { [agent]: agentCommand } }),
+      agentRegistry: createAgentRegistry({ overrides: agentCommandOverride(agent, agentCommand) }),
       probeAgent: agent,
       permissionMode: parsed.permissionMode,
       nonInteractivePermissions: parsed.nonInteractivePermissions,
@@ -644,7 +647,7 @@ export async function executeAcp(
       await mkdir(config.stateDir, { recursive: true });
       const agentCommand = config.agentCommand ?? localAgentCommand(acpAgent, ctx.config);
       const registry = createAgentRegistry({
-        overrides: agentCommand ? { [acpAgent]: agentCommand } : undefined,
+        overrides: agentCommandOverride(acpAgent, agentCommand),
       });
       runtime = (options.createRuntime ?? createAcpRuntime)({
         cwd,
@@ -750,11 +753,9 @@ export async function executeAcp(
       }
     }
     if (useWarmRuntime) {
-      const entry = warmRuntimes.get(key);
-      if (entry) {
-        entry.lastUsedAt = Date.now();
-        entry.handles.set(key, handle);
-      }
+      const entry = warmRuntimes.get(key)!;
+      entry.lastUsedAt = Date.now();
+      entry.handles.set(key, handle);
     }
     const activeIds = [
       key,
@@ -912,7 +913,7 @@ export async function testAcpEnvironment(
       cwd,
       sessionStore: createRuntimeStore({ stateDir: parsedConfig.stateDir }),
       agentRegistry: createAgentRegistry({
-        overrides: agentCommand ? { [agent]: agentCommand } : undefined,
+        overrides: agentCommandOverride(agent, agentCommand),
       }),
       probeAgent: agent,
       permissionMode: parsedConfig.permissionMode,

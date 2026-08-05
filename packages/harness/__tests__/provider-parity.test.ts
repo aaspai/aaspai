@@ -1,11 +1,14 @@
-import type { AdapterExecutionContext } from "@aaspai/contracts/harness";
+import type { AdapterExecutionContext, ServerAdapterModule } from "@aaspai/contracts/harness";
 import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
 import {
   cursorCloud,
   cursorLocal,
   getAdapter,
+  grokLocal,
+  hermesLocal,
   listAdapters,
   localSessionCodec,
+  piLocal,
 } from "@aaspai/harness";
 import { describe, expect, it, vi } from "vitest";
 
@@ -97,5 +100,109 @@ describe("provider parity surface", () => {
       errorCode: "cursor_cloud_failed",
       errorFamily: "auth",
     });
+  });
+
+  it.each([
+    ["cursor_local", cursorLocal],
+    ["grok_local", grokLocal],
+    ["pi_local", piLocal],
+    ["hermes_local", hermesLocal],
+  ] as Array<[string, ServerAdapterModule]>)(
+    "executes the shared local-agent path for %s",
+    async (adapterType, adapter) => {
+      const run = vi.fn(async (options: RunProcessOptions) => {
+        await options.onLog?.(
+          "stdout",
+          `${[
+            JSON.stringify({
+              type: "assistant",
+              session_id: "shared-session",
+              content: [
+                { type: "thinking", text: "thinking" },
+                { type: "text", text: "answer" },
+                { type: "tool_use", id: "tool-1", name: "shell", input: { command: "pwd" } },
+              ],
+              usage: { input_tokens: 4, output_tokens: 6, cached_input_tokens: 2 },
+            }),
+            JSON.stringify({ type: "tool_result", name: "shell", output: "ok" }),
+            JSON.stringify({ type: "tool_call", name: "shell", input: { command: "pwd" } }),
+            JSON.stringify({ type: "result", result: "done" }),
+            JSON.stringify({ type: "assistant", content: {} }),
+            JSON.stringify({ type: "assistant", content: [null] }),
+            JSON.stringify({ type: "unknown", summary: "summary fallback" }),
+            JSON.stringify({ type: "unknown" }),
+            "not-json",
+            JSON.stringify(42),
+          ].join("\n")}\n`,
+        );
+        await options.onLog?.("stdout", "\npartial-json");
+        await options.onLog?.("stderr", "warning\n");
+        return processResult();
+      });
+      const result = await adapter.execute({
+        ...context(run),
+        agent: { ...context(run).agent, adapterType: adapterType as never },
+        config: {
+          command: process.execPath,
+          model: "test-model",
+          mode: "persistent",
+          extraArgs: ["--extra"],
+          env: { TEST_ADAPTER_ENV: "ok", BAD_ENV_VALUE: 1 as never },
+        },
+        runtime: { sessionId: "previous-session" },
+      });
+
+      expect(run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: process.execPath,
+          cwd: "C:\\work",
+          stdin: adapterType === "pi_local" || adapterType === "hermes_local" ? undefined : "hello",
+        }),
+      );
+      expect(result).toMatchObject({
+        exitCode: 0,
+        sessionId: "shared-session",
+        usage: { inputTokens: 4, outputTokens: 6, cachedInputTokens: 2 },
+      });
+      expect(result.summary).toBe("ok");
+    },
+  );
+
+  it("covers local-agent failure fallback and environment probe", async () => {
+    const run = vi.fn(async () => ({ ...processResult(), exitCode: 1, stderr: "failed" }));
+    const result = await cursorLocal.execute({
+      ...context(run),
+      config: { command: process.execPath, timeoutSec: 2, graceSec: 1 },
+    });
+    expect(result).toMatchObject({
+      exitCode: 1,
+      errorFamily: "transient_upstream",
+      summary: "failed",
+    });
+
+    const stdoutRun = vi.fn(async () => ({
+      ...processResult(),
+      stdout: JSON.stringify({ type: "assistant", sessionId: "stdout-session", text: "fallback" }),
+    }));
+    await expect(
+      cursorLocal.execute({
+        ...context(stdoutRun),
+        config: { command: process.execPath },
+      }),
+    ).resolves.toMatchObject({ sessionId: "stdout-session", summary: "fallback" });
+
+    await expect(
+      cursorLocal.testEnvironment({
+        config: { command: process.execPath },
+        cwd: process.cwd(),
+      }),
+    ).resolves.toMatchObject({ ok: true, checks: [{ name: "cli", level: "info" }] });
+
+    await expect(
+      cursorLocal.testEnvironment({
+        config: { command: "aaspai-command-that-does-not-exist" },
+        cwd: process.cwd(),
+      }),
+    ).resolves.toMatchObject({ ok: false, checks: [{ name: "cli", level: "error" }] });
   });
 });

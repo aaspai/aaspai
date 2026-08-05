@@ -22,6 +22,8 @@ export interface RuntimeProgressReporter {
   flush(): Promise<void>;
 }
 
+type NormalizedProgressUpdate = Omit<RuntimeProgressUpdate, "percent"> & { percent: number };
+
 const DEFAULT_MIN_INTERVAL_MS = 2_000;
 const DEFAULT_MIN_STEP_PERCENT = 10;
 
@@ -34,7 +36,7 @@ export function createRuntimeProgressReporter(
 
   let lastSentAt = 0;
   let lastSentPercent = -1;
-  let pending: RuntimeProgressUpdate | null = null;
+  let pending: NormalizedProgressUpdate | null = null;
   let flushTimer: NodeJS.Timeout | undefined;
 
   const computePercent = (u: { transferredBytes: number; totalBytes?: number }): number => {
@@ -53,7 +55,7 @@ export function createRuntimeProgressReporter(
   return {
     report(raw) {
       const percent = raw.percent ?? computePercent(raw);
-      const update: RuntimeProgressUpdate = { ...raw, percent };
+      const update: NormalizedProgressUpdate = { ...raw, percent };
       const now = Date.now();
       const elapsed = now - lastSentAt;
       const stepDelta = Math.abs(percent - lastSentPercent);
@@ -73,13 +75,11 @@ export function createRuntimeProgressReporter(
         flushTimer = setTimeout(
           () => {
             flushTimer = undefined;
-            if (pending) {
-              const p = pending;
-              pending = null;
-              lastSentAt = Date.now();
-              lastSentPercent = p.percent ?? 0;
-              void emit(p);
-            }
+            const p = pending!;
+            pending = null;
+            lastSentAt = Date.now();
+            lastSentPercent = p.percent;
+            void emit(p);
           },
           Math.max(0, minIntervalMs - elapsed),
         );
@@ -95,7 +95,7 @@ export function createRuntimeProgressReporter(
         const p = pending;
         pending = null;
         lastSentAt = Date.now();
-        lastSentPercent = p.percent ?? 0;
+        lastSentPercent = p.percent;
         await emit(p);
       }
     },

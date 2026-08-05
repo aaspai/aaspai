@@ -47,6 +47,19 @@ export function fakeOpencodeCommand(): string {
   return process.execPath;
 }
 
+const RUNNING_ON_WINDOWS = process.platform === "win32";
+
+/**
+ * Path to the fake opencode CLI shim for the host platform. Tests that
+ * exercise the adapter's `command` path (CLI checks, environment probes,
+ * `opencode <subcommand>` helpers) pass this as the `command` config.
+ * The Windows `.cmd` shim and POSIX `.sh` shim both exec
+ * `fake-opencode.cjs`, so a single executable path works per platform.
+ */
+export function fakeOpencodeCli(): string {
+  return RUNNING_ON_WINDOWS ? FAKE_OPENCODE_CMD : FAKE_OPENCODE_SH;
+}
+
 /** Per-test scratch directory. */
 export function makeScratchDir(prefix = "aaspai-e2e-") {
   return mkdtempSync(join(tmpdir(), prefix));
