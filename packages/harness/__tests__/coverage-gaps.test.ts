@@ -4,7 +4,7 @@ import { capabilitiesFor, getAdapter, getAdapterCapabilities } from "../src/regi
 import { buildAgentEnv } from "../src/shared/env.js";
 import { createLocalAgentAdapter, standardLocalArgs } from "../src/shared/local-agent.js";
 import { acpSessionCodec, localSessionCodec } from "../src/shared/session-codec.js";
-import { FAKE_OPENCODE_CMD } from "./e2e/helpers.js";
+import { fakeOpencodeCli } from "./e2e/helpers.js";
 
 const agent = {
   id: "agent/gaps",
@@ -350,7 +350,7 @@ describe("coverage foundation edges", () => {
         agentConfigurationDoc: "",
         status: "ready",
       },
-      command: FAKE_OPENCODE_CMD,
+      command: fakeOpencodeCli(),
       buildArgs: () => [],
     });
     process.env.AASPAI_FAKE_OPENCODE_VERSION_FAIL = "1";

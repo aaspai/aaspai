@@ -7,7 +7,7 @@ import {
   execute,
   testEnvironment,
 } from "../src/drivers/codex-local/execute";
-import { FAKE_OPENCODE_CMD } from "./e2e/helpers.js";
+import { fakeOpencodeCli } from "./e2e/helpers.js";
 
 function context(
   run: NonNullable<AdapterExecutionContext["execution"]>["run"],
@@ -314,14 +314,14 @@ describe("codex_local runtime execution", () => {
     ).resolves.toMatchObject({ ok: false, checks: [{ name: "codex_cli", level: "error" }] });
     await expect(
       testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD, sandbox: "read-only" },
+        config: { engine: "cli", command: fakeOpencodeCli(), sandbox: "read-only" },
         cwd: process.cwd(),
       }),
     ).resolves.toMatchObject({ ok: true });
     process.env.AASPAI_FAKE_OPENCODE_AUTH_EMPTY = "1";
     await expect(
       testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD },
+        config: { engine: "cli", command: fakeOpencodeCli() },
         cwd: process.cwd(),
       }),
     ).resolves.toMatchObject({
@@ -332,7 +332,7 @@ describe("codex_local runtime execution", () => {
     process.env.AASPAI_FAKE_OPENCODE_AUTH_FAIL_EMPTY = "1";
     await expect(
       testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD },
+        config: { engine: "cli", command: fakeOpencodeCli() },
         cwd: process.cwd(),
       }),
     ).resolves.toMatchObject({
@@ -343,7 +343,7 @@ describe("codex_local runtime execution", () => {
     process.env.AASPAI_FAKE_OPENCODE_VERSION_FAIL = "1";
     await expect(
       testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD },
+        config: { engine: "cli", command: fakeOpencodeCli() },
         cwd: process.cwd(),
       }),
     ).resolves.toMatchObject({
@@ -356,7 +356,7 @@ describe("codex_local runtime execution", () => {
     delete process.env.AASPAI_FAKE_OPENCODE_VERSION_FAIL;
     await expect(testEnvironment({ config: null, cwd: process.cwd() })).resolves.toBeTruthy();
     const fallbackEnvironment = await testEnvironment({
-      config: { engine: "auto", command: FAKE_OPENCODE_CMD, extraArgs: ["--unsupported"] },
+      config: { engine: "auto", command: fakeOpencodeCli(), extraArgs: ["--unsupported"] },
       cwd: process.cwd(),
     });
     expect(fallbackEnvironment.checks.some((check) => check.name === "acp_fallback")).toBe(true);
@@ -430,7 +430,7 @@ describe("codex_local runtime execution", () => {
     try {
       Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
       const sandboxReady = await testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD, sandbox: "read-only" },
+        config: { engine: "cli", command: fakeOpencodeCli(), sandbox: "read-only" },
         cwd: process.cwd(),
       });
       expect(sandboxReady.ok).toBe(true);
@@ -439,7 +439,7 @@ describe("codex_local runtime execution", () => {
       );
       process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL = "1";
       const sandboxFailed = await testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD, sandbox: "read-only" },
+        config: { engine: "cli", command: fakeOpencodeCli(), sandbox: "read-only" },
         cwd: process.cwd(),
       });
       expect(sandboxFailed.ok).toBe(false);
@@ -454,7 +454,7 @@ describe("codex_local runtime execution", () => {
     }
 
     const native = await execute({
-      ...context(undefined as never, { engine: "cli", command: FAKE_OPENCODE_CMD }),
+      ...context(undefined as never, { engine: "cli", command: fakeOpencodeCli() }),
       context: { cwd: process.cwd(), prompt: "native" },
     });
     expect(native.exitCode).toBe(0);
@@ -464,7 +464,7 @@ describe("codex_local runtime execution", () => {
     process.env.AASPAI_FAKE_OPENCODE_SANDBOX_FAIL_EMPTY = "1";
     try {
       const result = await testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD, sandbox: "read-only" },
+        config: { engine: "cli", command: fakeOpencodeCli(), sandbox: "read-only" },
         cwd: process.cwd(),
       });
       expect(result.checks).toContainEqual(

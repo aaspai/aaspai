@@ -4,7 +4,7 @@ import type { RunProcessOptions } from "@aaspai/contracts/runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as claudeConfig from "../src/drivers/claude-local/config";
 import { execute, testEnvironment } from "../src/drivers/claude-local/execute";
-import { FAKE_OPENCODE_CMD } from "./e2e/helpers.js";
+import { fakeOpencodeCli } from "./e2e/helpers.js";
 
 describe("claude_local runtime execution", () => {
   it("frames JSON events split across runtime log chunks", async () => {
@@ -344,14 +344,14 @@ describe("claude_local runtime execution", () => {
     });
     await expect(
       testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD },
+        config: { engine: "cli", command: fakeOpencodeCli() },
         cwd: process.cwd(),
       }),
     ).resolves.toMatchObject({ ok: true });
     process.env.AASPAI_FAKE_OPENCODE_AUTH_EMPTY = "1";
     await expect(
       testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD },
+        config: { engine: "cli", command: fakeOpencodeCli() },
         cwd: process.cwd(),
       }),
     ).resolves.toMatchObject({
@@ -362,7 +362,7 @@ describe("claude_local runtime execution", () => {
     process.env.AASPAI_FAKE_OPENCODE_AUTH_FAIL_EMPTY = "1";
     await expect(
       testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD },
+        config: { engine: "cli", command: fakeOpencodeCli() },
         cwd: process.cwd(),
       }),
     ).resolves.toMatchObject({
@@ -373,7 +373,7 @@ describe("claude_local runtime execution", () => {
     process.env.AASPAI_FAKE_OPENCODE_VERSION_FAIL = "1";
     await expect(
       testEnvironment({
-        config: { engine: "cli", command: FAKE_OPENCODE_CMD },
+        config: { engine: "cli", command: fakeOpencodeCli() },
         cwd: process.cwd(),
       }),
     ).resolves.toMatchObject({
@@ -386,7 +386,7 @@ describe("claude_local runtime execution", () => {
     delete process.env.AASPAI_FAKE_OPENCODE_VERSION_FAIL;
     await expect(testEnvironment({ config: null, cwd: process.cwd() })).resolves.toBeTruthy();
     const fallbackEnvironment = await testEnvironment({
-      config: { engine: "auto", command: FAKE_OPENCODE_CMD, extraArgs: ["--unsupported"] },
+      config: { engine: "auto", command: fakeOpencodeCli(), extraArgs: ["--unsupported"] },
       cwd: process.cwd(),
     });
     expect(fallbackEnvironment.checks.some((check) => check.name === "acp_fallback")).toBe(true);

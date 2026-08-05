@@ -48,7 +48,7 @@ import {
 import {
   buildAdapterContext,
   FAKE_OPENCODE_CJS,
-  FAKE_OPENCODE_CMD,
+  fakeOpencodeCli,
   fakeOpencodeCommand,
   makeLockPath,
 } from "./e2e/helpers.js";
@@ -80,18 +80,18 @@ afterEach(async () => {
 describe("opencode command parity helpers", () => {
   it("runs providers, session portability, stats, and hello probes", async () => {
     process.env.AASPAI_FAKE_OPENCODE_STDERR = "diagnostic";
-    expect(await opencodeProviders({ cli: FAKE_OPENCODE_CMD })).toEqual(["anthropic", "openai"]);
-    expect(await opencodeSessionList({ cli: FAKE_OPENCODE_CMD })).toEqual([
+    expect(await opencodeProviders({ cli: fakeOpencodeCli() })).toEqual(["anthropic", "openai"]);
+    expect(await opencodeSessionList({ cli: fakeOpencodeCli() })).toEqual([
       { id: "ses-one", title: "One", startedAt: "2026-01-01T00:00:00.000Z" },
       { id: "not-json" },
     ]);
-    expect(await opencodeSessionExport("ses-one", { cli: FAKE_OPENCODE_CMD })).toContain(
+    expect(await opencodeSessionExport("ses-one", { cli: fakeOpencodeCli() })).toContain(
       "exported",
     );
-    expect(await opencodeSessionImport('{"session":"one"}', { cli: FAKE_OPENCODE_CMD })).toBe(
+    expect(await opencodeSessionImport('{"session":"one"}', { cli: fakeOpencodeCli() })).toBe(
       "ses-imported",
     );
-    expect(await opencodeStats("ses-one", { cli: FAKE_OPENCODE_CMD })).toMatchObject({
+    expect(await opencodeStats("ses-one", { cli: fakeOpencodeCli() })).toMatchObject({
       sessionId: "ses-one",
       inputTokens: 3,
       outputTokens: 2,
@@ -583,11 +583,11 @@ describe("opencode command parity helpers", () => {
     process.env.AASPAI_FAKE_OPENCODE_SESSION_LIST_NO_ID = "1";
     process.env.AASPAI_FAKE_OPENCODE_STATS_PARTIAL = "1";
     try {
-      await expect(opencodeSessionList({ cli: FAKE_OPENCODE_CMD })).resolves.toEqual([
+      await expect(opencodeSessionList({ cli: fakeOpencodeCli() })).resolves.toEqual([
         { id: "", title: "No id" },
         { id: "not-json" },
       ]);
-      await expect(opencodeStats("session", { cli: FAKE_OPENCODE_CMD })).resolves.toMatchObject({
+      await expect(opencodeStats("session", { cli: fakeOpencodeCli() })).resolves.toMatchObject({
         inputTokens: 0,
         outputTokens: 0,
         cachedInputTokens: 0,

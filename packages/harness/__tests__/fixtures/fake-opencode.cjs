@@ -255,7 +255,10 @@ async function runSuccessStream(prompt) {
   }
 
   emit(stepFinishEvent(sessionID, tokens));
-  process.exit(pickExitCode(prompt));
+  // Wait for the stdout write queue to drain before exiting. A single
+  // >1 MiB text event (used by the result-limit tests) would otherwise
+  // be truncated by process.exit() racing the pipe flush on POSIX.
+  process.stdout.write("\n", () => process.exit(pickExitCode(prompt)));
 }
 
 function runErrorStream(prompt, kind) {

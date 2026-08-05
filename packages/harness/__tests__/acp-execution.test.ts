@@ -385,81 +385,87 @@ describe("shared ACP execution", () => {
   });
 
   it("covers ACP environment checks and terminal error families", async () => {
-    acpxMocks.createAcpRuntime.mockReturnValueOnce({
-      doctor: async () => ({ ok: true, details: "ok" }),
-    } as never);
-    await expect(
-      testAcpEnvironment("claude", { config: {}, cwd: process.cwd() }),
-    ).resolves.toMatchObject({
-      ok: true,
-      checks: [
-        { name: "acp_node", level: "info" },
-        { name: "acp_runtime", level: "info", details: { details: "ok" } },
-      ],
-    });
-    acpxMocks.createAcpRuntime.mockImplementationOnce(() => {
-      throw new Error("runtime unavailable");
-    });
-    const failedEnvironment = await testAcpEnvironment("gemini", {
-      config: {},
-      cwd: process.cwd(),
-    });
-    expect(failedEnvironment.ok).toBe(false);
-    expect(failedEnvironment.checks).toContainEqual(
-      expect.objectContaining({ name: "acp_runtime", level: "error" }),
-    );
-    acpxMocks.createAcpRuntime.mockReturnValueOnce({ doctor: async () => undefined } as never);
-    const noDoctor = await testAcpEnvironment("claude", { config: null });
-    expect(
-      noDoctor.checks.some(
-        (check) =>
-          check.name === "acp_runtime" && check.message === "claude ACP runtime is available",
-      ),
-    ).toBe(true);
-    acpxMocks.createAcpRuntime.mockImplementationOnce(() => {
-      throw "runtime string failure";
-    });
-    await expect(
-      testAcpEnvironment("claude", { config: {}, cwd: process.cwd() }),
-    ).resolves.toMatchObject({
-      checks: expect.arrayContaining([
-        expect.objectContaining({ name: "acp_runtime", message: "runtime string failure" }),
-      ]),
-    });
     const originalVersion = process.version;
-    Object.defineProperty(process, "version", { configurable: true, value: "v20.0.0" });
+    Object.defineProperty(process, "version", { configurable: true, value: "v22.13.0" });
     try {
+      acpxMocks.createAcpRuntime.mockReturnValueOnce({
+        doctor: async () => ({ ok: true, details: "ok" }),
+      } as never);
+      await expect(
+        testAcpEnvironment("claude", { config: {}, cwd: process.cwd() }),
+      ).resolves.toMatchObject({
+        ok: true,
+        checks: [
+          { name: "acp_node", level: "info" },
+          { name: "acp_runtime", level: "info", details: { details: "ok" } },
+        ],
+      });
+      acpxMocks.createAcpRuntime.mockImplementationOnce(() => {
+        throw new Error("runtime unavailable");
+      });
+      const failedEnvironment = await testAcpEnvironment("gemini", {
+        config: {},
+        cwd: process.cwd(),
+      });
+      expect(failedEnvironment.ok).toBe(false);
+      expect(failedEnvironment.checks).toContainEqual(
+        expect.objectContaining({ name: "acp_runtime", level: "error" }),
+      );
+      acpxMocks.createAcpRuntime.mockReturnValueOnce({ doctor: async () => undefined } as never);
+      const noDoctor = await testAcpEnvironment("claude", { config: null });
+      expect(
+        noDoctor.checks.some(
+          (check) =>
+            check.name === "acp_runtime" && check.message === "claude ACP runtime is available",
+        ),
+      ).toBe(true);
+      acpxMocks.createAcpRuntime.mockImplementationOnce(() => {
+        throw "runtime string failure";
+      });
       await expect(
         testAcpEnvironment("claude", { config: {}, cwd: process.cwd() }),
       ).resolves.toMatchObject({
         checks: expect.arrayContaining([
-          expect.objectContaining({ name: "acp_node", level: "error" }),
+          expect.objectContaining({ name: "acp_runtime", message: "runtime string failure" }),
+        ]),
+      });
+      const innerVersion = process.version;
+      Object.defineProperty(process, "version", { configurable: true, value: "v20.0.0" });
+      try {
+        await expect(
+          testAcpEnvironment("claude", { config: {}, cwd: process.cwd() }),
+        ).resolves.toMatchObject({
+          checks: expect.arrayContaining([
+            expect.objectContaining({ name: "acp_node", level: "error" }),
+          ]),
+        });
+      } finally {
+        Object.defineProperty(process, "version", { configurable: true, value: innerVersion });
+      }
+      await expect(
+        testAcpEnvironment("gemini", { config: { command: "custom-gemini" }, cwd: process.cwd() }),
+      ).resolves.toBeTruthy();
+      await expect(
+        testAcpEnvironment("claude", { config: { cwd: process.cwd() } }),
+      ).resolves.toBeTruthy();
+      acpxMocks.createAcpRuntime.mockReturnValueOnce({
+        doctor: async () => ({ ok: false, message: "doctor environment failed" }),
+      } as never);
+      await expect(
+        testAcpEnvironment("claude", { config: {}, cwd: process.cwd() }),
+      ).resolves.toMatchObject({
+        ok: false,
+        checks: expect.arrayContaining([
+          expect.objectContaining({
+            name: "acp_runtime",
+            level: "error",
+            message: "doctor environment failed",
+          }),
         ]),
       });
     } finally {
       Object.defineProperty(process, "version", { configurable: true, value: originalVersion });
     }
-    await expect(
-      testAcpEnvironment("gemini", { config: { command: "custom-gemini" }, cwd: process.cwd() }),
-    ).resolves.toBeTruthy();
-    await expect(
-      testAcpEnvironment("claude", { config: { cwd: process.cwd() } }),
-    ).resolves.toBeTruthy();
-    acpxMocks.createAcpRuntime.mockReturnValueOnce({
-      doctor: async () => ({ ok: false, message: "doctor environment failed" }),
-    } as never);
-    await expect(
-      testAcpEnvironment("claude", { config: {}, cwd: process.cwd() }),
-    ).resolves.toMatchObject({
-      ok: false,
-      checks: expect.arrayContaining([
-        expect.objectContaining({
-          name: "acp_runtime",
-          level: "error",
-          message: "doctor environment failed",
-        }),
-      ]),
-    });
   });
 
   it("covers ACP prerequisite, resume, abort, and cleanup edges", async () => {
