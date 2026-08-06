@@ -12,6 +12,7 @@ import { type ResolvedAgentProfile, resolvedAgentProfileSchema } from "@aaspai/c
 import type { ExecutionTarget, RunProcessResult } from "@aaspai/contracts/runtime";
 import { getAdapter, parseClaudeStreamLine, parseCodexStreamLine } from "@aaspai/harness";
 import { resolveTarget } from "@aaspai/runtime";
+import { emitNativeLine } from "@aaspai/telemetry";
 import { assertHarnessExecutable, assertRuntimeReady } from "./capabilities.js";
 import type { ExecutionStore } from "./store.js";
 
@@ -129,6 +130,7 @@ export class HarnessExecutionPlanRunner {
 
     let sessionEventSeq = 0;
     let rawOutputSeq = 0;
+    let observerSeq = 0;
     let persistenceFailure: Error | undefined;
     let actualRuntimeIdentity: AdapterExecutionResult["runtimeIdentity"];
     let observedProviderSessionId: string | undefined;
@@ -272,6 +274,19 @@ export class HarnessExecutionPlanRunner {
           lastProgressAt = Date.now();
           for (const line of redactEphemeral(chunk).split(/\r?\n/)) {
             if (!line) continue;
+            observerSeq += 1;
+            emitNativeLine({
+              organizationId: input.plan.organizationId,
+              sessionId: session.id,
+              executionId: input.plan.workItemId,
+              attemptId: input.plan.attemptId,
+              traceId: input.plan.attemptId,
+              provider: "runtime",
+              stream,
+              line,
+              kind: stream === "stderr" ? "stderr" : "stdout",
+              seq: observerSeq,
+            });
             if (stream === "stdout") {
               try {
                 const parsed = JSON.parse(line) as {

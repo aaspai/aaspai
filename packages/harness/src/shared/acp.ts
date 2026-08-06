@@ -753,7 +753,10 @@ export async function executeAcp(
       }
     }
     if (useWarmRuntime) {
-      const entry = warmRuntimes.get(key)!;
+      const entry = warmRuntimes.get(key) as unknown as {
+        lastUsedAt: number;
+        handles: Map<string, unknown>;
+      };
       entry.lastUsedAt = Date.now();
       entry.handles.set(key, handle);
     }

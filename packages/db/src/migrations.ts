@@ -1,4 +1,5 @@
 import type { DbHandle } from "./connection.js";
+import { TELEMETRY_MIGRATION_STATEMENTS } from "./migrations-telemetry.js";
 
 const SQLITE_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS "user" (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, email_verified INTEGER NOT NULL DEFAULT 0, image TEXT, two_factor_enabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
@@ -1174,6 +1175,9 @@ export function runMigrations(handle: DbHandle): void {
     }
   }
   for (const stmt of DATA_NORMALIZATION) {
+    handle.db.run(stmt as never);
+  }
+  for (const stmt of TELEMETRY_MIGRATION_STATEMENTS) {
     handle.db.run(stmt as never);
   }
 }

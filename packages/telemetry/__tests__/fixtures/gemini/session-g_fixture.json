@@ -1,0 +1,25 @@
+{
+  "sessionId": "sess_gemini_fixture",
+  "projectHash": "abc123",
+  "messages": [
+    { "id": "g1", "timestamp": "2026-08-01T10:00:00Z", "type": "user", "content": "hello" },
+    {
+      "id": "g2",
+      "timestamp": "2026-08-01T10:00:05Z",
+      "type": "gemini",
+      "content": "hi there",
+      "model": "gemini-2.5-flash",
+      "tokens": { "input": 100, "output": 50, "cached": 10 },
+      "toolCalls": [
+        {
+          "id": "t1",
+          "name": "code",
+          "args": "{}",
+          "timestamp": "2026-08-01T10:00:04Z",
+          "status": "success",
+          "result": [{ "functionResponse": { "name": "code", "response": { "output": "ok" } } }]
+        }
+      ]
+    }
+  ]
+}

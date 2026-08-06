@@ -21,6 +21,7 @@
       "!**/reference",
       "!**/*.css",
       "!**/components/ui",
+      "!**/.aaspai",
       "!**/.aaspai-dev",
       "!**/aaspai-data",
       "!**/public/templates",

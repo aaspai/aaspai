@@ -10,3 +10,4 @@ export * from "./memory";
 export * from "./organizations";
 export * from "./phase2";
 export * from "./strategic";
+export * from "./telemetry";

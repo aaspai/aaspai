@@ -19,3 +19,4 @@ export * from "./primitives";
 export * from "./profile";
 export * from "./runtime";
 export * from "./strategic";
+export * from "./telemetry";
