@@ -35,6 +35,7 @@ import { type AdapterType, getAdapter } from "@aaspai/harness";
 import { KnowledgeLoader } from "@aaspai/knowledge";
 import { getLogger } from "@aaspai/observability";
 import type { SkillRegistry } from "@aaspai/skills";
+import { emitNativeLine, emitSessionProjection } from "@aaspai/telemetry";
 
 const log = getLogger("sessions");
 
@@ -198,6 +199,7 @@ export class Sessions {
     const controller = new AbortController();
     this.runningSessions.set(sessionId, { controller, adapter });
     let seq = await this.getNextSeq(sessionId);
+    let observedToolCallCount = 0;
     let sessionEventPersistenceError: Error | undefined;
     const recordEvent = async (
       stream: "stdout" | "stderr",
@@ -218,6 +220,21 @@ export class Sessions {
         sessionEventPersistenceError = err instanceof Error ? err : new Error(String(err));
         log.warn("failed to record session event", { sessionId, seq, err: String(err) });
       }
+      // Observer bridge: emit the normalized line to the telemetry store
+      // (best-effort; never affects session outcome).
+      if (kind === "tool_call") observedToolCallCount += 1;
+      emitNativeLine({
+        organizationId: req.organizationId,
+        sessionId,
+        model: agent.model,
+        provider: "aaspai",
+        stream,
+        line: typeof payload.text === "string" ? payload.text : kind,
+        ts: eventInsert.ts,
+        kind,
+        payload: payload as Record<string, unknown>,
+        seq,
+      });
     };
 
     // 5a. Build the full prompt — the dry-run adapter reads the system
@@ -472,6 +489,18 @@ export class Sessions {
           } as never)
           .where(eqId(sessionsTable.id, sessionId));
         log.info("session completed", { sessionId, status, durationMs, agent: agent.id });
+        // Observer bridge: persist the session summary projection.
+        emitSessionProjection({
+          organizationId: req.organizationId,
+          sessionId,
+          provider: "aaspai",
+          model: agent.model,
+          status,
+          messageCount: seq,
+          toolCallCount: observedToolCallCount,
+          logs: [],
+          costUsd: result.costUsd,
+        });
         // Tier 4: retry-on-transient decision. We retry if the run
         // failed with errorFamily="transient_upstream" AND we have
         // attempts left AND the budget was NOT exceeded (don't retry

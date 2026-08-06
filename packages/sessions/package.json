@@ -25,7 +25,8 @@
     "@aaspai/knowledge": "workspace:*",
     "@aaspai/observability": "workspace:*",
     "@aaspai/runtime": "workspace:*",
-    "@aaspai/skills": "workspace:*"
+    "@aaspai/skills": "workspace:*",
+    "@aaspai/telemetry": "workspace:*"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.1.1",

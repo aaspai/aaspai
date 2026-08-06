@@ -29,6 +29,7 @@
     "@aaspai/knowledge": "workspace:*",
     "@aaspai/runtime": "workspace:*",
     "@aaspai/skills": "workspace:*",
+    "@aaspai/telemetry": "workspace:*",
     "@aaspai/tools": "workspace:*"
   },
   "devDependencies": {
