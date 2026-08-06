@@ -32,6 +32,7 @@
     "@aaspai/observability": "workspace:*",
     "@aaspai/sessions": "workspace:*",
     "@aaspai/skills": "workspace:*",
+    "@aaspai/telemetry": "workspace:*",
     "@aaspai/tools": "workspace:*"
   },
   "devDependencies": {

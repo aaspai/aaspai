@@ -120,6 +120,7 @@ import {
   recurringProcessSchedule,
   requiredCompanyActionsForHire,
 } from "./company-actions.js";
+import { startObserverJobs } from "./observer-jobs.js";
 import { validateEvidencePolicy } from "./output-policy.js";
 
 const log = getLogger("worker.daemon");
@@ -622,6 +623,7 @@ export class WorkerDaemon {
 
   private tickHandle: NodeJS.Timeout | null = null;
   private pollHandle: NodeJS.Timeout | null = null;
+  private observerJobs: Awaited<ReturnType<typeof startObserverJobs>> | null = null;
   private pollInFlight = false;
   private inFlightWork: Promise<void> | null = null;
   private lastRecoveryAt = 0;
@@ -727,6 +729,11 @@ export class WorkerDaemon {
       loops: (await this.loopSource.list()).length,
     });
 
+    this.observerJobs = await startObserverJobs(this.organizationId).catch((err) => {
+      log.error("observer jobs failed to start", { err: String(err) });
+      return null;
+    });
+
     this.tickHandle = setInterval(() => {
       this.tickScheduler().catch((err) => log.error("scheduler tick failed", { err: String(err) }));
     }, this.tickIntervalMs);
@@ -770,6 +777,8 @@ export class WorkerDaemon {
     this.unwatchAgents = null;
     this.unwatchLoops?.();
     this.unwatchLoops = null;
+    await this.observerJobs?.stop();
+    this.observerJobs = null;
     this.scheduler.stop();
     if (this.inFlightWork) {
       log.info("awaiting in-flight work before shutdown");
