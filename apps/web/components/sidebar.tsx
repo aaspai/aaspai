@@ -14,6 +14,7 @@ import {
   Network,
   PlaySquare,
   PlugZap,
+  Radar,
   Search,
   Settings,
   Target,
@@ -46,6 +47,7 @@ const nav = [
   { href: "/integrations", label: "Integrations", icon: PlugZap },
   { href: "/memory", label: "Memory", icon: Brain },
   { href: "/sessions", label: "Activity", icon: Activity },
+  { href: "/observer", label: "Observer", icon: Radar },
   { href: "/search", label: "Search", icon: Search },
   { href: "/company", label: "Company", icon: BriefcaseBusiness },
 ];
