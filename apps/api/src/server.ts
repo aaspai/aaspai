@@ -44,6 +44,7 @@ import { registerLoopRoutes } from "./routes/loops.js";
 import { registerProviderRoutes } from "./routes/providers.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerStrategicRoutes } from "./routes/strategic.js";
+import { registerTelemetryRoutes } from "./routes/telemetry.js";
 
 const log = getLogger("api.server");
 
@@ -85,6 +86,7 @@ export function createApiApp(
     pullRequests: options.pullRequestProvider,
   });
   registerStrategicRoutes(app, { authVerifier: options.authVerifier });
+  registerTelemetryRoutes(app, { authVerifier: options.authVerifier });
   return app;
 }
 
