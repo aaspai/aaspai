@@ -110,7 +110,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   let inactivityTimer: NodeJS.Timeout | undefined;
   const resetInactivityTimer = (): void => {
     if (!monitorActive) return;
-    clearTimeout(inactivityTimer!);
+    clearTimeout(inactivityTimer ?? undefined);
     inactivityTimer = setTimeout(() => {
       inactivityTimedOut = true;
       monitorController.abort();
@@ -162,7 +162,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     });
   } finally {
     monitorActive = false;
-    clearTimeout(inactivityTimer!);
+    clearTimeout(inactivityTimer ?? undefined);
     ctx.signal?.removeEventListener("abort", onAbort);
   }
   for (const line of stdoutFramer.flush()) await processLine(line, true);

@@ -40,7 +40,7 @@ function parseSseFrames(buffer: string): {
 } {
   const normalized = buffer.replace(/\r\n/g, "\n");
   const parts = normalized.split("\n\n");
-  const rest = parts.pop()!;
+  const rest = parts.pop() ?? "";
   return {
     frames: parts
       .map((frame) => {

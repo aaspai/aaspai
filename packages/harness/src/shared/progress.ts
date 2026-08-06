@@ -75,8 +75,9 @@ export function createRuntimeProgressReporter(
         flushTimer = setTimeout(
           () => {
             flushTimer = undefined;
-            const p = pending!;
+            const p = pending;
             pending = null;
+            if (!p) return;
             lastSentAt = Date.now();
             lastSentPercent = p.percent;
             void emit(p);

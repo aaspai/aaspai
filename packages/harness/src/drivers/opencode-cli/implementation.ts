@@ -1077,7 +1077,7 @@ async function runOpencodeCli(
     }
 
     child.on("error", (err) => {
-      clearTimeout(timeoutHandle!);
+      clearTimeout(timeoutHandle ?? undefined);
       if (killHandle !== undefined) clearTimeout(killHandle);
       cleanup();
       reject(err);
@@ -1085,7 +1085,7 @@ async function runOpencodeCli(
 
     child.on("close", async (code, closeSignal) => {
       signal?.removeEventListener("abort", abort);
-      clearTimeout(timeoutHandle!);
+      clearTimeout(timeoutHandle ?? undefined);
       if (killHandle !== undefined) clearTimeout(killHandle);
       cleanup();
       // Unregister from the runningSessions map so cancel() won't find a dead child.
@@ -2798,7 +2798,7 @@ export const opencodeCli: ServerAdapterModule = {
         level: probe.ok ? "info" : "warn",
         message: probe.ok
           ? `hello probe OK in ${probe.durationMs}ms (reply: ${probe.reply?.slice(0, 60)})`
-          : `hello probe failed: ${probe.error!}`,
+          : `hello probe failed: ${probe.error ?? "unknown"}`,
         details: probe,
       });
     }
