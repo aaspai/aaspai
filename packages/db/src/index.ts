@@ -31,6 +31,7 @@ export {
   type SqliteDb,
 } from "./connection";
 export { runMigrations } from "./migrations.js";
+export { runTelemetryPostgresMigrations } from "./migrations-postgres.js";
 export * as schema from "./schema";
 export type { API_SCOPE_VALUES, ApiScope } from "./schema/api-keys";
 export * from "./schema/company-control";
@@ -65,3 +66,4 @@ export {
 } from "./schema/phase2";
 export * as sqliteSchema from "./schema/sqlite";
 export * from "./schema/strategic";
+export * from "./schema/telemetry";

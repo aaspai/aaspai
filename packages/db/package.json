@@ -13,6 +13,7 @@
     "./schema/phase2": "./src/schema/phase2.ts",
     "./schema/strategic": "./src/schema/strategic.ts",
     "./schema/execution": "./src/schema/execution.ts",
+    "./schema/telemetry": "./src/schema/telemetry.ts",
     "./client": "./src/client.ts",
     "./test-utils": "./src/test-utils.ts"
   },

@@ -6,3 +6,4 @@ export * from "./memory";
 export * from "./phase2";
 export * from "./sqlite-foundation";
 export * from "./strategic";
+export * from "./telemetry";
