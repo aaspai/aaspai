@@ -8,18 +8,18 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "node scripts/dev.mjs",
-    "build": "yarn workspaces foreach -A --topological-dev run build",
+    "dev": "turbo run dev",
+    "build": "turbo run build",
     "test": "node scripts/test-workspaces.mjs",
     "test:unit": "node scripts/test-workspaces.mjs",
     "check:dependencies": "node scripts/check-dependencies.mjs",
-    "lint": "yarn workspaces foreach -A run lint",
-    "typecheck": "yarn workspaces foreach -A run typecheck",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
     "test:real": "yarn workspace @aaspai/harness run test:real",
     "test:real:company:local": "yarn workspace @aaspai/worker test:real:company:local",
     "test:real:zedblock:local": "yarn workspace @aaspai/worker test:real:zedblock:local",
     "test:simulate:company": "yarn workspace @aaspai/worker test:simulate:company",
-    "clean": "yarn workspaces foreach -A run clean"
+    "clean": "turbo run clean"
   },
   "engines": {
     "node": ">=20.18.0 <21"
@@ -27,5 +27,8 @@
   "resolutions": {
     "node-gyp": "npm:10.2.0",
     "undici": "npm:6.21.0"
+  },
+  "devDependencies": {
+    "turbo": "^2.10.8"
   }
 }

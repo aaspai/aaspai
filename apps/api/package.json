@@ -9,7 +9,7 @@
     "aaspai-api": "./src/main.ts"
   },
   "scripts": {
-    "dev": "tsx watch ./src/main.ts",
+    "dev": "node ../../scripts/dev-app.mjs api",
     "start": "tsx ./src/main.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",

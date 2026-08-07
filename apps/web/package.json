@@ -4,7 +4,7 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "scripts": {
-    "dev": "next dev --port 3000",
+    "dev": "node ../../scripts/dev-app.mjs web",
     "build": "next build",
     "start": "next start",
     "test": "node --test lib/next-dist-dir.test.mjs && tsx --test lib/aaspai.test.ts lib/workspace-bootstrap.test.ts lib/knowledge-review-route.test.ts",
