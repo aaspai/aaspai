@@ -19,17 +19,22 @@ export function GiveDirection({ currentObjective }: { currentObjective?: string 
     event.preventDefault();
     setBusy(true);
     setError("");
-    const response = await fetch("/api/company/goals", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title, mandate }),
-    });
-    const body = (await response.json()) as { error?: string };
-    setBusy(false);
-    if (!response.ok) return setError(body.error ?? "Could not give direction");
-    setOpen(false);
-    setMandate("");
-    router.refresh();
+    try {
+      const response = await fetch("/api/company/goals", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title, mandate }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) return setError(body.error ?? "Could not give direction");
+      setOpen(false);
+      setMandate("");
+      router.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not give direction");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!open)
@@ -83,15 +88,20 @@ export function DecisionActions({ approvalId }: { approvalId: string }) {
   async function decide(status: "approved" | "rejected" | "changes_requested") {
     setBusy(true);
     setError("");
-    const response = await fetch(`/api/company/approvals/${encodeURIComponent(approvalId)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status }),
-    });
-    const body = (await response.json()) as { error?: string };
-    setBusy(false);
-    if (!response.ok) return setError(body.error ?? "Decision failed");
-    router.refresh();
+    try {
+      const response = await fetch(`/api/company/approvals/${encodeURIComponent(approvalId)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) return setError(body.error ?? "Decision failed");
+      router.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Decision failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

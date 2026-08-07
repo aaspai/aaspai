@@ -28,7 +28,18 @@ export function ThemeProvider({
   storageKey = "aaspai-ui-theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = useState<Theme>(defaultTheme);
+  // Read the persisted theme on boot so a reload keeps the user's choice
+  // (Hermes-style persistence — the app no longer boots as "system" every
+  // time despite setTheme writing storage).
+  const [theme, setThemeState] = useState<Theme>(() => {
+    if (typeof window === "undefined") return defaultTheme;
+    try {
+      const stored = window.localStorage.getItem(storageKey) as Theme | null;
+      return stored && ["dark", "light", "system"].includes(stored) ? stored : defaultTheme;
+    } catch {
+      return defaultTheme;
+    }
+  });
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -43,17 +54,16 @@ export function ThemeProvider({
     root.classList.add(theme);
   }, [theme]);
 
-  const value = {
-    theme,
-    setTheme: (next: Theme) => {
-      try {
-        window.localStorage.setItem(storageKey, next);
-      } catch {
-        // ignore
-      }
-      setTheme(next);
-    },
+  const setTheme = (next: Theme) => {
+    try {
+      window.localStorage.setItem(storageKey, next);
+    } catch {
+      // ignore
+    }
+    setThemeState(next);
   };
+
+  const value = { theme, setTheme };
 
   return (
     <ThemeProviderContext.Provider {...props} value={value}>

@@ -4,23 +4,19 @@ import {
   CircleAlert,
   CircleCheck,
   CircleDot,
-  CircleX,
   Clock,
   Coins,
   Cpu,
-  FileCode2,
   FileText,
   Layers,
   ScrollText,
-  Wrench,
 } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-
+import { ChatTranscript } from "@/components/chat-transcript";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { TranscriptEntry, TranscriptKind } from "@/lib/aaspai";
 import { getSessionDetail, isAaspaiWorkspace } from "@/lib/aaspai";
 import { formatRelative } from "@/lib/utils";
 
@@ -216,13 +212,7 @@ export default async function SessionDetailPage({ params }: { params: Promise<{ 
               contains the captured request and response details.
             </p>
           ) : (
-            <ol className="space-y-3">
-              {session.transcript.map((entry) => (
-                <li key={entry.seq}>
-                  <TranscriptRow entry={entry} />
-                </li>
-              ))}
-            </ol>
+            <ChatTranscript transcript={session.transcript} />
           )}
         </CardContent>
       </Card>
@@ -458,101 +448,4 @@ function JsonView({ data }: { data: unknown }) {
       {JSON.stringify(data, null, 2) ?? "null"}
     </pre>
   );
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  Transcript row
-// ─────────────────────────────────────────────────────────────────────
-
-const KIND_META: Record<
-  TranscriptKind,
-  {
-    icon: typeof Cpu;
-    label: string;
-    tone: string;
-  }
-> = {
-  init: { icon: CircleDot, label: "Init", tone: "text-blue-600" },
-  system: { icon: CircleDot, label: "System", tone: "text-blue-600" },
-  assistant: { icon: CircleCheck, label: "Assistant", tone: "text-emerald-600" },
-  thinking: { icon: CircleDot, label: "Thinking", tone: "text-violet-600" },
-  tool_call: { icon: Wrench, label: "Tool call", tone: "text-amber-600" },
-  tool_result: { icon: FileCode2, label: "Tool result", tone: "text-cyan-600" },
-  result: { icon: CircleCheck, label: "Result", tone: "text-emerald-600" },
-  stdout: { icon: CircleDot, label: "stdout", tone: "text-muted-foreground" },
-  stderr: { icon: CircleX, label: "stderr", tone: "text-destructive" },
-  unknown: { icon: CircleDot, label: "Event", tone: "text-muted-foreground" },
-};
-
-function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
-  const meta = KIND_META[entry.kind] ?? KIND_META.unknown;
-  const Icon = meta.icon;
-  const tsLabel = formatRelative(entry.ts);
-
-  return (
-    <div className="rounded-md border bg-background/40 p-3">
-      <div className="mb-1.5 flex items-center gap-2 text-xs">
-        <span className="font-mono text-[10px] text-muted-foreground/70">#{entry.seq}</span>
-        <Icon className={`h-3.5 w-3.5 ${meta.tone}`} />
-        <span className={`font-semibold ${meta.tone}`}>{meta.label}</span>
-        <span className="ml-auto text-muted-foreground">{tsLabel}</span>
-      </div>
-      <TranscriptBody entry={entry} />
-    </div>
-  );
-}
-
-function TranscriptBody({ entry }: { entry: TranscriptEntry }) {
-  const p = entry.payload;
-  const text = (p as { text?: unknown }).text;
-  const name = (p as { name?: unknown }).name;
-  const id = (p as { id?: unknown }).id;
-  const status = (p as { status?: unknown }).status;
-  const input =
-    (p as { input?: unknown; arguments?: unknown }).input ??
-    (p as { arguments?: unknown }).arguments;
-  const output = (p as { output?: unknown }).output;
-  const error = (p as { error?: unknown }).error;
-  const isError = (p as { isError?: unknown }).isError;
-
-  if (entry.kind === "tool_call" || entry.kind === "tool_result") {
-    return (
-      <div className="space-y-2">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          {typeof name === "string" && <span className="font-mono font-semibold">{name}</span>}
-          {typeof id === "string" && <span className="font-mono text-muted-foreground">{id}</span>}
-          {typeof status === "string" && <Badge variant="secondary">{status}</Badge>}
-          {isError === true && <Badge variant="destructive">error</Badge>}
-        </div>
-        {entry.kind === "tool_call" && input !== undefined && (
-          <pre className="max-h-64 overflow-auto rounded bg-muted/60 p-2.5 text-xs leading-relaxed whitespace-pre-wrap">
-            {typeof input === "string" ? input : JSON.stringify(input, null, 2)}
-          </pre>
-        )}
-        {entry.kind === "tool_result" && error !== undefined && (
-          <pre className="max-h-64 overflow-auto rounded bg-destructive/5 p-2.5 text-xs leading-relaxed whitespace-pre-wrap text-destructive">
-            {typeof error === "string" ? error : JSON.stringify(error, null, 2)}
-          </pre>
-        )}
-        {entry.kind === "tool_result" && output !== undefined && (
-          <pre className="max-h-72 overflow-auto rounded bg-muted/60 p-2.5 text-xs leading-relaxed whitespace-pre-wrap">
-            {typeof output === "string" ? output : JSON.stringify(output, null, 2)}
-          </pre>
-        )}
-        {entry.kind === "tool_result" && error === undefined && output === undefined && (
-          <JsonView data={p} />
-        )}
-      </div>
-    );
-  }
-
-  if (typeof text === "string" && text.length > 0) {
-    return (
-      <pre className="max-h-72 overflow-auto rounded bg-muted/60 p-2.5 text-xs leading-relaxed whitespace-pre-wrap">
-        {text}
-      </pre>
-    );
-  }
-
-  return <JsonView data={p} />;
 }

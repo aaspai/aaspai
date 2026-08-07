@@ -25,9 +25,18 @@ export function ExecutionLiveControls({
       `/api/execution/attempts/${encodeURIComponent(attemptId)}/stream`,
     );
     source.onopen = () => setConnection("connected");
-    source.addEventListener("update", () => router.refresh());
+    // Debounce refreshes — SSE events fire per tool step during active
+    // streaming, and each router.refresh() re-renders the whole page.
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    source.addEventListener("update", () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => router.refresh(), 800);
+    });
     source.onerror = () => setConnection("reconnecting");
-    return () => source.close();
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      source.close();
+    };
   }, [attemptId, router, status]);
 
   return (
