@@ -9,7 +9,7 @@ export const frontendProviderTypes = ["codex_local", "opencode_cli"] as const;
 
 export type FrontendProvider = (typeof frontendProviderTypes)[number];
 
-export const frontendRuntimeTypes = ["local"] as const;
+export const frontendRuntimeTypes = ["local", "sandbox:daytona"] as const;
 export type FrontendRuntime = (typeof frontendRuntimeTypes)[number];
 
 const defaultOpencodeModel = { id: "opencode/big-pickle", label: "Big Pickle" };
@@ -85,11 +85,19 @@ async function codexModels() {
 }
 
 export function frontendRuntimeTarget(type: FrontendRuntime): ExecutionTarget {
-  void type;
+  if (type === "sandbox:daytona") {
+    return {
+      kind: "sandbox",
+      provider: "daytona",
+      remoteCwd: "/workspace",
+      timeoutMs: 240_000,
+    };
+  }
   return { kind: "local", envPassthrough: false };
 }
 
 export async function listFrontendRuntimes() {
+  const daytonaReady = Boolean(process.env.DAYTONA_API_KEY?.trim());
   return [
     {
       type: "local" as const,
@@ -100,6 +108,20 @@ export async function listFrontendRuntimes() {
         {
           ready: true,
           message: "Uses the CLI's existing login and native resumable sessions",
+        },
+      ],
+    },
+    {
+      type: "sandbox:daytona" as const,
+      label: "Daytona sandbox",
+      ready: daytonaReady,
+      target: frontendRuntimeTarget("sandbox:daytona"),
+      checks: [
+        {
+          ready: daytonaReady,
+          message: daytonaReady
+            ? "DAYTONA_API_KEY is configured"
+            : "DAYTONA_API_KEY is not set — sandbox mode unavailable",
         },
       ],
     },

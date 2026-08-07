@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { roleLabel } from "@/lib/role-labels";
 import { cn } from "@/lib/utils";
 
 type Agent = {
@@ -17,22 +18,6 @@ type Agent = {
   reportsTo: string | null;
   manages: string[];
   peers: string[];
-};
-
-const roleLabel: Record<string, string> = {
-  ceo: "Chief of Staff",
-  cto: "CTO",
-  cmo: "Marketing",
-  cfo: "Finance",
-  security: "Security",
-  engineer: "Engineer",
-  designer: "Designer",
-  pm: "PM",
-  qa: "QA",
-  devops: "DevOps",
-  researcher: "Researcher",
-  operator: "Manager",
-  general: "Generalist",
 };
 
 export function AgentGraph({ agents }: { agents: Agent[] }) {
@@ -166,7 +151,7 @@ export function AgentGraph({ agents }: { agents: Agent[] }) {
                       </div>
                       <div className="mt-3 flex flex-wrap gap-1">
                         <Badge variant="secondary" className="text-[10px]">
-                          {roleLabel[agent.role] ?? agent.role}
+                          {roleLabel(agent.role)}
                         </Badge>
                         <Badge variant="outline" className="text-[10px]">
                           {agent.manages.length} reports
@@ -191,7 +176,7 @@ export function AgentGraph({ agents }: { agents: Agent[] }) {
           {active ? (
             <div className="space-y-4 text-sm">
               <div className="flex flex-wrap gap-2">
-                <Badge>{roleLabel[active.role] ?? active.role}</Badge>
+                <Badge>{roleLabel(active.role)}</Badge>
                 <Badge variant="outline">{active.adapter}</Badge>
               </div>
               <Detail label="Model" value={active.model ?? "Default"} />

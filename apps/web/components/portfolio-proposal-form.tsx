@@ -12,30 +12,35 @@ export function PortfolioProposalForm({ goalId }: { goalId: string | undefined }
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   if (!goalId) return null;
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/company/commands", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "submit_portfolio_proposal",
+          summary,
+          evidence: ["founder/discovery-review"],
+          projects: project ? [{ goalId, title: project }] : [],
+          idempotencyKey: `portfolio:${summary}`,
+        }),
+      });
+      if (!response.ok)
+        setError(((await response.json()) as { error?: string }).error ?? "Proposal failed");
+      else router.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Proposal failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <form
-      className="flex flex-wrap gap-2"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        setBusy(true);
-        setError("");
-        const response = await fetch("/api/company/commands", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            type: "submit_portfolio_proposal",
-            summary,
-            evidence: ["founder/discovery-review"],
-            projects: project ? [{ goalId, title: project }] : [],
-            idempotencyKey: `portfolio:${summary}`,
-          }),
-        });
-        if (!response.ok)
-          setError(((await response.json()) as { error?: string }).error ?? "Proposal failed");
-        else router.refresh();
-        setBusy(false);
-      }}
-    >
+    <form className="flex flex-wrap gap-2" onSubmit={submit}>
       <Input
         value={summary}
         onChange={(event) => setSummary(event.target.value)}

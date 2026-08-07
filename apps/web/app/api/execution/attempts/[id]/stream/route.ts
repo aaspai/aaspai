@@ -32,38 +32,44 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       };
       const poll = async () => {
         if (closed) return;
-        const [attempt] = await handle.db
-          .select()
-          .from(agentAttempts)
-          .where(eq(agentAttempts.id, attemptId))
-          .limit(1);
-        if (!attempt || attempt.organizationId !== user.organizationId) return close();
-        const [execution] = await handle.db
-          .select({ id: executionEvents.id })
-          .from(executionEvents)
-          .where(eq(executionEvents.attemptId, attemptId))
-          .orderBy(desc(executionEvents.id))
-          .limit(1);
-        const [session] = attempt.harnessSessionId
-          ? await handle.db
-              .select({ id: sessionEvents.id })
-              .from(sessionEvents)
-              .where(eq(sessionEvents.sessionId, attempt.harnessSessionId))
-              .orderBy(desc(sessionEvents.id))
-              .limit(1)
-          : [];
-        const id = `${attempt.status}:${execution?.id ?? 0}:${session?.id ?? 0}`;
-        if (id !== lastId) {
-          lastId = id;
-          controller.enqueue(
-            encoder.encode(
-              `id: ${id}\nevent: update\ndata: ${JSON.stringify({ status: attempt.status })}\n\n`,
-            ),
-          );
-        } else {
-          controller.enqueue(encoder.encode(": heartbeat\n\n"));
+        try {
+          const [attempt] = await handle.db
+            .select()
+            .from(agentAttempts)
+            .where(eq(agentAttempts.id, attemptId))
+            .limit(1);
+          if (!attempt || attempt.organizationId !== user.organizationId) return close();
+          const [execution] = await handle.db
+            .select({ id: executionEvents.id })
+            .from(executionEvents)
+            .where(eq(executionEvents.attemptId, attemptId))
+            .orderBy(desc(executionEvents.id))
+            .limit(1);
+          const [session] = attempt.harnessSessionId
+            ? await handle.db
+                .select({ id: sessionEvents.id })
+                .from(sessionEvents)
+                .where(eq(sessionEvents.sessionId, attempt.harnessSessionId))
+                .orderBy(desc(sessionEvents.id))
+                .limit(1)
+            : [];
+          const id = `${attempt.status}:${execution?.id ?? 0}:${session?.id ?? 0}`;
+          if (id !== lastId) {
+            lastId = id;
+            controller.enqueue(
+              encoder.encode(
+                `id: ${id}\nevent: update\ndata: ${JSON.stringify({ status: attempt.status })}\n\n`,
+              ),
+            );
+          } else {
+            controller.enqueue(encoder.encode(": heartbeat\n\n"));
+          }
+          if (TERMINAL.has(attempt.status)) close();
+        } catch {
+          // Transient DB error — keep streaming (next tick retries) rather
+          // than permanently killing the stream (sibling SSE routes do the
+          // same; a momentary read error must not drop a live run).
         }
-        if (TERMINAL.has(attempt.status)) close();
       };
       const timer = setInterval(() => void poll().catch(close), 1_000);
       request.signal.addEventListener("abort", close, { once: true });

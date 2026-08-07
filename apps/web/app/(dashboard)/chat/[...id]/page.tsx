@@ -1,9 +1,10 @@
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChatConsole } from "@/components/chat-console";
+import { ConversationThread } from "@/components/inbox/conversation-thread";
 import { Button } from "@/components/ui/button";
 import { getAgent, isAaspaiWorkspace } from "@/lib/aaspai";
+import { listFrontendRuntimes } from "@/lib/provider-status";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
   if (!isAaspaiWorkspace()) notFound();
   const agent = await getAgent(agentId);
   if (!agent) notFound();
+  const runtimes = await listFrontendRuntimes();
 
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col space-y-3">
@@ -34,11 +36,16 @@ export default async function ChatPage({ params }: { params: Promise<{ id: strin
           </div>
         </div>
       </div>
-      <ChatConsole
+      <ConversationThread
         agentId={agent.id}
         agentTitle={agent.title}
         adapter={agent.adapter}
         model={agent.model ?? null}
+        runtimes={runtimes}
+        defaultRuntime={
+          (agent.runtime as { default?: Record<string, unknown> } | undefined)?.default ?? null
+        }
+        conversationId={null}
       />
     </div>
   );

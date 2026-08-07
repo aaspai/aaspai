@@ -1,10 +1,9 @@
 "use client";
 
-import { Filter, Plus, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
@@ -51,10 +50,6 @@ export function IssuesBoard({ issues }: { issues: Issue[] }) {
             A single board for every task across goals and projects.
           </p>
         </div>
-        <Button>
-          <Plus className="mr-2 h-4 w-4" />
-          New issue
-        </Button>
       </header>
       <div className="flex flex-wrap gap-2">
         <div className="relative min-w-64 flex-1">
@@ -64,11 +59,13 @@ export function IssuesBoard({ issues }: { issues: Issue[] }) {
             placeholder="Search issues, projects, or descriptions"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            aria-label="Search issues"
           />
         </div>
         <select
           value={priority}
           onChange={(event) => setPriority(event.target.value)}
+          aria-label="Filter by priority"
           className="rounded-md border bg-background px-3 text-sm"
         >
           <option value="all">All priorities</option>
@@ -76,10 +73,6 @@ export function IssuesBoard({ issues }: { issues: Issue[] }) {
           <option value="2">Medium priority</option>
           <option value="1">Low priority</option>
         </select>
-        <Button variant="outline">
-          <Filter className="mr-2 h-4 w-4" />
-          Filters
-        </Button>
       </div>
       <div className="grid gap-4 xl:grid-cols-5">
         {columns.map((column) => (
@@ -120,7 +113,15 @@ function IssueCard({ issue }: { issue: Issue }) {
       <div className="flex items-start justify-between gap-2">
         <p className="line-clamp-2 text-sm font-medium">{issue.title}</p>
         <span
-          className={`mt-1 h-2 w-2 shrink-0 rounded-full ${issue.priority >= 3 ? "bg-red-500" : issue.priority === 2 ? "bg-amber-500" : "bg-slate-400"}`}
+          title={
+            issue.priority >= 3
+              ? "High priority"
+              : issue.priority === 2
+                ? "Medium priority"
+                : "Low priority"
+          }
+          aria-hidden
+          className={`mt-1 h-2 w-2 shrink-0 rounded-full ${issue.priority >= 3 ? "bg-red-500" : issue.priority === 2 ? "bg-amber-500" : "bg-muted-foreground/50"}`}
         />
       </div>
       <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">

@@ -6,16 +6,11 @@ import {
   Brain,
   BriefcaseBusiness,
   ClipboardCheck,
-  FileText,
   FolderKanban,
-  Inbox,
   LayoutDashboard,
   Menu,
-  Network,
-  PlaySquare,
-  PlugZap,
+  MessagesSquare,
   Radar,
-  Search,
   Settings,
   Target,
 } from "lucide-react";
@@ -34,23 +29,75 @@ import { cn } from "@/lib/utils";
 
 const nav = [
   { href: "/", label: "Command center", icon: LayoutDashboard },
-  { href: "/inbox", label: "Inbox", icon: Inbox },
+  { href: "/inbox", label: "Chats", icon: MessagesSquare },
+  { href: "/sessions", label: "Activity", icon: Activity },
+  { href: "/observer", label: "Observer", icon: Radar },
+  { href: "/company", label: "Company", icon: BriefcaseBusiness },
+];
+
+const settingsNav = [
+  { href: "/agents", label: "Agents", icon: Bot },
   { href: "/projects", label: "Projects", icon: FolderKanban },
   { href: "/goals", label: "Goals", icon: Target },
   { href: "/issues", label: "Issues", icon: ClipboardCheck },
   { href: "/execution", label: "Work", icon: Activity },
-  { href: "/approvals", label: "Approvals", icon: ClipboardCheck },
-  { href: "/agents", label: "Agents", icon: Bot },
-  { href: "/org", label: "Organization", icon: Network },
-  { href: "/automations", label: "Automations", icon: PlaySquare },
-  { href: "/files", label: "Files & artifacts", icon: FileText },
-  { href: "/integrations", label: "Integrations", icon: PlugZap },
   { href: "/memory", label: "Memory", icon: Brain },
-  { href: "/sessions", label: "Activity", icon: Activity },
-  { href: "/observer", label: "Observer", icon: Radar },
-  { href: "/search", label: "Search", icon: Search },
-  { href: "/company", label: "Company", icon: BriefcaseBusiness },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
+
+const settingsNavLabel = "Settings & configuration";
+const primaryNavLabel = "Direct use";
+
+interface NavItem {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
+function NavLinkRow({
+  item,
+  pathname,
+  inSheet,
+}: {
+  item: NavItem;
+  pathname: string;
+  inSheet?: boolean;
+}) {
+  const active = pathname === item.href || pathname?.startsWith(`${item.href}/`);
+  const link = (
+    <Link
+      href={item.href}
+      className={cn(
+        "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+        active
+          ? "bg-accent text-accent-foreground"
+          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+      )}
+    >
+      <item.icon className="h-4 w-4 shrink-0" />
+      {item.label}
+    </Link>
+  );
+  return <li key={item.href}>{inSheet ? <SheetClose asChild>{link}</SheetClose> : link}</li>;
+}
+
+function NavGroup({
+  items,
+  pathname,
+  inSheet,
+}: {
+  items: NavItem[];
+  pathname: string;
+  inSheet?: boolean;
+}) {
+  return (
+    <ul className="space-y-0.5">
+      {items.map((item) => (
+        <NavLinkRow key={item.href} item={item} pathname={pathname} inSheet={inSheet} />
+      ))}
+    </ul>
+  );
+}
 
 export function Sidebar({
   companyName,
@@ -82,26 +129,14 @@ export function Sidebar({
               <SheetTitle>{companyName}</SheetTitle>
             </SheetHeader>
             <nav className="flex-1 overflow-y-auto py-3">
-              <ul className="space-y-1">
-                {nav.map((item) => (
-                  <li key={item.href}>
-                    <SheetClose asChild>
-                      <Link
-                        href={item.href}
-                        className={cn(
-                          "flex items-center gap-3 rounded-md px-3 py-3 text-sm",
-                          pathname === item.href || pathname?.startsWith(`${item.href}/`)
-                            ? "bg-accent text-accent-foreground"
-                            : "text-muted-foreground",
-                        )}
-                      >
-                        <item.icon className="h-4 w-4" />
-                        {item.label}
-                      </Link>
-                    </SheetClose>
-                  </li>
-                ))}
-              </ul>
+              <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {primaryNavLabel}
+              </p>
+              <NavGroup items={nav} pathname={pathname} inSheet />
+              <p className="px-3 pb-1.5 pt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {settingsNavLabel}
+              </p>
+              <NavGroup items={settingsNav} pathname={pathname} inSheet />
             </nav>
             <SheetClose asChild>
               <Link
@@ -129,27 +164,14 @@ export function Sidebar({
           </span>
         </div>
         <nav className="flex-1 overflow-y-auto p-2">
-          <ul className="space-y-0.5">
-            {nav.map((item) => {
-              const active = pathname === item.href || pathname?.startsWith(`${item.href}/`);
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    className={cn(
-                      "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                      active
-                        ? "bg-accent text-accent-foreground"
-                        : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                    )}
-                  >
-                    <item.icon className="h-4 w-4" />
-                    {item.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+          <p className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {primaryNavLabel}
+          </p>
+          <NavGroup items={nav} pathname={pathname} />
+          <p className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {settingsNavLabel}
+          </p>
+          <NavGroup items={settingsNav} pathname={pathname} />
         </nav>
         <div className="border-t p-3 text-[11px] text-muted-foreground">
           <Link
