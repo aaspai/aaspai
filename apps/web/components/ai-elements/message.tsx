@@ -270,7 +270,12 @@ export const MessageBranchPage = ({ className, ...props }: MessageBranchPageProp
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+const streamdownPlugins = {
+  cjk,
+  code,
+  math,
+  mermaid,
+} as unknown as NonNullable<ComponentProps<typeof Streamdown>["plugins"]>;
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (

@@ -74,7 +74,7 @@ export async function ensureFrontendWorkspace(
   const root = workspaceRoot();
   const stored = await readStoredOnboarding();
   const onboarding: FrontendOnboarding = {
-    ceoProvider: options.ceoProvider ?? stored?.ceoProvider ?? "opencode_cli",
+    ceoProvider: options.ceoProvider ?? stored?.ceoProvider ?? "opencode_local",
     ceoModel: options.ceoModel ?? stored?.ceoModel,
     ceoAgenda: options.ceoAgenda?.trim() || stored?.ceoAgenda || defaultAgenda,
     ceoInstructions:
@@ -205,26 +205,22 @@ Finish with the work completed, artifact paths, verification evidence, limitatio
 
 function toolsYaml(provider: string): string {
   const tools =
-    provider === "codex_local"
-      ? ["apply_patch", "shell", "web_search", "view_image"]
-      : provider === "claude_local"
-        ? ["Bash", "Edit", "Glob", "Grep", "Read", "WebFetch", "WebSearch", "Write"]
-        : provider === "opencode_cli"
-          ? [
-              "bash",
-              "browser_snapshot",
-              "edit",
-              "read",
-              "write",
-              "glob",
-              "grep",
-              "list",
-              "webfetch",
-              "websearch",
-              "todowrite",
-              "skill",
-              "company_action",
-            ]
-          : [];
+    provider === "opencode_local"
+      ? [
+          "bash",
+          "browser_snapshot",
+          "edit",
+          "read",
+          "write",
+          "glob",
+          "grep",
+          "list",
+          "webfetch",
+          "websearch",
+          "todowrite",
+          "skill",
+          "company_action",
+        ]
+      : [];
   return `allow:${tools.map((tool) => `\n  - ${tool}`).join("")}\ndeny: []\nrequire_approval_for: []\n`;
 }

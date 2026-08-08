@@ -16,11 +16,11 @@ test("UI onboarding creates an executable OpenCode company workspace", async () 
   try {
     const companyName = 'Acme "\nrole: attacker';
     await ensureFrontendWorkspace(companyName, {
-      ceoProvider: "opencode_cli",
+      ceoProvider: "opencode_local",
       ceoModel: "opencode-go/mimo-v2.5",
       ceoAgenda: "Build a measurable and evidence-backed growth engine.",
       ceoInstructions: "Delegate specialist work and require durable evidence.",
-      runtime: { kind: "docker", image: "node:20", network: "bridge" },
+      runtime: { kind: "local", envPassthrough: false },
     });
 
     const agentRoot = join(root, ".aaspai", "agents");
@@ -32,11 +32,7 @@ test("UI onboarding creates an executable OpenCode company workspace", async () 
       { key: "company-work", version: "1.0.0" },
     ]);
     const ceoConfig = JSON.parse(await readFile(join(agentRoot, "ceo", "config.yaml"), "utf8"));
-    assert.deepEqual(ceoConfig.runtimeConfig.default, {
-      kind: "docker",
-      image: "node:20",
-      network: "bridge",
-    });
+    assert.deepEqual(ceoConfig.runtimeConfig.default, { kind: "local", envPassthrough: false });
     const openCodeTools = await readFile(join(agentRoot, "ceo", "tools.yaml"), "utf8");
     for (const tool of [
       "bash",
@@ -92,12 +88,6 @@ test("UI onboarding creates an executable OpenCode company workspace", async () 
     const skills = await loadSkillDirectory("./skills");
     assert.ok(skills.has("company-operator", "1.0.0"));
     assert.ok(skills.has("company-work", "1.0.0"));
-
-    await ensureFrontendWorkspace("Acme", { ceoProvider: "codex_local" });
-    const codexTools = await readFile(join(agentRoot, "ceo", "tools.yaml"), "utf8");
-    for (const tool of ["apply_patch", "shell", "web_search", "view_image"]) {
-      assert.match(codexTools, new RegExp(`  - ${tool}(?:\\r?\\n|$)`));
-    }
   } finally {
     process.chdir(previousCwd);
     if (previousWorkspace === undefined) delete process.env.AASPAI_CWD;

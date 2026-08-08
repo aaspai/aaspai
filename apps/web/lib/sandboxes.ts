@@ -1,53 +1,35 @@
-import { getDefaultDb, runMigrations } from "@aaspai/db";
-import { SandboxManager, type SandboxSummary } from "@aaspai/runtime";
-import { ensureWorkspaceEnv, isAaspaiWorkspace } from "@/lib/aaspai";
-import { currentUser } from "@/lib/local-auth";
-
 /**
- * Web-side sandbox registry access. Exposes the live sandbox state for
- * the frontend ("agents up", per-session sandboxes, TTL status).
+ * Runtime V2 deliberately keeps lease state out of the web process. Daytona
+ * leases belong to the execution worker and are represented by serialized
+ * runtime leases, not a web-owned provider registry.
  *
- * Pages are server components without a direct org param, so the helper
- * resolves the current user's org from the session cookie (same as the
- * API routes, which pass the org explicitly).
+ * These read-only helpers remain as a narrow UI boundary until the web app is
+ * migrated to query execution snapshots. They never create, resume, or
+ * destroy provider resources.
  */
-
-export type { SandboxSummary };
-
-const manager = () => new SandboxManager();
-
-async function ready(): Promise<string | null> {
-  ensureWorkspaceEnv();
-  if (!isAaspaiWorkspace()) return null;
-  runMigrations(getDefaultDb());
-  const user = await currentUser();
-  return user?.organizationId ?? "default";
+export interface SandboxSummary {
+  id: string;
+  organizationId: string;
+  agentId: string;
+  adapter: string;
+  provider: string;
+  status: "alive" | "ready" | "hibernating" | "archived" | "provisioning" | "failed" | "deleted";
+  sessionId?: string;
+  lastActiveAt?: string;
 }
 
 export async function listSandboxes(): Promise<SandboxSummary[]> {
-  const org = await ready();
-  if (!org) return [];
-  return manager().list(org);
+  return [];
 }
 
 export async function listLiveSandboxes(): Promise<SandboxSummary[]> {
-  const org = await ready();
-  if (!org) return [];
-  return manager().listLive(org);
+  return [];
 }
 
-export async function isAgentUp(agentId: string): Promise<boolean> {
-  const org = await ready();
-  if (!org) return false;
-  return manager().isAgentUp(org, agentId);
+export async function isAgentUp(_agentId: string): Promise<boolean> {
+  return false;
 }
 
-export async function destroySandbox(sandboxId: string): Promise<void> {
-  const org = await ready();
-  if (!org) return;
-  const rows = await manager().list(org);
-  // Scope by org: never destroy a sandbox that belongs to another org.
-  const owned = rows.some((sandbox) => sandbox.id === sandboxId);
-  if (!owned) return;
-  await manager().destroy(sandboxId);
+export async function destroySandbox(_sandboxId: string): Promise<never> {
+  throw new Error("Sandbox lifecycle is owned by Runtime V2 execution leases");
 }

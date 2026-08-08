@@ -188,7 +188,12 @@ export type ReasoningContentProps = ComponentProps<typeof CollapsibleContent> & 
   children: string;
 };
 
-const streamdownPlugins = { cjk, code, math, mermaid };
+const streamdownPlugins = {
+  cjk,
+  code,
+  math,
+  mermaid,
+} as unknown as NonNullable<ComponentProps<typeof Streamdown>["plugins"]>;
 
 export const ReasoningContent = memo(({ className, children, ...props }: ReasoningContentProps) => (
   <CollapsibleContent

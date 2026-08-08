@@ -1,21 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { JsonObject } from "@aaspai/contracts/primitives";
-import {
-  eq,
-  getDefaultDb,
-  runMigrations,
-  sessions as sessionsTable,
-} from "@aaspai/db";
+import { eq, getDefaultDb, runMigrations, sessions as sessionsTable } from "@aaspai/db";
 import {
   DEFAULT_AGENTS_DIR,
   DEFAULT_KNOWLEDGE_DIR,
   FileAgentConfigSource,
   FileKnowledgeSource,
 } from "@aaspai/file-loader";
-import { SandboxManager } from "@aaspai/runtime";
 import { Sessions } from "@aaspai/sessions";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -118,16 +110,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return NextResponse.json({ error: runtimeResolved.error }, { status: 400 });
   }
   const runtime = runtimeResolved.runtime;
+  if (runtime.kind !== "local") {
+    await agentSource.stop().catch(() => undefined);
+    await knowledgeSource.stop().catch(() => undefined);
+    return NextResponse.json(
+      { error: "remote runtime leases must be acquired by the execution layer" },
+      { status: 409 },
+    );
+  }
 
   const sessions = new Sessions({
     agentSource,
     knowledgeSource,
     skillRegistry: undefined as never,
-    // Chat sandboxes hold a minimal, re-derivable workspace, so a dead
-    // lease may be safely replaced (OpenSwe's "allow_replacement" for
-    // disposable sandboxes). Background/worker runs use the safer
-    // default (raise on unreachable instead of replacing).
-    sandboxManager: new SandboxManager({ allowReplacement: true }),
   });
 
   const sessionId = `sess_${randomUUID()}`;
@@ -158,11 +153,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // `/api/sessions/{id}/stream` for live events and the final reply.
   // We do NOT await — the POST returns immediately with the session id.
   //
-  // For sandbox runtimes, use a minimal empty cwd so the runtime's
-  // workspace roundtrip doesn't upload the whole (multi-GB) repo — a
-  // chat turn doesn't need the codebase in the sandbox.
-  const sandboxCwd =
-    runtime.kind === "sandbox" ? mkdtempSync(join(tmpdir(), "aaspai-chat-ws-")) : root;
+  const sandboxCwd = root;
   void (async () => {
     try {
       await sessions.execute({
@@ -197,13 +188,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       // Best-effort: stop the file sources so chokidar releases handles.
       await agentSource.stop().catch(() => undefined);
       await knowledgeSource.stop().catch(() => undefined);
-      if (sandboxCwd !== root) {
-        try {
-          rmSync(sandboxCwd, { recursive: true, force: true });
-        } catch {
-          /* best-effort */
-        }
-      }
     }
   })();
 

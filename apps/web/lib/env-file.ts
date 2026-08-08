@@ -54,7 +54,7 @@ function quote(value: string): string {
  * ordering are lost (simplest safe transform for a secrets file).
  */
 export function serializeEnvFile(entries: EnvEntry[]): string {
-  return entries.map((e) => `${e.key}=${quote(e.value)}`).join("\n") + "\n";
+  return `${entries.map((e) => `${e.key}=${quote(e.value)}`).join("\n")}\n`;
 }
 
 export async function readEnvFile(): Promise<EnvEntry[]> {

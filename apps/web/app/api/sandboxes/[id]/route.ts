@@ -15,6 +15,13 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
     return NextResponse.json({ error: "no aaspai workspace" }, { status: 404 });
   }
   const sandboxId = decodeURIComponent((await params).id);
-  await destroySandbox(sandboxId);
-  return NextResponse.json({ sandboxId, status: "deleted" });
+  try {
+    await destroySandbox(sandboxId);
+    return NextResponse.json({ sandboxId, status: "deleted" });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 409 },
+    );
+  }
 }
