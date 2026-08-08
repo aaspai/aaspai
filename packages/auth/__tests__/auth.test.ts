@@ -1,10 +1,6 @@
 import type { AuthPrincipal } from "@aaspai/contracts";
 import { describe, expect, it } from "vitest";
-import {
-  AuthVerificationError,
-  InMemoryAuthVerifier,
-  safeAuthMessage,
-} from "../src";
+import { AuthVerificationError, InMemoryAuthVerifier, safeAuthMessage } from "../src";
 
 const sessionPrincipal: AuthPrincipal = {
   protocolVersion: 1,
