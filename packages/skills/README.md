@@ -93,13 +93,13 @@ const { catalog, manifest, errors } = await SkillCatalog.load("/path/to/skills")
 const reg = new SkillRegistry();
 await catalog.registerAllInto(reg, { fetchGithub: true });
 
-// 2. Materialize the resolved skills to an adapter's runtime dir
-const resolved = reg.list().filter((s) => s.adapterTypes.includes("opencode_cli"));
+// 2. Materialize the resolved skills inside the caller-owned run workspace
+const resolved = reg.list().filter((s) => s.adapterTypes.includes("opencode_local"));
 await reg.materialize(resolved, {
-  adapterType: "opencode_cli",
+  adapterType: "opencode_local",
   runtimeBaseDir: process.cwd(),
-  sharedHome: true,        // write to ~/.claude/skills (the opencode CLI default)
-  symlink: true,           // symlink target → cache under .aaspai/skills/<key>/
+  sharedHome: false,
+  symlink: false,
   verifySha256: true,      // check every file's sha256 before writing
 });
 ```

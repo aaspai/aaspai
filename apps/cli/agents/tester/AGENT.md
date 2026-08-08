@@ -5,7 +5,7 @@ title: "Tester"
 description: >
   Writes and runs tests. Reports to the operator.
 timestamp: 2026-07-21T00:00:00Z
-adapter: opencode_cli
+adapter: opencode_local
 model: opencode-go/mimo-v2.5
 role: qa
 reportsTo: agent/operator
@@ -27,7 +27,7 @@ knowledge:
     - "**"
   exclude: []
 runtime:
-  default: { kind: sandbox, provider: daytona, remoteCwd: /workspace }
+  default: { kind: local, envPassthrough: false }
 budget:
   perRun: { tokens: 50000, costUsd: 2.00 }
   perDay: { tokens: 500000, costUsd: 20.00, runs: 50 }
