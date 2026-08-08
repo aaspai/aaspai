@@ -52,7 +52,6 @@ __metadata:
   resolution: "@aaspai/auth@workspace:packages/auth"
   dependencies:
     "@aaspai/contracts": "workspace:*"
-    "@aaspai/observability": "workspace:*"
     "@aaspai/testing": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     rimraf: "npm:^6.1.3"
@@ -134,6 +133,18 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@aaspai/crypto@workspace:*, @aaspai/crypto@workspace:packages/crypto":
+  version: 0.0.0-use.local
+  resolution: "@aaspai/crypto@workspace:packages/crypto"
+  dependencies:
+    "@biomejs/biome": "npm:^2.1.1"
+    "@types/node": "npm:^24.0.0"
+    rimraf: "npm:^6.1.3"
+    typescript: "npm:^5.8.3"
+    vitest: "npm:4.1.9"
+  languageName: unknown
+  linkType: soft
+
 "@aaspai/db@workspace:*, @aaspai/db@workspace:packages/db":
   version: 0.0.0-use.local
   resolution: "@aaspai/db@workspace:packages/db"
@@ -182,6 +193,7 @@ __metadata:
   resolution: "@aaspai/file-loader@workspace:packages/file-loader"
   dependencies:
     "@aaspai/contracts": "workspace:*"
+    "@aaspai/crypto": "workspace:*"
     "@aaspai/git": "workspace:*"
     "@aaspai/observability": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
@@ -236,6 +248,7 @@ __metadata:
   resolution: "@aaspai/identity@workspace:packages/identity"
   dependencies:
     "@aaspai/contracts": "workspace:*"
+    "@aaspai/crypto": "workspace:*"
     "@biomejs/biome": "npm:^2.1.1"
     "@types/node": "npm:^24.0.0"
     rimraf: "npm:^6.1.3"
