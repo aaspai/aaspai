@@ -61,7 +61,7 @@ export function sessionCommand(): Command {
     .description("Start a one-off session")
     .option("--agent <id>", "agent to use", "agent/operator")
     .option("--prompt <text>", "the prompt", "hello from aaspai")
-    .option("--adapter <type>", "override adapter", "claude_local")
+    .option("--adapter <type>", "override adapter", "opencode_local")
     .option("--runtime <type>", "override runtime", "local")
     .option("--skill <key>", "workspace skill to include; repeatable", collect, [])
     .action(async (opts) => {

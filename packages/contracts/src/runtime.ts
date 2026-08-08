@@ -8,12 +8,12 @@ import {
 } from "./primitives";
 
 /**
- * Version of the runtime (execution target) contract.
+ * Current version of the runtime contract used by persisted target metadata.
  *
  * Bump when ExecutionTarget, SandboxSpec, or the runtime-side
  * callbacks change in a way that is not backward compatible.
  */
-export const RUNTIME_PROTOCOL_VERSION = 1 as const;
+export const RUNTIME_PROTOCOL_VERSION = 2 as const;
 
 /** All execution target kinds known to the foundation. */
 export const EXECUTION_TARGET_KIND_VALUES = ["local", "docker", "ssh", "sandbox"] as const;

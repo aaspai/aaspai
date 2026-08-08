@@ -111,7 +111,6 @@ import {
   startCompanyActionBroker,
 } from "./company-action-broker.js";
 import {
-  CODEX_COMPANY_ACTION_CLIENT_SOURCE,
   COMPANY_ACTION_TOOL_SOURCE,
   type CompanyAction,
   companyActions,
@@ -422,9 +421,8 @@ function retryPrompt(prompt: string | undefined, failure: string | undefined): s
 }
 
 function companyActionRunInstruction(adapter: string): string {
-  return adapter === "codex_local"
-    ? "Company mutations are live in this session. Submit exactly one action per request by passing JSON through stdin to `node .aaspai/company_action.mjs` (never put JSON in a quoted command argument); use the returned durable IDs in later work. Use the AASPAI_COMPANY_ACTIONS final-line format only if that command is unavailable."
-    : "The company_action tool applies exactly one change per call. Use the durable IDs returned by the tool in later work; do not merely describe the action.";
+  void adapter;
+  return "The company_action tool applies exactly one change per call. Use the durable IDs returned by the tool in later work; do not merely describe the action.";
 }
 
 const ARTIFACT_KINDS = new Set([
@@ -512,7 +510,7 @@ async function listWorkspaceFiles(
     if (
       directory === root &&
       entry.isDirectory() &&
-      [".codex", ".opencode_cli"].includes(entry.name)
+      [".opencode", ".aaspai"].includes(entry.name)
     ) {
       continue;
     }
@@ -1147,7 +1145,7 @@ export class WorkerDaemon {
     };
     const agentId = wakeupRow.agentId ?? request.agentId;
     if (!agentId) throw new Error("wakeup has no agentId");
-    const adapter = request.adapter ?? "dry_run_local";
+    const adapter = request.adapter ?? "opencode_local";
     const runtime =
       request.runtime === undefined ? undefined : executionTargetSchema.parse(request.runtime);
     const prompt =
@@ -1444,7 +1442,7 @@ export class WorkerDaemon {
           organizationId: this.organizationId,
           wakeupId,
           agentId,
-          adapter: request.adapter ?? "dry_run_local",
+          adapter: request.adapter ?? "opencode_local",
           runtimeJson: JSON.stringify(request.runtime ?? {}),
           prompt: retryPayload.prompt ?? `Retry ${request.workItemId}`,
           configJson: "{}",
@@ -1647,7 +1645,7 @@ export class WorkerDaemon {
 
   private async executeWorkItems(workflowRunId: string, agentId: string): Promise<void> {
     const agent = await this.agentSource.get(agentId).catch(() => null);
-    const adapter = agent?.adapter ?? "dry_run_local";
+    const adapter = agent?.adapter ?? "opencode_local";
     const run = await this.executionStore.getWorkflowRun(workflowRunId);
     if (!run) throw new Error(`Workflow run ${workflowRunId} not found`);
     await this.executionScheduler.run(
@@ -2466,28 +2464,26 @@ export class WorkerDaemon {
       if (
         mayManageCompany &&
         runtimeTarget.kind === "local" &&
-        (input.adapter === "opencode_cli" || input.adapter === "codex_local")
+        input.adapter === "opencode_local"
       ) {
         companyActionBroker = await startCompanyActionBroker({
           organizationId: this.organizationId,
           attemptId: input.attempt.id,
           agentId: input.agentId,
-          requiredProviderSessionId: input.adapter === "opencode_cli" ? resumeSessionId : undefined,
+          requiredProviderSessionId: resumeSessionId,
           apply: async (actions) => {
             if (resumeSessionId) {
               const currentAttempt = await this.executionStore.getAttempt(input.attempt.id);
               let currentSession = currentAttempt?.harnessSessionId
                 ? await this.executionStore.getHarnessSession(currentAttempt.harnessSessionId)
                 : null;
-              if (input.adapter === "opencode_cli" || input.adapter === "codex_local") {
-                // ponytail: local 1s observation gate; replace polling with an identity signal
-                // if harness session persistence ever moves off-process.
-                for (let retry = 0; !currentSession?.sessionId && retry < 40; retry++) {
-                  await new Promise((resolve) => setTimeout(resolve, 25));
-                  currentSession = currentAttempt?.harnessSessionId
-                    ? await this.executionStore.getHarnessSession(currentAttempt.harnessSessionId)
-                    : null;
-                }
+              // Local server runs publish their native session identity before
+              // a company action is accepted.
+              for (let retry = 0; !currentSession?.sessionId && retry < 40; retry++) {
+                await new Promise((resolve) => setTimeout(resolve, 25));
+                currentSession = currentAttempt?.harnessSessionId
+                  ? await this.executionStore.getHarnessSession(currentAttempt.harnessSessionId)
+                  : null;
               }
               if (currentSession?.sessionId !== resumeSessionId) {
                 throw new Error(
@@ -2521,7 +2517,7 @@ export class WorkerDaemon {
         });
       }
       const mayUseBrowser =
-        input.adapter === "opencode_cli" &&
+        input.adapter === "opencode_local" &&
         profile.tools.some(
           (decision) =>
             decision.name.toLowerCase() === "browser_snapshot" &&
@@ -2530,41 +2526,25 @@ export class WorkerDaemon {
         );
       const adapterConfig = {
         ...profile.inputs.adapterConfig,
-        ...(input.adapter === "opencode_cli" &&
+        ...(input.adapter === "opencode_local" &&
         profile.skills.length > 0 &&
         !Array.isArray(profile.inputs.adapterConfig.skillsPaths)
-          ? { skillsPaths: [".opencode_cli/skills"] }
-          : {}),
-        ...(input.adapter === "opencode_cli" && (mayManageCompany || mayUseBrowser)
-          ? { xdgConfigHome: ".opencode_cli" }
+          ? { skillsPaths: [".aaspai/opencode-tools/skills"] }
           : {}),
       };
-      if (input.adapter === "opencode_cli" && mayManageCompany) {
+      if (input.adapter === "opencode_local" && mayManageCompany) {
         const companyActionTool = join(
           workspacePath,
-          ".opencode_cli",
-          "opencode",
-          "tools",
+          ".aaspai",
+          "opencode-tools",
           "company_action.ts",
         );
         await mkdir(dirname(companyActionTool), { recursive: true });
         await writeFile(companyActionTool, COMPANY_ACTION_TOOL_SOURCE, "utf8");
         materializedPaths.push(companyActionTool);
       }
-      if (input.adapter === "codex_local" && companyActionBroker) {
-        const companyActionClient = join(workspacePath, ".aaspai", "company_action.mjs");
-        await mkdir(dirname(companyActionClient), { recursive: true });
-        await writeFile(companyActionClient, CODEX_COMPANY_ACTION_CLIENT_SOURCE, "utf8");
-        materializedPaths.push(companyActionClient);
-      }
       if (mayUseBrowser) {
-        const browserTool = join(
-          workspacePath,
-          ".opencode_cli",
-          "opencode",
-          "tools",
-          "browser_snapshot.ts",
-        );
+        const browserTool = join(workspacePath, ".aaspai", "opencode-tools", "browser_snapshot.ts");
         await mkdir(dirname(browserTool), { recursive: true });
         await writeFile(browserTool, BROWSER_SNAPSHOT_TOOL_SOURCE, "utf8");
         materializedPaths.push(browserTool);

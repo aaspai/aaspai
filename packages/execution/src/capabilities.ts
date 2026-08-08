@@ -2,7 +2,6 @@ import type { ExecutionPlan } from "@aaspai/contracts/execution";
 import { adapterTypeSchema } from "@aaspai/contracts/harness";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import { getAdapterCapabilities } from "@aaspai/harness";
-import { getRuntimeTargetCapabilities, resolveTarget } from "@aaspai/runtime";
 
 export class ProviderCapabilityError extends Error {
   readonly code = "provider_capability_unsupported" as const;
@@ -18,7 +17,11 @@ export class ProviderCapabilityError extends Error {
 export function assertHarnessExecutable(harness: string): void {
   const parsed = adapterTypeSchema.safeParse(harness);
   if (!parsed.success) throw new ProviderCapabilityError(harness, "execute");
-  if (!getAdapterCapabilities(parsed.data).execute) {
+  try {
+    if (!getAdapterCapabilities(parsed.data).execute) {
+      throw new ProviderCapabilityError(harness, "execute");
+    }
+  } catch {
     throw new ProviderCapabilityError(harness, "execute");
   }
 }
@@ -27,34 +30,18 @@ export function assertExecutionPlanCapabilities(
   plan: Pick<ExecutionPlan, "harness" | "target">,
 ): void {
   assertHarnessExecutable(plan.harness);
-  if (!getRuntimeTargetCapabilities(plan.target).execute) {
-    throw new ProviderCapabilityError(
-      plan.target.kind === "sandbox"
-        ? `${plan.target.kind}:${plan.target.provider}`
-        : plan.target.kind,
-      "execute",
-    );
-  }
+  assertRuntimeExecutable(plan.target);
 }
 
 export function assertRuntimeExecutable(target: ExecutionTarget): void {
-  if (!getRuntimeTargetCapabilities(target).execute) {
+  if (target.kind !== "local") {
     throw new ProviderCapabilityError(
       target.kind === "sandbox" ? `${target.kind}:${target.provider}` : target.kind,
-      "execute",
+      "Runtime V2 execution boundary",
     );
   }
 }
 
 export async function assertRuntimeReady(target: ExecutionTarget): Promise<void> {
   assertRuntimeExecutable(target);
-  const readiness = resolveTarget(target).readiness;
-  if (!readiness) return;
-  const result = await readiness(target);
-  if (!result.ready) {
-    throw new ProviderCapabilityError(
-      target.kind === "sandbox" ? `${target.kind}:${target.provider}` : target.kind,
-      result.reason ? `ready (${result.reason})` : "ready",
-    );
-  }
 }

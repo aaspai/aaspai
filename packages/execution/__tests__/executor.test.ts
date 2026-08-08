@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
 import { createDb, runMigrations } from "@aaspai/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AutonomousWorkExecutor } from "../src/executor";
@@ -176,7 +177,7 @@ describe("AutonomousWorkExecutor heartbeat", () => {
     await store.completeHarnessSession(
       staleSession.id,
       {
-        protocolVersion: 1,
+        protocolVersion: HARNESS_PROTOCOL_VERSION,
         sessionId: "provider_before_crash",
         exitCode: 1,
         timedOut: false,

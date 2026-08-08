@@ -4,51 +4,36 @@ import type {
   ProviderCapabilities,
   ServerAdapterModule,
 } from "@aaspai/contracts";
-import { claudeLocal } from "./drivers/claude-local/index.js";
-import { codexLocal } from "./drivers/codex-local/index.js";
-import { cursorCloud } from "./drivers/cursor-cloud/index.js";
-import { cursorLocal } from "./drivers/cursor-local/index.js";
-import { dryRunLocal } from "./drivers/dry-run-local/index.js";
-import { geminiLocal } from "./drivers/gemini-local/index.js";
-import { grokLocal } from "./drivers/grok-local/index.js";
-import { hermes, hermesLocal } from "./drivers/hermes/index.js";
-import { hermesGateway } from "./drivers/hermes-gateway/index.js";
-import { openclawGateway } from "./drivers/openclaw-gateway/index.js";
-import { opencodeCli } from "./drivers/opencode-cli/index.js";
-import { piLocal } from "./drivers/pi-local/index.js";
+import { opencodeServer } from "@aaspai/opencode";
 
 /**
- * The full adapter registry. Maps every known `AdapterType` to its
- * `ServerAdapterModule`. Adding a new adapter:
- * 1. Create `src/drivers/<name>/{config,parse,execute,format,index}.ts`
- * 2. Add the module import + entry below
- * 3. Add the new type to `ADAPTER_TYPE_VALUES` in
- *    `packages/contracts/src/harness.ts`
- * 4. Bump `HARNESS_PROTOCOL_VERSION` if the change is breaking
+ * Production harness discovery.
+ *
+ * The foundation deliberately has one native adapter today: OpenCode's
+ * authenticated server driver. CLI/ACP adapters from the migration period are
+ * not registered here, so a caller cannot accidentally select an unverified
+ * transport through the production registry.
  */
-const ADAPTERS: Readonly<Record<AdapterType, ServerAdapterModule>> = Object.freeze({
-  claude_local: claudeLocal,
-  codex_local: codexLocal,
-  cursor_local: cursorLocal,
-  cursor_cloud: cursorCloud,
-  gemini_local: geminiLocal,
-  grok_local: grokLocal,
-  pi_local: piLocal,
-  hermes_local: hermesLocal,
-  hermes,
-  openclaw_gateway: openclawGateway,
-  hermes_gateway: hermesGateway,
-  dry_run_local: dryRunLocal,
-  opencode_cli: opencodeCli,
-  opencode_local: {
-    ...opencodeCli,
-    info: { ...opencodeCli.info, type: "opencode_local" },
-  },
+const PRODUCTION_ADAPTERS: Readonly<Record<"opencode_local", ServerAdapterModule>> = Object.freeze({
+  opencode_local: opencodeServer,
 });
 
+export const PRODUCTION_ADAPTER_TYPES = ["opencode_local"] as const;
+export const ADAPTER_REGISTRY_VERSION = 2 as const;
+
+export function listProductionAdapters(): AdapterInfo[] {
+  return PRODUCTION_ADAPTER_TYPES.map((type) => adapterInfo(type));
+}
+
+export function getProductionAdapter(type: (typeof PRODUCTION_ADAPTER_TYPES)[number]) {
+  return PRODUCTION_ADAPTERS[type];
+}
+
+/** Capability metadata is derived from the adapter manifest, never guessed. */
 export function capabilitiesFor(module: ServerAdapterModule): ProviderCapabilities {
-  const info = module.info;
-  if (info.status !== "ready") {
+  const supports = module.describe?.();
+  const description = supports && !(supports instanceof Promise) ? supports : undefined;
+  if (module.info.status !== "ready") {
     return {
       execute: false,
       streaming: false,
@@ -58,47 +43,47 @@ export function capabilitiesFor(module: ServerAdapterModule): ProviderCapabiliti
       restore: false,
       resume: false,
       artifacts: false,
-      billing: "unknown",
     };
   }
-  const description = module.describe?.();
-  const supports = description && !(description instanceof Promise) ? description : undefined;
-  const billing =
-    info.type === "dry_run_local" ? "free" : info.type === "claude_local" ? "subscription" : "api";
   return {
     execute: true,
-    streaming: info.transport !== "cloud_sdk",
-    cancellation: supports?.supportsCancel ?? false,
-    timeout: info.transport === "local_subprocess" && info.type !== "dry_run_local",
+    streaming: module.info.transport === "local_subprocess",
+    cancellation: description?.supportsCancel ?? false,
+    timeout: module.info.transport === "local_subprocess",
     workspaceIsolation: false,
     restore: false,
-    resume: supports?.supportsResume ?? false,
+    resume: description?.supportsResume ?? false,
     artifacts: false,
-    billing,
   };
 }
 
+/**
+ * Migration callers may still ask for the generic lookup function, but only a
+ * production adapter can resolve. Unknown and legacy adapter names fail closed.
+ */
+export function getAdapter(type: AdapterType): ServerAdapterModule {
+  const adapter = PRODUCTION_ADAPTERS[type as keyof typeof PRODUCTION_ADAPTERS];
+  if (!adapter) throw new Error(`Adapter is not enabled for production: ${String(type)}`);
+  return adapter;
+}
+
 export function listAdapters(): AdapterInfo[] {
-  return Object.values(ADAPTERS).map((m) => ({
-    ...m.info,
-    capabilities: capabilitiesFor(m),
-  }));
+  return listProductionAdapters();
 }
 
 export function getAdapterCapabilities(type: AdapterType): ProviderCapabilities {
   return capabilitiesFor(getAdapter(type));
 }
 
-export function getAdapter(type: AdapterType): ServerAdapterModule {
-  const adapter = ADAPTERS[type];
-  if (!adapter) {
-    throw new Error(`Unknown adapter type: ${String(type)}`);
-  }
-  return adapter;
-}
-
 export function isAdapterReady(type: AdapterType): boolean {
-  return getAdapter(type).info.status === "ready";
+  try {
+    return getAdapter(type).info.status === "ready";
+  } catch {
+    return false;
+  }
 }
 
-export const ADAPTER_REGISTRY_VERSION = 1 as const;
+function adapterInfo(type: (typeof PRODUCTION_ADAPTER_TYPES)[number]): AdapterInfo {
+  const adapter = PRODUCTION_ADAPTERS[type];
+  return { ...adapter.info, capabilities: capabilitiesFor(adapter) };
+}

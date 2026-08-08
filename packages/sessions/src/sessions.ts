@@ -10,7 +10,12 @@
  * wires this to the DB-backed session store.
  */
 import { randomUUID } from "node:crypto";
-import type { TranscriptEntry } from "@aaspai/contracts/harness";
+import {
+  type AdapterExecutionContext,
+  HARNESS_PROTOCOL_VERSION,
+  type HarnessEvent,
+  type TranscriptEntry,
+} from "@aaspai/contracts/harness";
 import type { Skill } from "@aaspai/contracts/phase2";
 import {
   type AgentConfigSource,
@@ -23,7 +28,11 @@ import {
   sessionResultSchema,
 } from "@aaspai/contracts/phase2";
 import type { JsonObject } from "@aaspai/contracts/primitives";
-import { type ExecutionTarget, executionTargetSchema } from "@aaspai/contracts/runtime";
+import {
+  executionTargetSchema,
+  type RunProcessOptions,
+  type RunProcessResult,
+} from "@aaspai/contracts/runtime";
 import {
   getDefaultDb,
   type SessionEventInsert,
@@ -34,10 +43,26 @@ import {
 import { type AdapterType, getAdapter } from "@aaspai/harness";
 import { KnowledgeLoader } from "@aaspai/knowledge";
 import { getLogger } from "@aaspai/observability";
+import {
+  createLocalProviderFromConfig,
+  type LocalProviderConfig,
+  RuntimeController,
+  type RuntimeLease,
+} from "@aaspai/runtime";
 import type { SkillRegistry } from "@aaspai/skills";
 import { emitNativeLine, emitSessionProjection } from "@aaspai/telemetry";
 
 const log = getLogger("sessions");
+
+/**
+ * Module-level pending-answer registry, keyed by session id. The
+ * adapter's `onQuestion` handler parks a promise here; the answer
+ * endpoint calls `Sessions.resume(id, answer)` (from a *different*
+ * Sessions instance / HTTP request) which resolves it so the adapter
+ * can continue. Lives at module scope so it survives across
+ * instances — exactly like the DB.
+ */
+const pendingAnswers = new Map<string, (answer: string | undefined) => void>();
 
 export function agentAdapterConfig(agent: {
   model?: string;
@@ -53,6 +78,8 @@ export interface SessionsOptions {
   agentSource: AgentConfigSource;
   knowledgeSource: KnowledgeSource;
   skillRegistry: SkillRegistry;
+  /** A runtime boundary acquired by the execution layer. */
+  runtimeExecution?: AdapterExecutionContext["execution"];
 }
 
 export class Sessions {
@@ -102,12 +129,13 @@ export class Sessions {
     const adapterConfig = agentAdapterConfig(agent);
     const executionConfig = { ...adapterConfig, ...(req.config ?? {}) };
     const parsedTarget = executionTargetSchema.safeParse(req.runtime);
-    const runtimeTarget = parsedTarget.success
-      ? (await import("@aaspai/runtime")).resolveTarget(parsedTarget.data)
-      : undefined;
-    if (runtimeTarget?.readiness && parsedTarget.success) {
-      const ready = await runtimeTarget.readiness(parsedTarget.data);
-      if (!ready.ready) throw new Error(ready.reason ?? "Execution runtime is not ready");
+    if (!parsedTarget.success) {
+      throw new Error("Invalid execution target");
+    }
+    if (parsedTarget.data.kind !== "local") {
+      throw new Error(
+        "Sessions no longer provisions remote runtimes; acquire a Runtime V2 lease in execution and pass runtimeExecution",
+      );
     }
 
     // 2. Load knowledge (resolved against the agent's include/exclude)
@@ -115,12 +143,11 @@ export class Sessions {
 
     // 3. Resolve + materialize skills.
     //   - Look up each `req.skills[]` entry in the registry.
-    //   - Build the prompt-inlined "## Skill: <name>" block (used by
-    //     adapters that don't read SKILL.md from disk, e.g. dry-run).
-    //   - Materialize the same skills to the adapter's runtime dir
-    //     so the opencode CLI / claude CLI can discover them as
-    //     files. For the opencode CLI we use the shared
-    //     `~/.claude/skills` home (the opencode CLI's default).
+    //   - Build the prompt-inlined "## Skill: <name>" block for the
+    //     native adapter context.
+    //   - Materialize caller-owned skills under the session workspace. The
+    //     production OpenCode server receives prepared configuration; it
+    //     never owns global auth or skill state.
     const skillInstructions: string[] = [];
     const resolvedSkills: Skill[] = [];
     for (const ref of req.skills) {
@@ -136,8 +163,8 @@ export class Sessions {
       const materialization = await this.opts.skillRegistry.materialize(resolvedSkills, {
         adapterType: req.adapter,
         runtimeBaseDir: req.cwd ?? process.cwd(),
-        sharedHome: req.adapter === "opencode_cli" || req.adapter === "claude_local",
-        symlink: req.adapter === "opencode_cli",
+        sharedHome: false,
+        symlink: false,
         verifySha256: true,
       });
       if (materialization.errors.length > 0) {
@@ -204,7 +231,7 @@ export class Sessions {
     const recordEvent = async (
       stream: "stdout" | "stderr",
       payload: JsonObject,
-      kind: TranscriptEntry["kind"],
+      kind: TranscriptEntry["kind"] | "question" | "user" | "compaction" | "snapshot",
     ) => {
       seq += 1;
       const eventInsert: SessionEventInsert = {
@@ -237,8 +264,8 @@ export class Sessions {
       });
     };
 
-    // 5a. Build the full prompt — the dry-run adapter reads the system
-    // prompt from context, real adapters just see a bigger prompt.
+    // 5a. Build the full prompt. The native adapter receives the system
+    // instructions and user prompt as one explicit request context.
     const knowledgeBlock = knowledge.context ? `\n\n---\n\n${knowledge.context}\n` : "";
     const systemBlock =
       agent.systemPrompt.trim().length > 0 ? `${agent.systemPrompt.trim()}\n\n---\n\n` : "";
@@ -258,6 +285,64 @@ export class Sessions {
 
     let result: SessionResult | undefined;
     const startedAtMs = Date.now();
+    const cwd = req.cwd ?? process.cwd();
+    // The harness contract requires an `execution` boundary on every
+    // The execution layer may provide a leased Runtime V2 boundary. For
+    // direct local sessions, create a short-lived Local provider lease; this
+    // keeps the adapter from ever spawning a process on its own.
+    let execution = this.opts.runtimeExecution;
+    let localRuntime: RuntimeController<LocalProviderConfig> | undefined;
+    let localLease: RuntimeLease | undefined;
+    if (!execution) {
+      const provider = await createLocalProviderFromConfig({ root: cwd });
+      const runtime = new RuntimeController({ provider });
+      const lease = await runtime.acquire({ root: cwd }, { localPath: cwd });
+      localRuntime = runtime;
+      localLease = lease;
+      await runtime.realize({ root: cwd }, lease, { localPath: cwd });
+      const start = async (options: RunProcessOptions) => {
+        const handle = await runtime.start(
+          { root: cwd },
+          lease,
+          {
+            command: options.command,
+            args: [...(options.args ?? [])],
+            cwd: options.cwd ?? cwd,
+            env: options.env,
+            inheritEnv: options.inheritEnv,
+            stdin: options.stdin,
+            timeoutMs: options.timeoutMs,
+            graceMs: options.graceMs,
+          },
+          {
+            onStdout: async (chunk) =>
+              await options.onLog?.("stdout", new TextDecoder().decode(chunk)),
+            onStderr: async (chunk) =>
+              await options.onLog?.("stderr", new TextDecoder().decode(chunk)),
+          },
+        );
+        if (options.signal?.aborted) await handle.cancel("cancelled");
+        else
+          options.signal?.addEventListener("abort", () => void handle.cancel("cancelled"), {
+            once: true,
+          });
+        await options.onSpawn?.({ pid: handle.identity.pid ?? 0 });
+        return handle;
+      };
+      execution = {
+        identity: { kind: "local", cwd },
+        run: async (options) => toExecutionResult(await (await start(options)).wait(), cwd),
+        start: async (options) => {
+          const handle = await start(options);
+          return {
+            wait: async () => toExecutionResult(await handle.wait(), cwd),
+            cancel: async (reason?: string) => handle.cancel(reason),
+          };
+        },
+        exposeEndpoint: async ({ port, protocol }) =>
+          runtime.exposeEndpoint({ root: cwd }, lease, port, protocol),
+      };
+    }
     // Tier 4: retry policy for `transient_upstream` errors. Default:
     // 0 retries (caller opts in via `req.config.retry.transientMaxAttempts`).
     const retryConfig = (req.config?.retry as
@@ -273,7 +358,7 @@ export class Sessions {
         shouldRetryFromCatch = false; // reset for the next attempt
         attempt += 1;
         adapterResult = await adapter.execute({
-          protocolVersion: 1 as const,
+          protocolVersion: HARNESS_PROTOCOL_VERSION,
           runId: sessionId,
           organizationId: req.organizationId,
           agent: {
@@ -295,30 +380,7 @@ export class Sessions {
             prompt: fullPrompt,
             role: agent.role,
           },
-          ...(runtimeTarget && parsedTarget.success
-            ? {
-                execution: {
-                  identity: {
-                    kind: parsedTarget.data.kind,
-                    cwd:
-                      parsedTarget.data.kind === "ssh"
-                        ? parsedTarget.data.remoteCwd
-                        : (req.cwd ?? process.cwd()),
-                  },
-                  run: (options: Parameters<NonNullable<typeof runtimeTarget.run>>[1]) =>
-                    runtimeTarget.run(
-                      {
-                        ...parsedTarget.data,
-                        ...(parsedTarget.data.kind === "local" ||
-                        parsedTarget.data.kind === "docker"
-                          ? { cwd: req.cwd ?? process.cwd() }
-                          : {}),
-                      } as ExecutionTarget,
-                      { ...options, cwd: req.cwd ?? process.cwd() },
-                    ),
-                },
-              }
-            : {}),
+          execution,
           signal: controller.signal,
           onLog: async (stream, chunk) => {
             for (const line of chunk.split(/\r?\n/)) {
@@ -350,6 +412,11 @@ export class Sessions {
               await recordEvent(stream, { text: line }, stream === "stderr" ? "stderr" : "stdout");
             }
           },
+          onEvent: async (event) => {
+            for (const entry of sessionEventsForHarnessEvent(event)) {
+              await recordEvent(entry.stream, entry.payload, entry.kind);
+            }
+          },
           onMeta: async (meta) => {
             log.debug("adapter meta", { sessionId, meta });
           },
@@ -359,20 +426,17 @@ export class Sessions {
           onSpawn: async (meta) => {
             log.info("session spawned", { sessionId, pid: meta.pid });
           },
+          onQuestion: async (question) => {
+            // Interactive channel: record the question, flip the
+            // session to paused_for_question, and park a promise that
+            // the answer endpoint resolves via resume().
+            await recordEvent("stdout", question as JsonObject, "question");
+            await this.pause(sessionId, question.prompt, question.options);
+            return new Promise<string | undefined>((resolve) => {
+              pendingAnswers.set(sessionId, resolve);
+            });
+          },
         });
-        if (runtimeTarget && parsedTarget.success) {
-          adapterResult = {
-            ...adapterResult,
-            runtimeIdentity: {
-              kind: parsedTarget.data.kind,
-              cwd:
-                parsedTarget.data.kind === "ssh"
-                  ? parsedTarget.data.remoteCwd
-                  : (req.cwd ?? process.cwd()),
-            },
-          };
-        }
-
         const finishedAt = new Date().toISOString();
         const durationMs = Date.now() - startedAtMs;
         let status: SessionStatus = controller.signal.aborted
@@ -384,9 +448,9 @@ export class Sessions {
               : "failed";
         if (sessionEventPersistenceError) status = "failed";
 
-        // Reclassify the errorFamily on the success path too. The
-        // opencode-cli adapter (and any other non-throwing adapter)
-        // returns `errorFamily: "internal"` for every non-zero exit
+        // Reclassify the errorFamily on the success path too. A
+        // non-throwing adapter can return `errorFamily: "internal"` for
+        // every non-zero exit
         // regardless of the underlying cause. We look at the
         // adapter's errorMessage + the result's errorCode and
         // upgrade "internal" → "auth" / "provider_quota" /
@@ -578,9 +642,27 @@ export class Sessions {
         didComplete = true;
         return result;
       }
+    } finally {
+      // Every direct local session owns a short-lived lease. Release it here
+      // even when the adapter throws or the caller returns early. A caller
+      // supplied boundary remains owned by the execution layer.
+      this.runningSessions.delete(sessionId);
+      const pending = pendingAnswers.get(sessionId);
+      if (pending) {
+        pendingAnswers.delete(sessionId);
+        pending(undefined);
+      }
+      if (localRuntime && localLease) {
+        try {
+          await localRuntime.release({ root: cwd }, localLease, "destroy");
+        } catch (error) {
+          log.warn("failed to release direct local runtime lease", {
+            sessionId,
+            error: String(error),
+          });
+        }
+      }
     }
-    // Tier 4: unregister from runningSessions on completion.
-    this.runningSessions.delete(sessionId);
     if (!result) throw new Error(`session ${sessionId} completed without a result`);
     return result;
   }
@@ -603,28 +685,47 @@ export class Sessions {
     return rows.map(rowToState);
   }
 
-  async pause(id: string, reason: string): Promise<void> {
+  async pause(id: string, reason: string, options?: readonly string[]): Promise<void> {
     const db = getDefaultDb();
     await db.db
       .update(sessionsTable)
       .set({
         status: "paused_for_question",
         pendingQuestionJson: JSON.stringify({
-          pausedReason: reason,
-          askedAt: new Date().toISOString(),
           prompt: reason,
+          ...(options && options.length > 0 ? { options } : {}),
+          askedAt: new Date().toISOString(),
         }),
       } as never)
       .where(eqId(sessionsTable.id, id));
     log.info("session paused", { id, reason });
   }
 
-  async resume(id: string, _answer?: string): Promise<SessionResult | null> {
+  async resume(id: string, answer?: string): Promise<SessionResult | null> {
     const db = getDefaultDb();
+    // Resolve the in-flight onQuestion promise (if any) so the parked
+    // adapter call continues with the user's answer.
+    const resolve = pendingAnswers.get(id);
+    if (resolve) {
+      pendingAnswers.delete(id);
+      resolve(answer);
+    }
+    // Record the answer as a user-kind session event so it shows in
+    // the transcript between the question and the resumption.
+    if (answer && answer.trim().length > 0) {
+      try {
+        await this.recordEvent(id, "user", { text: answer });
+      } catch (err) {
+        log.warn("failed to record answer event", { id, err: String(err) });
+      }
+    }
     await db.db
       .update(sessionsTable)
       .set({ status: "running", pendingQuestionJson: null } as never)
-      .where(eqId(sessionsTable.id, id));
+      // Only flip paused → running; if the run already reached a
+      // terminal status (succeeded/failed/timed_out) the completion
+      // update wins and we must not clobber it.
+      .where(and(eqId(sessionsTable.id, id), eq(sessionsTable.status, "paused_for_question")));
     log.info("session resumed", { id });
     return null;
   }
@@ -693,17 +794,26 @@ export class Sessions {
     summary?: string;
   }> {
     const live = this.runningSessions.get(sessionId);
-    const adapter = live?.adapter ?? getAdapter("opencode_cli" as AdapterType);
-    if (typeof adapter.compact !== "function") {
+    const adapter = live?.adapter ?? getAdapter("opencode_local" as AdapterType);
+    let result: {
+      compacted: boolean;
+      sessionId: string;
+      tokensBefore?: number;
+      tokensAfter?: number;
+      summary?: string;
+    };
+    if (typeof adapter.compact === "function") {
+      result = await adapter.compact({
+        sessionId,
+        force: opts.force ?? false,
+        tailTurns: opts.tailTurns,
+      });
+    } else {
       log.warn("adapter.compact not implemented", { sessionId, adapter: "unknown" });
-      return { compacted: false, sessionId, summary: "adapter.compact not implemented" };
+      result = { compacted: false, sessionId, summary: "adapter.compact not implemented" };
     }
-    const result = await adapter.compact({
-      sessionId,
-      force: opts.force ?? false,
-      tailTurns: opts.tailTurns,
-    });
-    // Record a session event for the audit trail.
+    // Record a session event for the audit trail — even when the
+    // adapter doesn't implement compact, the attempt is still audited.
     try {
       const db = getDefaultDb();
       const seq = (await this.getNextSeq(sessionId)) + 1;
@@ -773,7 +883,7 @@ export class Sessions {
   }
 }
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 function eqId<T>(col: T, val: string) {
   return eq(col as never, val as never);
@@ -892,4 +1002,160 @@ function classifyErrorFamily(
   // "I don't know" answer.
   if (adapterErrorFamily && adapterErrorFamily !== "internal") return adapterErrorFamily;
   return "internal";
+}
+
+type SessionHarnessEvent = {
+  stream: "stdout" | "stderr";
+  kind: TranscriptEntry["kind"];
+  payload: JsonObject;
+};
+
+/** Project typed Harness V2 events into the durable session transcript. */
+function sessionEventsForHarnessEvent(event: HarnessEvent): SessionHarnessEvent[] {
+  const native: JsonObject = event.nativeSessionId
+    ? { nativeSessionId: event.nativeSessionId }
+    : {};
+  switch (event.type) {
+    case "run.started":
+      return [
+        {
+          stream: "stdout",
+          kind: "init",
+          payload: {
+            ...native,
+            ...(event.model ? { model: event.model } : {}),
+            ...(event.sessionId ? { sessionId: event.sessionId } : {}),
+          },
+        },
+      ];
+    case "native.session":
+      return [
+        {
+          stream: "stdout",
+          kind: "init",
+          payload: { ...native, sessionId: event.nativeSessionId },
+        },
+      ];
+    case "assistant.delta":
+      return [{ stream: "stdout", kind: "assistant", payload: { ...native, text: event.text } }];
+    case "reasoning.delta":
+      return [{ stream: "stdout", kind: "thinking", payload: { ...native, text: event.text } }];
+    case "tool.started":
+      return [
+        {
+          stream: "stdout",
+          kind: "tool_call",
+          payload: {
+            ...native,
+            name: event.toolName,
+            status: "started",
+            ...(event.toolCallId ? { id: event.toolCallId } : {}),
+            ...(asJsonObject(event.input) ? { input: asJsonObject(event.input) } : {}),
+          },
+        },
+      ];
+    case "tool.completed":
+      return [
+        {
+          stream: "stdout",
+          kind: "tool_call",
+          payload: {
+            ...native,
+            name: event.toolName,
+            status: "completed",
+            ...(event.toolCallId ? { id: event.toolCallId } : {}),
+            ...(asJsonObject(event.input) ? { input: asJsonObject(event.input) } : {}),
+          },
+        },
+        {
+          stream: "stdout",
+          kind: "tool_result",
+          payload: {
+            ...native,
+            name: event.toolName,
+            ...(event.toolCallId ? { id: event.toolCallId } : {}),
+            ...(event.output !== undefined ? { output: stringifyEventValue(event.output) } : {}),
+          },
+        },
+      ];
+    case "tool.failed":
+      return [
+        {
+          stream: "stderr",
+          kind: "tool_result",
+          payload: {
+            ...native,
+            name: event.toolName,
+            isError: true,
+            ...(event.toolCallId ? { id: event.toolCallId } : {}),
+            ...(event.output !== undefined
+              ? { output: stringifyEventValue(event.output) }
+              : event.errorMessage
+                ? { output: event.errorMessage }
+                : {}),
+          },
+        },
+      ];
+    case "step.completed":
+      return [
+        {
+          stream: "stdout",
+          kind: "result",
+          payload: { ...native, stopReason: "step_completed" },
+        },
+      ];
+    case "run.completed":
+      return [
+        {
+          stream: "stdout",
+          kind: "result",
+          payload: { ...native, stopReason: event.status },
+        },
+      ];
+    case "error":
+      return [{ stream: "stderr", kind: "stderr", payload: { ...native, text: event.message } }];
+    case "warning":
+      return [{ stream: "stderr", kind: "system", payload: { ...native, text: event.message } }];
+    case "usage":
+    case "step.started":
+      return [];
+  }
+}
+
+function asJsonObject(value: unknown): JsonObject | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as JsonObject;
+  return undefined;
+}
+
+function stringifyEventValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function toExecutionResult(
+  result: import("@aaspai/runtime").RuntimeExecutionResult,
+  cwd = process.cwd(),
+): RunProcessResult {
+  const decode = (value: Uint8Array | undefined): string =>
+    value ? new TextDecoder().decode(value) : "";
+  return {
+    exitCode: result.exitCode,
+    ...(result.signal ? { signal: result.signal } : {}),
+    timedOut: result.status === "timed_out",
+    stdout: decode(result.stdoutTail),
+    stderr: decode(result.stderrTail),
+    startedAt: result.startedAt,
+    finishedAt: result.finishedAt,
+    durationMs: result.durationMs,
+    ...(result.identity.pid ? { pid: result.identity.pid } : {}),
+    runtimeIdentity: {
+      kind: "local",
+      cwd,
+      pid: result.identity.pid,
+    },
+  };
 }

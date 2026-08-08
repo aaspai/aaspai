@@ -1,8 +1,19 @@
-import { type AuthVerifier, authorizePrincipal } from "@aaspai/auth";
+import type { AuthVerifier } from "@aaspai/auth";
 import type { ApiScope, AuthPrincipal } from "@aaspai/contracts";
 import type { Context } from "hono";
 
 export type AuthResult = { principal: AuthPrincipal } | { response: Response };
+
+const SCOPE_HIERARCHY: Readonly<Record<ApiScope, readonly ApiScope[]>> = {
+  read: ["read"],
+  "read.history": ["read", "read.history"],
+  write: ["read", "read.history", "write", "deploy"],
+  deploy: ["deploy"],
+};
+
+function hasScope(granted: readonly ApiScope[], required: ApiScope): boolean {
+  return granted.some((scope) => SCOPE_HIERARCHY[scope].includes(required));
+}
 
 export async function authenticate(
   c: Context,
@@ -33,11 +44,10 @@ export async function authenticate(
     };
   }
 
-  const authorized = authorizePrincipal(verified.principal, { requiredScopes: [requiredScope] });
-  if (!authorized.ok) {
+  if (!hasScope(verified.principal.scopes, requiredScope)) {
     return {
-      response: c.json({ error: authorized.code, message: "Authentication scope denied" }, 403),
+      response: c.json({ error: "scope_denied", message: "Authentication scope denied" }, 403),
     };
   }
-  return { principal: authorized.principal };
+  return { principal: verified.principal };
 }

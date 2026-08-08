@@ -5,7 +5,8 @@
   "packageManager": "yarn@4.5.0",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "packages/harness/*"
   ],
   "scripts": {
     "dev": "turbo run dev",
@@ -13,12 +14,11 @@
     "test": "node scripts/test-workspaces.mjs",
     "test:unit": "node scripts/test-workspaces.mjs",
     "check:dependencies": "node scripts/check-dependencies.mjs",
+    "check:architecture": "node scripts/check-runtime-harness-architecture.mjs",
+    "verify:production": "yarn check:dependencies && yarn check:architecture && yarn workspace @aaspai/runtime verify && yarn workspace @aaspai/harness verify && yarn workspace @aaspai/opencode verify",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "test:real": "yarn workspace @aaspai/harness run test:real",
-    "test:real:company:local": "yarn workspace @aaspai/worker test:real:company:local",
-    "test:real:zedblock:local": "yarn workspace @aaspai/worker test:real:zedblock:local",
-    "test:simulate:company": "yarn workspace @aaspai/worker test:simulate:company",
+    "test:real:production": "node --import tsx scripts/real-production-smoke.ts",
     "clean": "turbo run clean"
   },
   "engines": {

@@ -14,9 +14,6 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run --passWithNoTests",
-    "test:real:company:local": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts local",
-    "test:real:zedblock:local": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts local zedblock",
-    "test:simulate:company": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-real-company.ts simulation",
     "clean": "rimraf dist"
   },
   "dependencies": {

@@ -37,7 +37,7 @@ export function chatCommand(): Command {
   return new Command("chat")
     .description("Multi-turn REPL with an agent (default: ceo)")
     .argument("[agent-id]", "Agent ID or slug (e.g. 'ceo' or 'agent/ceo')", "ceo")
-    .option("--adapter <name>", "Override the agent's adapter (e.g. dry_run_local)")
+    .option("--adapter <name>", "Override the production adapter (opencode_local)")
     .option("--model <name>", "Override the agent's model")
     .option("--max-turns <n>", "Stop after N turns (0 = unlimited)", "0")
     .action(async (rawAgentId: string, opts: ChatOptions) => {

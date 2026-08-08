@@ -35,21 +35,19 @@ const LEVEL_RANK: Record<LogLevel, number> = {
   fatal: 60,
 };
 
-function readMinLevel(): number {
-  const env = process.env.AASPAI_LOG_LEVEL;
-  if (env && env in LEVEL_RANK) return LEVEL_RANK[env as LogLevel];
-  return process.env.NODE_ENV === "production" ? LEVEL_RANK.info : LEVEL_RANK.debug;
-}
-
-const MIN_LEVEL = readMinLevel();
+const DEFAULT_MIN_LEVEL = LEVEL_RANK.info;
 let runtimeMinLevel: number | null = null;
 const unavailableOutputs = new WeakSet<NodeJS.WriteStream>();
-for (const output of [process.stdout, process.stderr]) {
+const guardedOutputs = new WeakSet<NodeJS.WriteStream>();
+
+function guardOutput(output: NodeJS.WriteStream): void {
+  if (guardedOutputs.has(output)) return;
+  guardedOutputs.add(output);
   output.on("error", () => unavailableOutputs.add(output));
 }
 
 function emit(level: LogLevel, bindings: LogContext, msg: string, ctx?: LogContext): void {
-  const min = runtimeMinLevel ?? MIN_LEVEL;
+  const min = runtimeMinLevel ?? DEFAULT_MIN_LEVEL;
   if (LEVEL_RANK[level] < min) return;
   const record: Record<string, unknown> = {
     t: new Date().toISOString(),
@@ -60,7 +58,13 @@ function emit(level: LogLevel, bindings: LogContext, msg: string, ctx?: LogConte
   };
   const line = JSON.stringify(record);
   const output = level === "error" || level === "fatal" ? process.stderr : process.stdout;
-  if (!unavailableOutputs.has(output) && !output.destroyed) output.write(`${line}\n`);
+  if (unavailableOutputs.has(output) || output.destroyed) return;
+  guardOutput(output);
+  try {
+    output.write(`${line}\n`);
+  } catch {
+    unavailableOutputs.add(output);
+  }
 }
 
 function makeLogger(bindings: LogContext): Logger {
@@ -93,7 +97,7 @@ export function getLogger(moduleName: string): Logger {
 
 /**
  * Update the minimum log level at runtime. Pass `null` to revert
- * to the env-derived default.
+ * to the default level.
  */
 export function setMinLevel(level: LogLevel | null): void {
   runtimeMinLevel = level === null ? null : LEVEL_RANK[level];

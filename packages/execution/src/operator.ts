@@ -281,7 +281,7 @@ export class OperatorService {
           agentId,
           harness:
             options.harness ??
-            (typeof metadata.harness === "string" ? metadata.harness : "dry_run_local"),
+            (typeof metadata.harness === "string" ? metadata.harness : "opencode_local"),
           runProvider: options.runProvider,
           plan: options.plan,
           workspace: options.workspace,

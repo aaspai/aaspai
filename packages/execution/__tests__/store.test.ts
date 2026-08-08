@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
 import type { DbHandle } from "@aaspai/db";
 import { agentAttempts, createDb, eq, runMigrations, sessionEvents, sessions } from "@aaspai/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -538,7 +539,7 @@ describe("ExecutionStore", () => {
     await store.completeHarnessSession(
       session.id,
       {
-        protocolVersion: 1,
+        protocolVersion: HARNESS_PROTOCOL_VERSION,
         exitCode: 1,
         timedOut: false,
         usageBasis: "per_run",
@@ -591,7 +592,7 @@ describe("ExecutionStore", () => {
     await store.completeHarnessSession(
       input.id,
       {
-        protocolVersion: 1,
+        protocolVersion: HARNESS_PROTOCOL_VERSION,
         sessionId: "provider_previous",
         exitCode: 0,
         timedOut: false,

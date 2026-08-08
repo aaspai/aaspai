@@ -7,10 +7,7 @@ export type IdentityErrorCode =
   | "malformed_credential"
   | "invalid_credential"
   | "expired_credential"
-  | "revoked_credential"
-  | "organization_denied"
-  | "scope_denied"
-  | "role_denied";
+  | "revoked_credential";
 
 const SAFE_MESSAGES: Readonly<Record<IdentityErrorCode, string>> = Object.freeze({
   missing_credential: "Authentication required",
@@ -18,9 +15,6 @@ const SAFE_MESSAGES: Readonly<Record<IdentityErrorCode, string>> = Object.freeze
   invalid_credential: "Authentication failed",
   expired_credential: "Authentication credential expired",
   revoked_credential: "Authentication credential revoked",
-  organization_denied: "Organization access denied",
-  scope_denied: "Scope denied",
-  role_denied: "Role denied",
 });
 
 /**

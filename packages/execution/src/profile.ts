@@ -14,7 +14,6 @@ import {
 import { type ExecutionTarget, executionTargetSchema } from "@aaspai/contracts/runtime";
 import { getAdapter } from "@aaspai/harness";
 import { KnowledgeLoader } from "@aaspai/knowledge";
-import { listRuntimeTargets } from "@aaspai/runtime";
 import type { SkillRegistry } from "@aaspai/skills";
 import type { ToolRegistry } from "@aaspai/tools";
 import { assertRuntimeReady } from "./capabilities.js";
@@ -216,11 +215,7 @@ function resolveAgentTarget(agent: AgentConfig, target?: ExecutionTarget): Execu
 
 function runtimeLabel(target: ExecutionTarget) {
   const label = target.kind === "sandbox" ? `${target.kind}:${target.provider}` : target.kind;
-  const info = listRuntimeTargets().find(
-    (item) =>
-      item.kind === target.kind && (target.kind !== "sandbox" || item.provider === target.provider),
-  );
-  return { label, status: info?.status ?? "stub" };
+  return { label, status: target.kind === "local" ? ("ready" as const) : ("stub" as const) };
 }
 
 function stringArray(value: unknown): string[] {

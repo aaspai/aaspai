@@ -1,4 +1,5 @@
 import { okfFrontmatterSchema } from "@aaspai/contracts/phase2";
+import { sha256Hex as sharedSha256Hex } from "@aaspai/crypto";
 import * as jsYaml from "js-yaml";
 import type { z } from "zod";
 
@@ -47,11 +48,8 @@ export async function sha256Hex(input: string): Promise<string> {
 
 /** Synchronous sha256 hex — uses Node's `node:crypto`. */
 export function sha256HexSync(input: string): string {
-  const { createHash } = nodeCrypto;
-  return createHash("sha256").update(input).digest("hex");
+  return sharedSha256Hex(input);
 }
-
-import * as nodeCrypto from "node:crypto";
 
 /**
  * Parse a markdown file with YAML frontmatter. Validates the

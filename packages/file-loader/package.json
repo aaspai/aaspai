@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@aaspai/contracts": "workspace:*",
+    "@aaspai/crypto": "workspace:*",
     "@aaspai/git": "workspace:*",
     "@aaspai/observability": "workspace:*",
     "chokidar": "^4.0.3",
