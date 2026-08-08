@@ -256,7 +256,7 @@ export class FileAgentConfigSource implements AgentConfigSource {
       title: fm.title as string,
       description: fm.description as string,
       timestamp: fm.timestamp as string,
-      adapter: (fm.adapter as string) ?? "claude_local",
+      adapter: (fm.adapter as string) ?? "opencode_local",
       model: fm.model as string | undefined,
       role: (fm.role as AgentConfig["role"]) ?? "general",
       reportsTo:

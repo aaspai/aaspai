@@ -20,8 +20,7 @@
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
-    "@aaspai/contracts": "workspace:*",
-    "@aaspai/observability": "workspace:*"
+    "@aaspai/contracts": "workspace:*"
   },
   "devDependencies": {
     "@aaspai/testing": "workspace:*",

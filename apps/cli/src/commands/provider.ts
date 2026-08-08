@@ -1,5 +1,5 @@
-import { getAdapter, listAdapters } from "@aaspai/harness";
-import { listRuntimeTargets } from "@aaspai/runtime";
+import { getProductionAdapter, listProductionAdapters } from "@aaspai/harness";
+import { defaultRuntimeRegistry } from "@aaspai/runtime";
 import { Command } from "commander";
 
 export function providerCommand(): Command {
@@ -9,7 +9,10 @@ export function providerCommand(): Command {
     .description("List harness and runtime capability truth")
     .option("--json", "print JSON")
     .action((options: { json?: boolean }) => {
-      const data = { adapters: listAdapters(), runtimes: listRuntimeTargets() };
+      const data = {
+        adapters: listProductionAdapters(),
+        runtimes: defaultRuntimeRegistry().list(),
+      };
       if (options.json) console.log(JSON.stringify(data, null, 2));
       else {
         for (const adapter of data.adapters) {
@@ -17,30 +20,29 @@ export function providerCommand(): Command {
             `adapter ${adapter.type}: ${adapter.status} ${JSON.stringify(adapter.capabilities)}`,
           );
         }
-        for (const runtime of data.runtimes) {
+        for (const { manifest: runtime } of data.runtimes) {
           console.log(
-            `runtime ${runtime.kind}${runtime.provider ? `:${runtime.provider}` : ""}: ${runtime.status} ${JSON.stringify(runtime.capabilities)}`,
+            `runtime ${runtime.type}: ${runtime.status} ${JSON.stringify(runtime.capabilities)}`,
           );
         }
       }
     });
   cmd
     .command("doctor")
-    .description("Verify locally installed agent CLIs")
+    .description("Verify the OpenCode server environment")
     .option("--json", "print JSON")
     .action(async (options: { json?: boolean }) => {
       const cwd = process.cwd();
       const adapters = await Promise.all(
-        (["codex_local", "claude_local", "opencode_cli"] as const).map(async (type) => {
-          const info = listAdapters().find((adapter) => adapter.type === type);
-          const environment = await getAdapter(type).testEnvironment({ config: {}, cwd });
-          const installed = !environment.checks.some(
-            (check) => check.name.endsWith("_cli") && /not found|enoent/i.test(check.message),
-          );
+        listProductionAdapters().map(async (info) => {
+          const environment = await getProductionAdapter("opencode_local").testEnvironment({
+            config: {},
+            cwd,
+          });
           return {
-            type,
-            label: info?.label ?? type,
-            installed,
+            type: info.type,
+            label: info.label,
+            installed: true,
             ready: environment.ok,
             environment,
           };
@@ -58,7 +60,7 @@ export function providerCommand(): Command {
         for (const check of adapter.environment.checks) console.log(`  ${check.message}`);
       }
       console.log("");
-      console.log("Install or authenticate any missing CLI, then run this command again.");
+      console.log("Configure the OpenCode server endpoint or run the managed local server again.");
     });
   return cmd;
 }

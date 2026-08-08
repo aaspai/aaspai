@@ -1,7 +1,7 @@
 import type { AgentAttempt, ExecutionPlan, ExecutionWorkspace } from "@aaspai/contracts/execution";
 import type { RunProcessResult } from "@aaspai/contracts/runtime";
-import { type RuntimeTarget, resolveTarget } from "@aaspai/runtime";
 import { assertRuntimeReady } from "./capabilities.js";
+import { createManagedRuntimeBoundary, type ManagedRuntimeBoundary } from "./runtime-boundary.js";
 import type { ExecutionStore } from "./store.js";
 
 export interface ExecutePlanInput {
@@ -14,13 +14,16 @@ export interface ExecutePlanInput {
   signal?: AbortSignal;
 }
 
-export type RuntimeTargetPicker = (target: ExecutionPlan["target"]) => RuntimeTarget;
+export type RuntimeBoundaryFactory = (
+  target: ExecutionPlan["target"],
+  cwd: string,
+) => Promise<ManagedRuntimeBoundary>;
 
 /** Runs a persisted plan only inside the workspace assigned to its attempt. */
 export class ExecutionPlanRunner {
   constructor(
     private readonly store: ExecutionStore,
-    private readonly targetPicker: RuntimeTargetPicker = resolveTarget,
+    private readonly runtimeFactory: RuntimeBoundaryFactory = createManagedRuntimeBoundary,
   ) {}
 
   async run(input: ExecutePlanInput): Promise<RunProcessResult> {
@@ -30,17 +33,7 @@ export class ExecutionPlanRunner {
 
     try {
       await this.store.transitionAttempt(input.plan.attemptId, "running");
-      const target = this.targetPicker(input.plan.target);
-      const targetInput = {
-        ...input.plan.target,
-        cwd: input.workspace.path,
-      } as ExecutionPlan["target"];
-      if (input.plan.target.kind === "local") {
-        await target.prepareWorkspace?.(targetInput, {
-          localDir: input.workspace.path,
-          remoteDir: input.workspace.path,
-        });
-      }
+      const runtime = await this.runtimeFactory(input.plan.target, input.workspace.path);
       let executionEventSeq = 1;
       let rawOutputSeq = 0;
       await this.store.appendEvent({
@@ -56,7 +49,7 @@ export class ExecutionPlanRunner {
       });
       let result: RunProcessResult;
       try {
-        result = await target.run(targetInput, {
+        result = await runtime.execution.run({
           command: input.command,
           args: [...(input.args ?? [])],
           cwd: input.workspace.path,
@@ -83,12 +76,7 @@ export class ExecutionPlanRunner {
           },
         });
       } finally {
-        if (input.plan.target.kind === "local") {
-          await target.restoreWorkspace?.(targetInput, {
-            localDir: input.workspace.path,
-            remoteDir: input.workspace.path,
-          });
-        }
+        await runtime.close();
       }
       await this.store.appendEvent({
         organizationId: input.plan.organizationId,

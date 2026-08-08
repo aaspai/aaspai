@@ -1,19 +1,19 @@
 import path from "node:path";
 import type { ExecutionPlan, ExecutionWorkspace, WorkKind } from "@aaspai/contracts/execution";
 import type {
-  AdapterExecutionContext,
   AdapterExecutionResult,
   AdapterType,
+  HarnessEvent,
   TranscriptEntry,
 } from "@aaspai/contracts/harness";
 import { adapterTypeSchema, HARNESS_PROTOCOL_VERSION } from "@aaspai/contracts/harness";
 import type { JsonObject } from "@aaspai/contracts/primitives";
 import { type ResolvedAgentProfile, resolvedAgentProfileSchema } from "@aaspai/contracts/profile";
 import type { ExecutionTarget, RunProcessResult } from "@aaspai/contracts/runtime";
-import { getAdapter, parseClaudeStreamLine, parseCodexStreamLine } from "@aaspai/harness";
-import { resolveTarget } from "@aaspai/runtime";
+import { getAdapter, HarnessController } from "@aaspai/harness";
 import { emitNativeLine } from "@aaspai/telemetry";
 import { assertHarnessExecutable, assertRuntimeReady } from "./capabilities.js";
+import { createManagedRuntimeBoundary, type ManagedRuntimeBoundary } from "./runtime-boundary.js";
 import type { ExecutionStore } from "./store.js";
 
 const DEFAULT_STUCK_AFTER_MS = 15 * 60_000;
@@ -24,7 +24,6 @@ export interface HarnessAgentInput {
   adapterType: AdapterType;
   adapterConfig: JsonObject;
   role?: string;
-  tools?: AdapterExecutionContext["tools"];
   resumeSessionId?: string;
   forkSession?: boolean;
 }
@@ -38,7 +37,7 @@ export interface ExecuteHarnessPlanInput {
   /** Durable lineage for a fresh row replacing a previously used session. */
   parentSessionId?: string;
   wakeupId?: string;
-  /** Provider-native session ID to continue after a stalled CLI attempt. */
+  /** Provider-native session ID to continue after a stalled attempt. */
   resumeSessionId?: string;
   /** Reuse the retained manager-session workspace for a callback turn. */
   allowWorkspaceReuse?: boolean;
@@ -80,23 +79,16 @@ export class HarnessExecutionPlanRunner {
     const adapterType = adapterTypeSchema.parse(input.plan.harness);
     assertHarnessExecutable(adapterType);
     await assertRuntimeReady(input.plan.target);
-    const target = resolveTarget(input.plan.target);
-    const targetInput = {
-      ...input.plan.target,
-      cwd: input.workspace.path,
-    } as ExecutionPlan["target"];
     const adapter = getAdapter(adapterType);
     const policy = profile
       ? enforceRuntimeToolPolicy(
           adapterType,
           { ...agent.adapterConfig, ...input.plan.harnessConfig },
           profile,
-          agent.tools,
           input.plan.runtimeConfig.workKind as WorkKind | undefined,
         )
       : {
           adapterConfig: { ...agent.adapterConfig, ...input.plan.harnessConfig },
-          tools: agent.tools,
         };
     const adapterConfig = policy.adapterConfig;
     const stuckAfterMs = resolveStuckAfterMs(adapterConfig);
@@ -181,6 +173,7 @@ export class HarnessExecutionPlanRunner {
     });
 
     let result: AdapterExecutionResult;
+    let runtimeBoundary: ManagedRuntimeBoundary | undefined;
     const managedExecutionEnv = {
       ...managedEnvironmentBaseline(input.plan.target.kind),
       ...managedAdapterEnvironment(
@@ -194,137 +187,177 @@ export class HarnessExecutionPlanRunner {
       ...input.ephemeralEnv,
     };
     try {
-      result = await adapter.execute({
-        protocolVersion: HARNESS_PROTOCOL_VERSION,
-        runId: input.plan.attemptId,
-        organizationId: input.plan.organizationId,
-        agent: {
-          id: agent.id,
-          organizationId: input.plan.organizationId,
-          name: agent.name,
-          adapterType,
-          adapterConfig,
-        },
-        runtime: {
-          sessionId: requestedSessionId,
-          sessionParams: {
-            resume: Boolean(requestedSessionId),
-            fork: agent.forkSession === true,
-          },
-          runtimeIdentity: {
-            kind: input.plan.target.kind,
-            cwd:
-              input.plan.target.kind === "ssh" ? input.plan.target.remoteCwd : input.workspace.path,
-          },
-        },
-        config: adapterConfig,
+      runtimeBoundary = await createManagedRuntimeBoundary(
+        input.plan.target,
+        input.workspace.path,
+        input.ephemeralEnv,
+      );
+      const runtimeExecution = runtimeBoundary.execution;
+      const controller = new HarnessController();
+      const execution = controller.start({
+        adapter,
+        executionId: input.plan.attemptId,
         context: {
-          cwd: input.workspace.path,
-          prompt: input.plan.prompt,
-          systemPrompt: profile?.agent.systemPrompt ?? "",
-          role: agent.role,
-        },
-        execution: {
-          identity: {
-            kind: input.plan.target.kind,
-            cwd:
-              input.plan.target.kind === "ssh" ? input.plan.target.remoteCwd : input.workspace.path,
+          protocolVersion: HARNESS_PROTOCOL_VERSION,
+          runId: input.plan.attemptId,
+          organizationId: input.plan.organizationId,
+          agent: {
+            id: agent.id,
+            organizationId: input.plan.organizationId,
+            name: agent.name,
+            adapterType,
+            adapterConfig,
           },
-          environment: {
-            env: managedExecutionEnv,
-            inheritEnv: false,
+          runtime: {
+            sessionId: requestedSessionId,
+            sessionParams: {
+              resume: Boolean(requestedSessionId),
+              fork: agent.forkSession === true,
+            },
+            runtimeIdentity: {
+              kind: input.plan.target.kind,
+              cwd:
+                input.plan.target.kind === "ssh"
+                  ? input.plan.target.remoteCwd
+                  : input.workspace.path,
+            },
           },
-          run: async (options) => {
-            const result = await target.run(targetInput, {
-              ...options,
+          config: adapterConfig,
+          context: {
+            cwd: input.workspace.path,
+            prompt: input.plan.prompt,
+            systemPrompt: profile?.agent.systemPrompt ?? "",
+            role: agent.role,
+          },
+          execution: {
+            ...runtimeExecution,
+            identity: {
+              ...runtimeExecution.identity,
+              kind: input.plan.target.kind,
               cwd: input.workspace.path,
-              env: {
-                ...managedExecutionEnv,
-                ...managedAdapterEnvironment(options.env, adapterConfig),
-              },
+            },
+            environment: {
+              env: managedExecutionEnv,
               inheritEnv: false,
-              timeoutMs: requiresRuntimeExecution(adapterType)
-                ? undefined
-                : (input.plan.timeoutMs ?? options.timeoutMs),
-              onLog: async (stream, chunk) => {
-                lastProgressAt = Date.now();
-                const safeChunk = redactEphemeral(chunk);
-                try {
-                  await this.store.appendRawOutput({
-                    organizationId: input.plan.organizationId,
-                    attemptId: input.plan.attemptId,
-                    ts: new Date().toISOString(),
-                    stream,
-                    chunk: safeChunk,
-                    seq: ++rawOutputSeq,
-                  });
-                } catch (error) {
-                  persistenceFailure = error instanceof Error ? error : new Error(String(error));
-                }
-                await options.onLog?.(stream, safeChunk);
-              },
-            });
-            assertRuntimeIdentity(input.plan.target, input.workspace.path, result.runtimeIdentity);
-            actualRuntimeIdentity = result.runtimeIdentity;
-            return result;
-          },
-        },
-        signal: runController.signal,
-        onLog: async (stream, chunk) => {
-          lastProgressAt = Date.now();
-          for (const line of redactEphemeral(chunk).split(/\r?\n/)) {
-            if (!line) continue;
-            observerSeq += 1;
-            emitNativeLine({
-              organizationId: input.plan.organizationId,
-              sessionId: session.id,
-              executionId: input.plan.workItemId,
-              attemptId: input.plan.attemptId,
-              traceId: input.plan.attemptId,
-              provider: "runtime",
-              stream,
-              line,
-              kind: stream === "stderr" ? "stderr" : "stdout",
-              seq: observerSeq,
-            });
-            if (stream === "stdout") {
-              try {
-                const parsed = JSON.parse(line) as {
-                  kind?: string;
-                  sessionID?: unknown;
-                  sessionId?: unknown;
-                  thread_id?: unknown;
-                  session_id?: unknown;
-                } & Record<string, unknown>;
-                const providerSessionId = [
-                  parsed.sessionID,
-                  parsed.sessionId,
-                  parsed.thread_id,
-                  parsed.session_id,
-                ].find(
-                  (value): value is string => typeof value === "string" && value.trim().length > 0,
-                );
-                if (providerSessionId && providerSessionId !== observedProviderSessionId) {
-                  observedProviderSessionId = providerSessionId;
-                  await this.store.setHarnessSessionProviderIdentity(session.id, providerSessionId);
-                }
-                const entries = normalizeSessionLine(adapterType, line, parsed);
-                if (entries.length > 0) {
-                  for (const entry of entries) {
-                    await recordSessionEvent(entry.kind, entry);
+            },
+            run: async (options) => {
+              const result = await runtimeExecution.run({
+                ...options,
+                cwd: input.workspace.path,
+                env: {
+                  ...managedExecutionEnv,
+                  ...managedAdapterEnvironment(options.env, adapterConfig),
+                },
+                inheritEnv: false,
+                timeoutMs: requiresRuntimeExecution(adapterType)
+                  ? undefined
+                  : (input.plan.timeoutMs ?? options.timeoutMs),
+                onLog: async (stream, chunk) => {
+                  lastProgressAt = Date.now();
+                  const safeChunk = redactEphemeral(chunk);
+                  try {
+                    await this.store.appendRawOutput({
+                      organizationId: input.plan.organizationId,
+                      attemptId: input.plan.attemptId,
+                      ts: new Date().toISOString(),
+                      stream,
+                      chunk: safeChunk,
+                      seq: ++rawOutputSeq,
+                    });
+                  } catch (error) {
+                    persistenceFailure = error instanceof Error ? error : new Error(String(error));
                   }
-                  continue;
-                }
+                  await options.onLog?.(stream, safeChunk);
+                },
+              });
+              assertRuntimeIdentity(
+                input.plan.target,
+                input.workspace.path,
+                result.runtimeIdentity,
+              );
+              actualRuntimeIdentity = result.runtimeIdentity;
+              return result;
+            },
+          },
+          signal: runController.signal,
+          onLog: async (stream, chunk) => {
+            lastProgressAt = Date.now();
+            for (const line of redactEphemeral(chunk).split(/\r?\n/)) {
+              if (!line) continue;
+              observerSeq += 1;
+              emitNativeLine({
+                organizationId: input.plan.organizationId,
+                sessionId: session.id,
+                executionId: input.plan.workItemId,
+                attemptId: input.plan.attemptId,
+                traceId: input.plan.attemptId,
+                provider: "runtime",
+                stream,
+                line,
+                kind: stream === "stderr" ? "stderr" : "stdout",
+                seq: observerSeq,
+              });
+              // OpenCode emits semantic JSON events through onEvent. Keep
+              // only stray human-readable process text on the transcript;
+              // raw JSON is already persisted through the typed channel.
+              try {
+                JSON.parse(line);
+                continue;
               } catch {
-                // Preserve non-JSON provider output below.
+                // Plain text remains diagnostic output.
               }
+              await recordSessionEvent(stream === "stderr" ? "stderr" : "stdout", { text: line });
             }
-            await recordSessionEvent(stream === "stderr" ? "stderr" : "stdout", { text: line });
-          }
+          },
+          onEvent: async (event: HarnessEvent) => {
+            // Typed semantic channel: capture the native session id from the
+            // event (no guessing from raw stdout) and persist typed records.
+            if (event.nativeSessionId && event.nativeSessionId !== observedProviderSessionId) {
+              observedProviderSessionId = event.nativeSessionId;
+              await this.store.setHarnessSessionProviderIdentity(session.id, event.nativeSessionId);
+            }
+            for (const entry of harnessEventToSessionEvents(event)) {
+              await recordSessionEvent(entry.kind, entry);
+            }
+          },
+          onRawLog: async (entry) => {
+            // Untouched native bytes (observability). The runtime boundary
+            // also records raw output; keep this channel for adapters that
+            // re-emit processed output.
+            try {
+              await this.store.appendRawOutput({
+                organizationId: input.plan.organizationId,
+                attemptId: input.plan.attemptId,
+                ts: entry.ts ?? new Date().toISOString(),
+                stream: entry.stream,
+                chunk: redactEphemeral(entry.chunk),
+                seq: ++rawOutputSeq,
+              });
+            } catch (error) {
+              persistenceFailure = error instanceof Error ? error : new Error(String(error));
+            }
+          },
+          onRuntimeProgress: async (update) => {
+            // Coarse transfer/progress phases only — semantic deltas arrive
+            // via onEvent. Record phase updates as audit events.
+            const rec = (update ?? {}) as { phase?: unknown; label?: unknown };
+            if (typeof rec.phase === "string" && rec.phase.length > 0) {
+              await recordSessionEvent("system", { phase: rec.phase, label: rec.label });
+            }
+          },
+          onQuestion: async (question) => {
+            // Headless execution: record the question and resolve undefined so
+            // the adapter continues with its default (no human to answer).
+            await recordSessionEvent("user", {
+              prompt: question.prompt,
+              options: question.options,
+            });
+            return undefined;
+          },
+          onMeta: async (meta) => recordSessionEvent("system", { meta }),
         },
-        onMeta: async (meta) => recordSessionEvent("system", { meta }),
-        tools: policy.tools,
       });
+      result = await execution.done;
     } catch (error) {
       result = {
         protocolVersion: HARNESS_PROTOCOL_VERSION,
@@ -340,6 +373,7 @@ export class HarnessExecutionPlanRunner {
     } finally {
       clearInterval(watchdog);
       input.signal?.removeEventListener("abort", abortForCancellation);
+      await runtimeBoundary?.close();
     }
 
     result = redactResult(result, ephemeralSecrets);
@@ -381,8 +415,8 @@ export class HarnessExecutionPlanRunner {
         timedOut: true,
         errorCode: "session_stalled",
         errorFamily: "transient_upstream",
-        errorMessage: `No CLI progress for ${Math.round(stuckAfterMs / 60_000)} minutes; interrupted for resume`,
-        summary: "CLI session stalled and was interrupted for resume",
+        errorMessage: `No native progress for ${Math.round(stuckAfterMs / 60_000)} minutes; interrupted for resume`,
+        summary: "Native session stalled and was interrupted for resume",
       };
     }
 
@@ -398,7 +432,7 @@ export class HarnessExecutionPlanRunner {
         errorCode: "session_interrupted",
         errorFamily: "transient_upstream",
         errorMessage: "Session was interrupted by an operator and will resume in a retry",
-        summary: "CLI session was interrupted for resumable retry",
+        summary: "Native session was interrupted for resumable retry",
         clearSession: false,
       };
     }
@@ -502,102 +536,75 @@ export class HarnessExecutionPlanRunner {
 
 type CanonicalSessionEvent = Record<string, unknown> & { kind: TranscriptEntry["kind"] };
 
-const CANONICAL_TRANSCRIPT_KINDS = new Set<TranscriptEntry["kind"]>([
-  "assistant",
-  "thinking",
-  "user",
-  "tool_call",
-  "tool_result",
-  "init",
-  "result",
-  "stderr",
-  "system",
-  "stdout",
-  "diff",
-]);
-
-function normalizeSessionLine(
-  adapter: AdapterType,
-  line: string,
-  parsed: Record<string, unknown>,
-): CanonicalSessionEvent[] {
-  if (
-    typeof parsed.kind === "string" &&
-    CANONICAL_TRANSCRIPT_KINDS.has(parsed.kind as TranscriptEntry["kind"])
-  ) {
-    return [parsed as CanonicalSessionEvent];
-  }
-  const ts = new Date().toISOString();
-  if (adapter === "codex_local") return withToolResultStatus(parseCodexStreamLine(line, ts));
-  if (adapter === "claude_local") return withToolResultStatus(parseClaudeStreamLine(line, ts));
-  if (adapter !== "opencode_cli" && adapter !== "opencode_local") return [];
-
-  const part = isRecord(parsed.part) ? parsed.part : {};
-  const state = isRecord(part.state) ? part.state : {};
-  const type = typeof parsed.type === "string" ? parsed.type : "event";
-  if (type === "text" && typeof part.text === "string") {
-    return [{ kind: "assistant", ts, text: part.text }];
-  }
-  if (
-    (type === "thinking" || part.type === "thinking" || part.type === "reasoning") &&
-    typeof part.text === "string"
-  ) {
-    return [{ kind: "thinking", ts, text: part.text }];
-  }
-  if (type === "tool_use" || type === "tool" || part.type === "tool") {
-    const name = typeof part.tool === "string" ? part.tool : String(part.name ?? "unknown");
-    const id = typeof part.callID === "string" ? part.callID : undefined;
-    const providerStatus = String(state.status);
-    const status =
-      providerStatus === "error"
-        ? "failed"
-        : ["completed", "failed", "cancelled"].includes(providerStatus)
-          ? providerStatus
-          : "started";
-    const input = isRecord(state.input) ? state.input : {};
-    if (status !== "started") {
-      const output =
-        typeof state.output === "string"
-          ? state.output
-          : typeof state.error === "string"
-            ? state.error
-            : undefined;
+/**
+ * Map a typed `HarnessEvent` into the canonical session-event records the
+ * store persists. Tool terminal events mirror the orchestrator's historical
+ * shape (a `tool_call` with input + terminal status, then the `tool_result`).
+ */
+function harnessEventToSessionEvents(event: HarnessEvent): CanonicalSessionEvent[] {
+  const ts = event.timestamp;
+  switch (event.type) {
+    case "assistant.delta":
+      return [{ kind: "assistant", ts, text: event.text }];
+    case "reasoning.delta":
+      return [{ kind: "thinking", ts, text: event.text }];
+    case "tool.started":
       return [
-        { kind: "tool_call", ts, name, ...(id ? { id } : {}), status, input },
+        {
+          kind: "tool_call",
+          ts,
+          name: event.toolName,
+          ...(event.toolCallId ? { id: event.toolCallId } : {}),
+          status: "started",
+          input: event.input,
+        },
+      ];
+    case "tool.completed":
+      return [
+        {
+          kind: "tool_call",
+          ts,
+          name: event.toolName,
+          ...(event.toolCallId ? { id: event.toolCallId } : {}),
+          status: "completed",
+          input: event.input,
+        },
         {
           kind: "tool_result",
           ts,
-          name,
-          ...(id ? { id } : {}),
-          status,
-          ...(output ? { output } : {}),
-          isError: status === "failed",
+          name: event.toolName,
+          ...(event.toolCallId ? { id: event.toolCallId } : {}),
+          status: "completed",
+          ...(typeof event.output === "string" ? { output: event.output } : {}),
         },
       ];
-    }
-    return [{ kind: "tool_call", ts, name, ...(id ? { id } : {}), status, input }];
+    case "tool.failed":
+      return [
+        {
+          kind: "tool_result",
+          ts,
+          name: event.toolName,
+          ...(event.toolCallId ? { id: event.toolCallId } : {}),
+          status: "failed",
+          ...(typeof event.output === "string"
+            ? { output: event.output }
+            : event.errorMessage
+              ? { output: event.errorMessage }
+              : {}),
+          isError: true,
+        },
+      ];
+    case "step.completed":
+      return [{ kind: "result", ts, stopReason: "step_completed" }];
+    case "error":
+      return [{ kind: "stderr", ts, text: event.message }];
+    case "warning":
+      return [{ kind: "system", ts, text: event.message }];
+    case "run.started":
+      return [{ kind: "init", ts, ...(event.model ? { model: event.model } : {}) }];
+    default:
+      return [];
   }
-  if (type === "step_finish") {
-    return [{ kind: "result", ts, stopReason: String(part.reason ?? "step_finished") }];
-  }
-  if (type === "error") {
-    const error = isRecord(parsed.error) ? parsed.error.message : parsed.error;
-    return [{ kind: "stderr", ts, text: typeof error === "string" ? error : "OpenCode error" }];
-  }
-  return [{ kind: "system", ts, text: `OpenCode ${type}` }];
-}
-
-function withToolResultStatus(entries: TranscriptEntry[]): CanonicalSessionEvent[] {
-  return entries.map((entry) => ({
-    ...entry,
-    ...(entry.kind === "tool_result"
-      ? { status: entry.isError === true ? "failed" : "completed" }
-      : {}),
-  })) as CanonicalSessionEvent[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function redactValues(value: string, secrets: readonly string[]): string {
@@ -712,7 +719,7 @@ function managedAdapterEnvironment(
 }
 
 function requiresRuntimeExecution(adapter: AdapterType): boolean {
-  return adapter !== "dry_run_local" && getAdapter(adapter).info.transport === "local_subprocess";
+  return adapter === "opencode_local";
 }
 
 function resolveStuckAfterMs(config: JsonObject): number {
@@ -736,7 +743,7 @@ export function assertGovernedRuntimeIsolation(
     target.envPassthrough === true &&
     requiresRuntimeExecution(adapter as AdapterType)
   ) {
-    throw new Error("Governed local CLI agents require a managed environment");
+    throw new Error("Governed local adapters require a managed environment");
   }
 }
 
@@ -814,9 +821,8 @@ export function enforceRuntimeToolPolicy(
   adapter: AdapterType,
   adapterConfig: JsonObject,
   profile: ResolvedAgentProfile,
-  tools?: AdapterExecutionContext["tools"],
   _workKind?: WorkKind,
-): { adapterConfig: JsonObject; tools?: AdapterExecutionContext["tools"] } {
+): { adapterConfig: JsonObject } {
   const approvalRequired = profile.tools.filter(
     (decision) => decision.allowed && decision.requiresApproval,
   );
@@ -828,11 +834,6 @@ export function enforceRuntimeToolPolicy(
     );
   }
 
-  const allowed = new Set(
-    profile.tools
-      .filter((decision) => decision.allowed && decision.ready)
-      .map(({ name }) => name.toLowerCase()),
-  );
   const nativeAllowed = profile.tools
     .filter(
       (decision) =>
@@ -851,103 +852,25 @@ export function enforceRuntimeToolPolicy(
   const boundedNativeAllowed = nativeAllowed.filter(
     (name) => !["task", "spawn_agent"].includes(name.toLowerCase()),
   );
-  const guardedTools = tools
-    ? {
-        invoke: async (...args: Parameters<NonNullable<typeof tools>["invoke"]>) => {
-          if (!allowed.has(args[0].toLowerCase())) {
-            throw new Error(`Tool "${args[0]}" is denied by the resolved agent profile`);
-          }
-          return tools.invoke(...args);
-        },
-      }
-    : undefined;
-
-  if (adapter === "codex_local") {
-    const nativeBundle = ["apply_patch", "shell", "web_search", "view_image"];
-    if (nativeBundle.some((name) => !boundedNativeAllowed.includes(name))) {
-      throw new Error("codex_local requires its complete sandboxed native tool bundle");
-    }
-    assertNoPolicyOverrides(adapterConfig.extraArgs, [
-      "--sandbox",
-      "--dangerously-bypass-approvals-and-sandbox",
-      "--ask-for-approval",
-    ]);
-    return {
-      adapterConfig: {
-        ...adapterConfig,
-        sandbox: "workspace-write",
-        approvalMode: "never",
-        acpAllowedTools: nativeBundle,
-      },
-      tools: guardedTools,
-    };
-  }
-  if (adapter === "claude_local") {
-    assertNoPolicyOverrides(adapterConfig.extraArgs, [
-      "--tools",
-      "--allowedTools",
-      "--disallowedTools",
-      "--permission-mode",
-      "--dangerously-skip-permissions",
-    ]);
-    return {
-      adapterConfig: {
-        ...adapterConfig,
-        tools: boundedNativeAllowed,
-        acpAllowedTools: boundedNativeAllowed,
-        permissionMode: "default",
-        dangerouslySkipPermissions: false,
-      },
-      tools: guardedTools,
-    };
-  }
-  if (adapter === "opencode_cli" || adapter === "opencode_local") {
-    return {
-      adapterConfig: {
-        ...adapterConfig,
-        autoApprove: false,
-        dangerouslySkipPermissions: false,
-        disableProjectConfig: true,
-        permissions: Object.fromEntries([
-          ["*", "deny"],
-          ...boundedNativeAllowed.map((name) => [name, "allow"]),
-          ["external_directory", "deny"],
-        ]),
-      },
-      tools: guardedTools,
-    };
-  }
-  return { adapterConfig, tools: guardedTools };
+  if (adapter !== "opencode_local") return { adapterConfig };
+  return {
+    adapterConfig: {
+      ...adapterConfig,
+      autoApprove: false,
+      dangerouslySkipPermissions: false,
+      disableProjectConfig: true,
+      permissions: Object.fromEntries([
+        ["*", "deny"],
+        ...boundedNativeAllowed.map((name) => [name, "allow"]),
+        ["external_directory", "deny"],
+      ]),
+    },
+  };
 }
 
 function canonicalNativeTool(adapter: AdapterType, name: string): string {
-  if (adapter !== "claude_local") return name.toLowerCase();
-  const canonical = [
-    "Bash",
-    "Edit",
-    "Glob",
-    "Grep",
-    "NotebookEdit",
-    "Read",
-    "Task",
-    "WebFetch",
-    "WebSearch",
-    "Write",
-  ];
-  return canonical.find((candidate) => candidate.toLowerCase() === name.toLowerCase()) ?? name;
-}
-
-function assertNoPolicyOverrides(value: unknown, deniedFlags: string[]): void {
-  if (
-    Array.isArray(value) &&
-    value.some(
-      (entry) =>
-        typeof entry === "string" &&
-        deniedFlags.some((flag) => entry === flag || entry.startsWith(`${flag}=`)),
-    )
-  ) {
-    throw new Error("Adapter extraArgs cannot override the resolved agent tool policy");
-  }
+  void adapter;
+  return name.toLowerCase();
 }
 
 function terminalStatus(

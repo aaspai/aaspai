@@ -84,7 +84,7 @@ describe("M14 control-plane boundaries", () => {
       organizationId: "org_a",
       wakeupId: wakeup.id,
       agentId: "agent_a",
-      adapter: "dry_run_local",
+      adapter: "opencode_local",
       status: "queued",
     });
     expect(

@@ -15,9 +15,6 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "test": "vitest run",
-    "test:real": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-layer-two.ts",
-    "test:real:daytona": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-layer-two.ts daytona",
-    "test:real:workitem": "node ../../node_modules/tsx/dist/cli.mjs __tests__/real-e2e/run-big-workitem.ts",
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {

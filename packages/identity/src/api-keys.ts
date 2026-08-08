@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { randomBytes, sha256Hex } from "@aaspai/crypto";
 
 const API_KEY_PREFIX = "aaspai_pat_";
 
@@ -10,13 +11,9 @@ export { API_KEY_PREFIX };
  * is persisted for verification.
  */
 export function generateApiKey(): { plain: string; hash: string; id: string } {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  const b64 = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const b64 = Buffer.from(randomBytes(32)).toString("base64url");
   const plain = `${API_KEY_PREFIX}${b64}`;
-  const hash = createHash("sha256").update(plain).digest("hex");
+  const hash = sha256Hex(plain);
   return { plain, hash, id: randomUUID() };
 }
 
@@ -47,7 +44,7 @@ export async function validateApiKey(
   scopes: string[];
 } | null> {
   if (!token.startsWith(API_KEY_PREFIX)) return null;
-  const hash = createHash("sha256").update(token).digest("hex");
+  const hash = sha256Hex(token);
   const row = await repository.findByHash(hash);
   if (!row) return null;
   if (row.revokedAt) return null;

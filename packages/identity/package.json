@@ -21,7 +21,8 @@
     "clean": "rimraf dist .turbo"
   },
   "dependencies": {
-    "@aaspai/contracts": "workspace:*"
+    "@aaspai/contracts": "workspace:*",
+    "@aaspai/crypto": "workspace:*"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.1.1",

@@ -9,7 +9,7 @@ export default defineConfig({
     name: "Aaspai Project",
   },
   defaults: {
-    adapter: "claude_local",
+    adapter: "opencode_local",
     runtime: { kind: "local" },
   },
   agents: { root: "./.aaspai/agents" },

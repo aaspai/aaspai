@@ -139,6 +139,11 @@ describe("createBetterAuthVerifier", () => {
     it("returns a principal when the session API yields a valid record", async () => {
       const v = createBetterAuthVerifier({
         sessionApi: makeSessionApi(async () => sessionRecord()),
+        resolveSessionAuthorization: async () => ({
+          organizationId: "org_1",
+          roles: ["member"],
+          scopes: ["read"],
+        }),
       });
       const result = await v.verify({ credential: { kind: "session", value: "Cookie: sid=abc" } });
       expect(result.ok).toBe(true);
@@ -178,7 +183,7 @@ describe("createBetterAuthVerifier", () => {
       expect(result).toEqual({ ok: false, code: "invalid_credential" });
     });
 
-    it("uses the active organization from the session when no resolver is configured", async () => {
+    it("fails closed when no authorization resolver is configured", async () => {
       const v = createBetterAuthVerifier({
         sessionApi: makeSessionApi(async () => ({
           user: { id: "u1" },
@@ -186,12 +191,7 @@ describe("createBetterAuthVerifier", () => {
         })),
       });
       const result = await v.verify({ credential: { kind: "session", value: "cookie" } });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.principal.organizationId).toBe("org_x");
-      // B1: defaults to read-only member access
-      expect(result.principal.roles).toEqual(["member"]);
-      expect(result.principal.scopes).toEqual(["read"]);
+      expect(result).toEqual({ ok: false, code: "invalid_credential" });
     });
 
     it("lets the resolver override organization, roles, and scopes", async () => {
@@ -217,6 +217,11 @@ describe("createBetterAuthVerifier", () => {
           user: { id: "u1" },
           session: { id: "s1", activeOrganizationId: "o1", twoFactorRedirect: true },
         })),
+        resolveSessionAuthorization: async () => ({
+          organizationId: "o1",
+          roles: ["member"],
+          scopes: ["read"],
+        }),
       });
       const result = await v.verify({ credential: { kind: "session", value: "cookie" } });
       expect(result.ok).toBe(true);

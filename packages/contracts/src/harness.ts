@@ -9,14 +9,17 @@ import {
 import type { RunProcessOptions, RunProcessResult } from "./runtime";
 
 /**
- * Version of the harness (adapter) contract.
- *
- * Bump when AdapterExecutionContext, AdapterExecutionResult, or
- * TranscriptEntry change in a way that is not backward compatible.
+ * Current production harness contract version. Bump when
+ * AdapterExecutionContext, AdapterExecutionResult, or TranscriptEntry
+ * changes in a way that is not backward compatible.
  */
-export const HARNESS_PROTOCOL_VERSION = 1 as const;
+export const HARNESS_PROTOCOL_VERSION = 2 as const;
 
-/** All adapter type identifiers known to the foundation. */
+/**
+ * Adapter identifiers accepted by durable definitions. Only `opencode_local`
+ * is enabled by the production registry; the remaining values are retained
+ * for explicit migration errors in older persisted records.
+ */
 export const ADAPTER_TYPE_VALUES = [
   "claude_local",
   "codex_local",
@@ -64,6 +67,17 @@ export type AdapterRuntime = z.infer<typeof adapterRuntimeSchema>;
 /** Runtime-owned process boundary used by provider adapters. */
 export interface AdapterRuntimeExecution {
   run(options: RunProcessOptions): Promise<RunProcessResult>;
+  /** Optional long-lived process boundary used by server-based adapters. */
+  start?(
+    options: RunProcessOptions,
+    hooks?: {
+      onStdout?(chunk: Uint8Array): Promise<void> | void;
+      onStderr?(chunk: Uint8Array): Promise<void> | void;
+    },
+  ): Promise<{
+    wait(): Promise<unknown>;
+    cancel(reason?: string): Promise<void>;
+  }>;
   identity?: Record<string, unknown>;
   /**
    * Environment selected by the runtime owner for adapter-owned child
@@ -74,6 +88,14 @@ export interface AdapterRuntimeExecution {
     env: Record<string, string>;
     inheritEnv?: boolean;
   };
+  /** Expose a private runtime port for a server living in a remote sandbox. */
+  exposeEndpoint?(options: { port: number; protocol?: "http" | "https" | "tcp" }): Promise<{
+    url: string;
+    headers?: Record<string, string>;
+    expiresAt?: string;
+    refresh?(): Promise<unknown>;
+    close?(): Promise<void>;
+  }>;
 }
 
 /** Token accounting for a run. */
@@ -149,12 +171,18 @@ export const adapterRuntimeServiceReportSchema = z
   .strict();
 export type AdapterRuntimeServiceReport = z.infer<typeof adapterRuntimeServiceReportSchema>;
 
+/** Final disposition of a single adapter execution. */
+export const executionStatusSchema = z.enum(["completed", "failed", "cancelled", "timed_out"]);
+export type ExecutionStatus = z.infer<typeof executionStatusSchema>;
+
 export const adapterExecutionResultSchema = z
   .object({
     protocolVersion: z.literal(HARNESS_PROTOCOL_VERSION),
     exitCode: z.number().int().nullable(),
     signal: z.string().trim().min(1).max(32).optional(),
     timedOut: z.boolean().default(false),
+    /** High-level run disposition; orchestrators consume this instead of exitCode/signal. */
+    status: executionStatusSchema.optional(),
     errorMessage: z.string().trim().min(1).max(8_192).optional(),
     errorCode: z.string().trim().min(1).max(128).optional(),
     errorFamily: errorFamilySchema.optional(),
@@ -222,35 +250,41 @@ export const adapterExecutionContextSchema = z
         message: "signal must be an AbortSignal",
       })
       .optional(),
-    execution: z
-      .custom<AdapterRuntimeExecution>((v) => typeof v === "object" && v !== null, {
-        message: "execution must be a runtime process boundary",
-      })
-      .optional(),
+    /**
+     * The runtime process boundary. REQUIRED: even local execution
+     * goes through a runtime (`runtime.run()`), so adapters never
+     * spawn / kill / taskkill processes themselves. Callers that run
+     * directly on the host inject a local runtime here.
+     */
+    execution: z.custom<AdapterRuntimeExecution>((v) => typeof v === "object" && v !== null, {
+      message: "execution must be a runtime process boundary",
+    }),
     onLog: z.custom<(stream: "stdout" | "stderr", chunk: string) => Promise<void> | void>(
       (v) => typeof v === "function",
       { message: "onLog must be a function" },
     ),
     /**
-     * Optional: a tool dispatcher the adapter can use to handle
-     * `tool_use` events. When provided, the adapter looks up the
-     * tool by name and (if found) awaits the dispatcher's
-     * `invoke(name, input)` method, then emits the result back
-     * through `onLog` / `onRuntimeProgress` as a `tool_result` event.
-     * The adapter does NOT itself decide what a tool does — it
-     * just routes the call.
+     * Semantic event channel (replaces JSON-string round-trips on
+     * `onLog`). Adapters that emit typed `HarnessEvent`s call this
+     * instead of serializing events back into `onLog` stdout chunks.
      */
-    tools: z
-      .custom<{
-        invoke(name: string, input: unknown, ctx: unknown): Promise<unknown>;
-        /** Look up a tool by name; returns null if unknown. */
-        get?(name: string): unknown;
-        /** List all available tool names. */
-        list?(): readonly string[];
-      }>((v) => typeof v === "object" && v !== null, {
-        message: "tools must be a tool-dispatcher object",
+    onEvent: z
+      .custom<(event: HarnessEvent) => Promise<void> | void>((v) => typeof v === "function", {
+        message: "onEvent must be a function",
       })
       .optional(),
+    /**
+     * Raw native process output channel, for observability/debugging.
+     * Untouched bytes from the child's stdout/stderr; distinct from
+     * `onLog` (which carries normalized/structured lines today) and
+     * from `onEvent` (typed semantic events).
+     */
+    onRawLog: z
+      .custom<(entry: RawLogEntry) => Promise<void> | void>((v) => typeof v === "function", {
+        message: "onRawLog must be a function",
+      })
+      .optional(),
+    /** OpenCode-native tools are caller-prepared and observed through events. */
     onMeta: z
       .custom<(meta: Record<string, unknown>) => Promise<void> | void>(
         (v) => typeof v === "function",
@@ -265,6 +299,36 @@ export const adapterExecutionContextSchema = z
     onSpawn: z
       .custom<(meta: { pid: number }) => Promise<void> | void>((v) => typeof v === "function", {
         message: "onSpawn must be a function",
+      })
+      .optional(),
+    /**
+     * Interactive question/answer channel. When the adapter needs a
+     * human decision it calls this with the prompt (and optional
+     * choices). The handler pauses the session (`paused_for_question`)
+     * and resolves with the human's answer once they respond. Adapters
+     * that cannot block (for example, a detached transport) may call it
+     * fire-and-forget.
+     */
+    onQuestion: z
+      .custom<
+        (question: {
+          prompt: string;
+          options?: string[];
+        }) => Promise<string | undefined> | string | undefined
+      >((v) => typeof v === "function", {
+        message: "onQuestion must be a function",
+      })
+      .optional(),
+    /** Permission decisions are distinct from free-form questions. */
+    onPermission: z
+      .custom<
+        (permission: {
+          toolName: string;
+          description?: string;
+          input?: unknown;
+        }) => Promise<"once" | "always" | "reject"> | "once" | "always" | "reject"
+      >((v) => typeof v === "function", {
+        message: "onPermission must be a function",
       })
       .optional(),
   })
@@ -365,6 +429,161 @@ export const transcriptEntrySchema = z.discriminatedUnion("kind", [
 ]);
 export type TranscriptEntry = z.infer<typeof transcriptEntrySchema>;
 
+/**
+ * Canonical, typed event emitted by an adapter as it runs.
+ *
+ * This is the semantic channel that sessions / UI / orchestration
+ * consume. It is deliberately separate from:
+ *  - `onRawLog` — the untouched native process bytes (observability),
+ *  - `onRuntimeProgress` — coarse transfer-phase progress
+ *    (`git_sync` / `upload` / `download`, …).
+ *
+ * Adapters decode their native protocol once and emit `HarnessEvent`s;
+ * they must NOT re-serialize semantic events back into JSON strings on
+ * the raw-log channel (that's what `onEvent` is for).
+ */
+export const harnessEventSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("run.started"),
+      timestamp: z.string(),
+      runId: z.string().trim().min(1).max(128),
+      sessionId: z.string().trim().min(1).max(512).optional(),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+      adapter: z.string().trim().min(1).max(64),
+      model: z.string().trim().min(1).max(256).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("native.session"),
+      timestamp: z.string(),
+      nativeSessionId: z.string().trim().min(1).max(512),
+      sessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("assistant.delta"),
+      timestamp: z.string(),
+      text: z.string(),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("reasoning.delta"),
+      timestamp: z.string(),
+      text: z.string(),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("tool.started"),
+      timestamp: z.string(),
+      toolName: z.string().trim().min(1).max(128),
+      toolCallId: z.string().trim().min(1).max(256).optional(),
+      input: z.unknown().optional(),
+      /**
+       * Who actually runs this tool. `native` = the provider executes it
+       * in its own loop (harness only observes). `aaspai` = AASPAI
+       * owns execution (adapter-defined tool). The distinction stops
+       * double-execution of native tools.
+       */
+      executionAuthority: z.enum(["native", "aaspai"]),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("tool.completed"),
+      timestamp: z.string(),
+      toolName: z.string().trim().min(1).max(128),
+      toolCallId: z.string().trim().min(1).max(256).optional(),
+      input: z.unknown().optional(),
+      output: z.unknown().optional(),
+      executionAuthority: z.enum(["native", "aaspai"]),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("tool.failed"),
+      timestamp: z.string(),
+      toolName: z.string().trim().min(1).max(128),
+      toolCallId: z.string().trim().min(1).max(256).optional(),
+      input: z.unknown().optional(),
+      output: z.unknown().optional(),
+      errorMessage: z.string().max(8_192).optional(),
+      executionAuthority: z.enum(["native", "aaspai"]),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("step.started"),
+      timestamp: z.string(),
+      step: z.number().int().nonnegative().optional(),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("step.completed"),
+      timestamp: z.string(),
+      step: z.number().int().nonnegative().optional(),
+      usage: usageSummarySchema.optional(),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("usage"),
+      timestamp: z.string(),
+      usage: usageSummarySchema,
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("warning"),
+      timestamp: z.string(),
+      message: z.string().trim().min(1).max(8_192),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("error"),
+      timestamp: z.string(),
+      message: z.string().trim().min(1).max(8_192),
+      code: z.string().trim().min(1).max(128).optional(),
+      family: errorFamilySchema.optional(),
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("run.completed"),
+      timestamp: z.string(),
+      status: executionStatusSchema,
+      nativeSessionId: z.string().trim().min(1).max(512).optional(),
+    })
+    .strict(),
+]);
+export type HarnessEvent = z.infer<typeof harnessEventSchema>;
+
+/** One chunk of untouched native process output (for observability). */
+export const rawLogEntrySchema = z
+  .object({
+    stream: z.enum(["stdout", "stderr"]),
+    chunk: z.string(),
+    ts: z.string().optional(),
+  })
+  .strict();
+export type RawLogEntry = z.infer<typeof rawLogEntrySchema>;
+
 /** Static metadata describing an adapter for the host registry. */
 export const adapterInfoSchema = z
   .object({
@@ -390,8 +609,7 @@ export const adapterInfoSchema = z
 export type AdapterInfo = z.infer<typeof adapterInfoSchema>;
 
 /* ────────────────────────────────────────────────────────────────────
- *  Tier 3 (this pass): typed ResultJson + Usage + SessionEvent enum +
- *  Adapter.compact / cancel / describe / fork operations
+ * Persisted result, usage, session-event, and native-session control schemas.
  *  ──────────────────────────────────────────────────────────────────── */
 
 /** Token usage breakdown (per step or per run). */
@@ -602,7 +820,7 @@ export const adapterDescribeSchema = z
     type: adapterTypeSchema,
     label: z.string(),
     models: z.array(z.object({ id: z.string(), label: z.string() }).strict()).optional(),
-    /** Native tools the adapter ships with (not via ctx.tools). */
+    /** Native tools the adapter exposes through its prepared configuration. */
     nativeTools: z.array(z.string()).optional(),
     /** Whether the adapter supports out-of-band cancel. */
     supportsCancel: z.boolean().default(false),
@@ -610,11 +828,11 @@ export const adapterDescribeSchema = z
     supportsCompact: z.boolean().default(false),
     /** Whether the adapter supports explicit fork. */
     supportsFork: z.boolean().default(false),
-    /** Whether the adapter supports `--session` resume. */
+    /** Whether the adapter supports native-session resume. */
     supportsResume: z.boolean().default(false),
     /** Whether the adapter supports thinking/extended-reasoning. */
     supportsThinking: z.boolean().default(false),
-    /** Whether the adapter supports `--session <id> --fork`. */
+    /** Whether the adapter supports forking a native session. */
     supportsForkSession: z.boolean().default(false),
     /** Max output tokens (best-effort). */
     maxOutputTokens: nonNegativeIntegerSchema.optional(),
@@ -633,7 +851,37 @@ export const adapterSessionCodecSchema = z
   .strict();
 export type AdapterSessionCodec = z.infer<typeof adapterSessionCodecSchema>;
 
-/** The full adapter contract. */
+/**
+ * The adapter's handle on a provider-native session, persisted by the
+ * sessions layer so a later run can decide whether resuming that native
+ * session is safe (same harness / runtime / workspace) or must start
+ * fresh (PR8).
+ */
+export const nativeSessionBindingSchema = z
+  .object({
+    harness: z.string().trim().min(1).max(64),
+    nativeSessionId: z.string().trim().min(1).max(512),
+    driver: z.string().trim().min(1).max(64).optional(),
+    runtime: z
+      .object({
+        kind: z.string().trim().min(1).max(64),
+        instanceId: z.string().trim().min(1).max(256).optional(),
+      })
+      .strict()
+      .optional(),
+    workspace: z
+      .object({
+        id: z.string().trim().min(1).max(256).optional(),
+        cwd: z.string().trim().min(1).max(8_192),
+      })
+      .strict()
+      .optional(),
+    nativeVersion: z.string().trim().min(1).max(256).optional(),
+  })
+  .strict();
+export type NativeSessionBinding = z.infer<typeof nativeSessionBindingSchema>;
+
+/** Internal native transport contract consumed by `HarnessController`. */
 export const serverAdapterModuleSchema = z
   .object({
     info: adapterInfoSchema,
@@ -645,7 +893,7 @@ export const serverAdapterModuleSchema = z
       (ctx: AdapterEnvironmentTestContext) => Promise<AdapterEnvironmentTestResult>
     >((v) => typeof v === "function", { message: "testEnvironment must be a function" }),
     sessionCodec: adapterSessionCodecSchema.optional(),
-    // Tier 3 (this pass): out-of-band operations. All optional; default = "not supported".
+    // Optional native-session controls. Unsupported operations fail closed.
     cancel: z
       .custom<(req: AdapterCancelRequest) => Promise<AdapterCancelResult>>(
         (v) => typeof v === "function",
@@ -704,3 +952,121 @@ export const adapterConfigSchemaSchema = z
   })
   .strict();
 export type AdapterConfigSchema = z.infer<typeof adapterConfigSchemaSchema>;
+
+/** Run-bound harness surface: every operation belongs to one native session. */
+
+export const harnessInteractionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      id: identifierSchema,
+      kind: z.literal("question"),
+      prompt: z.string().trim().min(1).max(8_192),
+      options: z.array(z.string().trim().min(1).max(256)).max(64).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: identifierSchema,
+      kind: z.literal("permission"),
+      toolName: z.string().trim().min(1).max(256),
+      description: z.string().max(8_192).optional(),
+      input: z.unknown().optional(),
+    })
+    .strict(),
+]);
+export type HarnessInteraction = z.infer<typeof harnessInteractionSchema>;
+
+export const harnessInteractionResponseSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("question"), answer: z.string().max(8_192) }).strict(),
+  z
+    .object({ kind: z.literal("permission"), response: z.enum(["once", "always", "reject"]) })
+    .strict(),
+]);
+export type HarnessInteractionResponse = z.infer<typeof harnessInteractionResponseSchema>;
+
+export const harnessRunResultSchema = z
+  .object({
+    status: z.enum(["completed", "failed", "cancelled", "timed_out", "lost"]),
+    exitCode: z.number().int().nullable().optional(),
+    usage: usageSummarySchema.optional(),
+    error: z.string().max(8_192).optional(),
+  })
+  .strict();
+export type HarnessRunResult = z.infer<typeof harnessRunResultSchema>;
+
+export const harnessRunSnapshotSchema = z
+  .object({
+    protocolVersion: z.literal(HARNESS_PROTOCOL_VERSION),
+    executionId: identifierSchema,
+    revision: nonNegativeIntegerSchema,
+    state: z.enum([
+      "created",
+      "starting",
+      "recovering",
+      "running",
+      "waiting_for_interaction",
+      "cancelling",
+      "completed",
+      "failed",
+      "cancelled",
+      "timed_out",
+      "lost",
+    ]),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    startedAt: z.string().optional(),
+    finishedAt: z.string().optional(),
+    runtimeBinding: jsonObjectSchema.optional(),
+    nativeSessionBinding: nativeSessionBindingSchema.optional(),
+    pendingInteractions: z.array(harnessInteractionSchema).max(128),
+    result: harnessRunResultSchema.optional(),
+    error: z.string().max(8_192).optional(),
+  })
+  .strict();
+export type HarnessRunSnapshot = z.infer<typeof harnessRunSnapshotSchema>;
+
+export interface HarnessEventV2 {
+  protocolVersion: typeof HARNESS_PROTOCOL_VERSION;
+  executionId: string;
+  sequence: number;
+  timestamp: string;
+  adapter: string;
+  nativeSessionId?: string;
+  payload: HarnessEvent;
+}
+
+export interface HarnessAdapterRun {
+  readonly executionId: string;
+  readonly nativeSessionId?: string;
+  events(): AsyncIterable<HarnessEventV2>;
+  respond(interactionId: string, response: HarnessInteractionResponse): Promise<void>;
+  abort(reason?: string): Promise<void>;
+  fork?(fromMessageId?: string): Promise<HarnessAdapterRun>;
+  wait(): Promise<HarnessRunResult>;
+  close(): Promise<void>;
+}
+
+export interface HarnessAdapter<TConfig = unknown> {
+  readonly manifest: {
+    type: string;
+    label: string;
+    version: number;
+    status: "ready" | "experimental" | "disabled";
+    capabilities: Record<string, boolean>;
+  };
+  validateConfig(
+    input: unknown,
+  ): Promise<{ ok: true; config: TConfig } | { ok: false; errors: string[] }>;
+  probe(ctx: { config: TConfig; runtime?: unknown }): Promise<{ ok: boolean; error?: string }>;
+  start(ctx: {
+    config: TConfig;
+    runtime: unknown;
+    executionId: string;
+  }): Promise<HarnessAdapterRun>;
+  recover?(ctx: {
+    config: TConfig;
+    runtime: unknown;
+    executionId: string;
+    nativeSessionId: string;
+  }): Promise<HarnessAdapterRun | null>;
+}

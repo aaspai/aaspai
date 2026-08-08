@@ -2,12 +2,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { ExecutionPlan, ExecutionWorkspace } from "@aaspai/contracts/execution";
-import type { RunProcessResult } from "@aaspai/contracts/runtime";
+import type { RunProcessOptions, RunProcessResult } from "@aaspai/contracts/runtime";
 import type { DbHandle } from "@aaspai/db";
 import { createDb, runMigrations } from "@aaspai/db";
-import type { RuntimeTarget } from "@aaspai/runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExecutionPlanRunner } from "../src/plan-runner";
+import type { ManagedRuntimeBoundary } from "../src/runtime-boundary";
 import { ExecutionStore } from "../src/store";
 
 describe("ExecutionPlanRunner", () => {
@@ -32,31 +32,17 @@ describe("ExecutionPlanRunner", () => {
 
   it("forces the assigned worktree as cwd and completes the attempt", async () => {
     const attemptId = "attempt_runner";
-    await store.createAttempt({
-      organizationId: "org_test",
-      workflowRunId: "run_test",
-      workItemId: "work_test",
-      agentId: "agent_test",
-      harness: "dry_run",
-      id: attemptId,
-    });
+    await createAttempt(store, attemptId);
     const workspace = readyWorkspace(attemptId, testDirectory);
-    const result: RunProcessResult = {
-      exitCode: 0,
-      timedOut: false,
-      stdout: "done",
-      stderr: "",
-      startedAt: new Date().toISOString(),
-      finishedAt: new Date().toISOString(),
-      durationMs: 4,
-    };
-    const run = vi.fn(async (target, options) => {
-      expect(target.cwd).toBe(workspace.path);
+    const result = successfulResult();
+    const run = vi.fn(async (options: RunProcessOptions) => {
       expect(options.cwd).toBe(workspace.path);
       return result;
     });
-    const targetPicker = vi.fn((): RuntimeTarget => ({ run }) as unknown as RuntimeTarget);
-    const runner = new ExecutionPlanRunner(store, targetPicker);
+    const close = vi.fn(async () => undefined);
+    const runner = new ExecutionPlanRunner(store, async (_target, cwd) =>
+      boundary(run, close, cwd),
+    );
 
     await expect(
       runner.run({
@@ -68,26 +54,24 @@ describe("ExecutionPlanRunner", () => {
     ).resolves.toEqual(result);
 
     expect(run).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
     await expect(store.listEvents(attemptId)).resolves.toMatchObject([
       { seq: 1, type: "attempt.started" },
       { seq: 2, type: "process.completed" },
     ]);
-    const stored = await store.transitionAttempt(attemptId, "failed").catch(() => null);
-    expect(stored).toBeNull();
   });
 
   it("rejects a plan assigned to a different workspace", async () => {
     const attemptId = "attempt_runner";
-    await store.createAttempt({
-      organizationId: "org_test",
-      workflowRunId: "run_test",
-      workItemId: "work_test",
-      agentId: "agent_test",
-      harness: "dry_run",
-      id: attemptId,
-    });
+    await createAttempt(store, attemptId);
     await expect(
-      new ExecutionPlanRunner(store, () => ({ run: vi.fn() }) as unknown as RuntimeTarget).run({
+      new ExecutionPlanRunner(store, async () =>
+        boundary(
+          vi.fn(async () => successfulResult()),
+          vi.fn(async () => undefined),
+          testDirectory,
+        ),
+      ).run({
         plan: planFor(attemptId),
         workspace: readyWorkspace("attempt_other", testDirectory),
         command: "node",
@@ -97,31 +81,21 @@ describe("ExecutionPlanRunner", () => {
 
   it("persists cancellation when the runtime signal is aborted", async () => {
     const attemptId = "attempt_cancelled";
-    await store.createAttempt({
-      organizationId: "org_test",
-      workflowRunId: "run_test",
-      workItemId: "work_test",
-      agentId: "agent_test",
-      harness: "dry_run",
-      id: attemptId,
-    });
+    await createAttempt(store, attemptId);
     const controller = new AbortController();
-    const result: RunProcessResult = {
-      exitCode: null,
-      signal: "SIGTERM",
-      timedOut: false,
-      stdout: "",
-      stderr: "",
-      startedAt: new Date().toISOString(),
-      finishedAt: new Date().toISOString(),
-      durationMs: 10,
-    };
-    const run = vi.fn(async (_target, options) => {
+    const result = successfulResult({ exitCode: null, signal: "SIGTERM" });
+    const run = vi.fn(async (options: RunProcessOptions) => {
       expect(options.signal).toBe(controller.signal);
       controller.abort();
       return result;
     });
-    const runner = new ExecutionPlanRunner(store, () => ({ run }) as unknown as RuntimeTarget);
+    const runner = new ExecutionPlanRunner(store, async (_target, cwd) =>
+      boundary(
+        run,
+        vi.fn(async () => undefined),
+        cwd,
+      ),
+    );
 
     await runner.run({
       plan: planFor(attemptId),
@@ -133,6 +107,42 @@ describe("ExecutionPlanRunner", () => {
     await expect(store.getAttempt(attemptId)).resolves.toMatchObject({ status: "cancelled" });
   });
 });
+
+async function createAttempt(store: ExecutionStore, id: string): Promise<void> {
+  await store.createAttempt({
+    organizationId: "org_test",
+    workflowRunId: "run_test",
+    workItemId: "work_test",
+    agentId: "agent_test",
+    harness: "opencode_local",
+    id,
+  });
+}
+
+function boundary(
+  run: (options: RunProcessOptions) => Promise<RunProcessResult>,
+  close: () => Promise<void>,
+  cwd: string,
+): ManagedRuntimeBoundary {
+  return {
+    execution: { identity: { kind: "local", cwd }, run },
+    close,
+  };
+}
+
+function successfulResult(overrides: Partial<RunProcessResult> = {}): RunProcessResult {
+  const now = new Date().toISOString();
+  return {
+    exitCode: 0,
+    timedOut: false,
+    stdout: "done",
+    stderr: "",
+    startedAt: now,
+    finishedAt: now,
+    durationMs: 4,
+    ...overrides,
+  };
+}
 
 function planFor(attemptId: string): ExecutionPlan {
   return {
@@ -148,7 +158,7 @@ function planFor(attemptId: string): ExecutionPlan {
       capturedAt: new Date().toISOString(),
     },
     target: { kind: "local", envPassthrough: false },
-    harness: "dry_run",
+    harness: "opencode_local",
     prompt: "Run the task",
     timeoutMs: null,
     runtimeConfig: {},

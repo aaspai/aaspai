@@ -92,11 +92,7 @@ export function agentCommand(): Command {
       "Role: ceo|cto|cmo|cfo|engineer|designer|pm|qa|devops|researcher|operator|general",
       "general",
     )
-    .option(
-      "-a, --adapter <adapter>",
-      "Adapter (e.g. dry_run_local, claude_local, opencode_cli)",
-      "dry_run_local",
-    )
+    .option("-a, --adapter <adapter>", "Adapter (production: opencode_local)", "opencode_local")
     .option("-m, --model <model>", "Model identifier (depends on adapter)")
     .option("--reports-to <agentId>", "Who this agent reports to (e.g. agent/ceo)")
     .option("--manages <ids>", "Comma-separated list of agents this one manages")
@@ -132,8 +128,8 @@ title: "${title}"
 description: >
   ${description}
 timestamp: ${new Date().toISOString()}
-adapter: ${opts.adapter ?? "dry_run_local"}
-model: ${opts.model ?? "aaspai-dryrun"}
+adapter: ${opts.adapter ?? "opencode_local"}
+model: ${opts.model ?? "opencode/big-pickle"}
 role: ${opts.role ?? "general"}
 reportsTo: ${opts.reportsTo ? opts.reportsTo : "null"}
 manages:
@@ -195,7 +191,7 @@ ${description}
         console.log(pc.green(`✓ Created ${dir}/`));
         console.log("");
         console.log(pc.gray(`  id:        ${id}`));
-        console.log(pc.gray(`  adapter:   ${opts.adapter ?? "dry_run_local"}`));
+        console.log(pc.gray(`  adapter:   ${opts.adapter ?? "opencode_local"}`));
         console.log(pc.gray(`  model:     ${opts.model ?? "aaspai-dryrun"}`));
         console.log(pc.gray(`  role:      ${opts.role ?? "general"}`));
         console.log(pc.gray(`  reportsTo: ${opts.reportsTo ?? "(root)"}`));

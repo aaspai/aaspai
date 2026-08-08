@@ -56,7 +56,7 @@ export function registerSessionRoutes(
       agentId: body.agentId,
       payloadJson: JSON.stringify({
         prompt: body.prompt,
-        adapter: body.adapter ?? "dry_run_local",
+        adapter: body.adapter ?? "opencode_local",
         runtime: body.runtime ?? { kind: "local" },
         sessionId,
         traceId: sessionId,
@@ -70,7 +70,7 @@ export function registerSessionRoutes(
       organizationId: auth.principal.organizationId,
       wakeupId,
       agentId: body.agentId,
-      adapter: body.adapter ?? "dry_run_local",
+      adapter: body.adapter ?? "opencode_local",
       runtimeJson: JSON.stringify(body.runtime ?? { kind: "local" }),
       prompt: body.prompt,
       configJson: "{}",

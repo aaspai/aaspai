@@ -262,7 +262,7 @@ export class CompanyCommandService {
       ),
     }));
     const provider =
-      typeof profile.policy.provider === "string" ? profile.policy.provider : "dry_run_local";
+      typeof profile.policy.provider === "string" ? profile.policy.provider : "opencode_local";
     const runtime = companyRuntime(profile.policy, provider);
     const staffingPrompt = [
       "The founder approved the company portfolio. Staff each unstaffed project with the smallest useful team.",
@@ -348,7 +348,7 @@ export class CompanyCommandService {
         .where(eq(goals.organizationId, command.organizationId))
     ).filter((objective) => isCompanyObjective(objective.id));
     const provider =
-      typeof profile.policy.provider === "string" ? profile.policy.provider : "dry_run_local";
+      typeof profile.policy.provider === "string" ? profile.policy.provider : "opencode_local";
     const runtime = companyRuntime(profile.policy, provider);
     const prompt = [
       "Run the company's first bounded CEO discovery.",

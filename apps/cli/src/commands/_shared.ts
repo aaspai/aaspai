@@ -86,8 +86,8 @@ When the human says "reset" or starts a new task, keep the repository and
 audit history but discard stale conversational assumptions. Re-read this
 file, \`STATE.md\`, recent sessions, and the current branch/diff. Summarize
 what is known, identify unfinished work, and establish a new goal before
-delegating. If the human asks for Codex, use the existing \`codex_local\`
-adapter explicitly; do not create a new adapter or bypass session logging.
+delegating. If the human asks for a different provider, explain that only the production OpenCode server adapter is enabled.
+do not create a new adapter or bypass session logging.
 `,
   AGENT_INDEX: `# Agents
 
@@ -107,8 +107,8 @@ description: >
   provision new roles when requested, and report on the state of the work.
   They never write code; they delegate.
 timestamp: 2026-07-22T00:00:00Z
-adapter: dry_run_local
-model: aaspai-dryrun
+adapter: opencode_local
+model: opencode/big-pickle
 role: ceo
 reportsTo: null
 manages:
@@ -202,7 +202,7 @@ When work is needed, delegate with a complete brief containing:
 
 Use the session system for execution, for example:
 
-\`aaspai session start --agent agent/developer --adapter codex_local --prompt "<complete brief>"\`
+\`aaspai session start --agent agent/developer --adapter opencode_local --prompt "<complete brief>"\`
 
 Use \`agent/tester\` for independent verification and \`agent/operator\` for
 loops, state, scheduling, and operational triage. Keep the session IDs; they
@@ -244,8 +244,8 @@ what was and was not persisted.
 - \`aaspai agent list|show|validate\` - inspect the workforce.
 - \`aaspai session list|show|start|pause|resume|stop|cancel\` - manage runs.
 - \`aaspai loop list|show|fire|pause|resume\` - inspect or operate loops.
-- \`aaspai chat ceo --adapter codex_local --model gpt-5-codex\` - use Codex
-  explicitly for a CEO conversation when requested.
+- \`aaspai chat ceo --adapter opencode_local --model opencode/big-pickle\` - use
+  the production OpenCode server for a CEO conversation.
 
 Do not invent commands. If a capability is not implemented, say so and
 propose the next implementation task.
@@ -276,7 +276,7 @@ description: >
   The orchestration worker. Owns the loop library, dispatches to
   workers, reads STATE.md before each wake.
 timestamp: 2026-07-21T00:00:00Z
-adapter: opencode_cli
+adapter: opencode_local
 model: opencode-go/mimo-v2.5
 role: operator
 reportsTo: agent/ceo
@@ -298,7 +298,7 @@ knowledge:
     - "**"
   exclude: []
 runtime:
-  default: { kind: sandbox, provider: daytona, remoteCwd: /workspace }
+  default: { kind: local, envPassthrough: false }
 budget:
   perRun: { tokens: 50000, costUsd: 0.00 }
   perDay: { tokens: 500000, costUsd: 0.00, runs: 50 }
@@ -317,10 +317,10 @@ directly; create issues and assign them.
 3. For each finding, decide: delegate, defer, or escalate.
 4. Write a short plan back.
 
-## Live LLM via opencode_cli
+## Live OpenCode server
 
 This agent is wired to the \`opencode\` CLI (npm i -g opencode-ai).
-Authentication is via \`~/.local/share/opencode/auth.json\`. The
+Credentials are injected through the runtime process environment; no global auth file is written.
 \`model:\` field above picks the model — try \`opencode models\` to see
 all available options. Examples:
   - opencode-go/mimo-v2.5        (Xiaomi MiMo V2.5)
@@ -336,7 +336,7 @@ title: "Developer"
 description: >
   Writes code. Reports to the ceo.
 timestamp: 2026-07-21T00:00:00Z
-adapter: opencode_cli
+adapter: opencode_local
 model: opencode-go/mimo-v2.5
 role: engineer
 reportsTo: agent/ceo
@@ -360,7 +360,7 @@ knowledge:
     - "**"
   exclude: []
 runtime:
-  default: { kind: sandbox, provider: daytona, remoteCwd: /workspace }
+  default: { kind: local, envPassthrough: false }
 budget:
   perRun: { tokens: 80000, costUsd: 3.00 }
   perDay: { tokens: 800000, costUsd: 30.00, runs: 50 }
@@ -379,7 +379,7 @@ title: "Tester"
 description: >
   Writes and runs tests. Reports to the ceo.
 timestamp: 2026-07-21T00:00:00Z
-adapter: opencode_cli
+adapter: opencode_local
 model: opencode-go/mimo-v2.5
 role: qa
 reportsTo: agent/ceo
@@ -402,7 +402,7 @@ knowledge:
     - "**"
   exclude: []
 runtime:
-  default: { kind: sandbox, provider: daytona, remoteCwd: /workspace }
+  default: { kind: local, envPassthrough: false }
 budget:
   perRun: { tokens: 50000, costUsd: 2.00 }
   perDay: { tokens: 500000, costUsd: 20.00, runs: 50 }
@@ -506,7 +506,7 @@ export default defineConfig({
     name: "Aaspai Project",
   },
   defaults: {
-    adapter: "claude_local",
+    adapter: "opencode_local",
     runtime: { kind: "local" },
   },
   agents: { root: "./.aaspai/agents" },

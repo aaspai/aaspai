@@ -81,7 +81,7 @@ describe("execution governance API", () => {
     const schedule = await app.request(`/v1/execution/workflows/${fixture.run.id}/schedule`, {
       method: "POST",
       headers: { authorization: "Bearer governance-write", "content-type": "application/json" },
-      body: JSON.stringify({ agentId: "maker", harness: "dry_run_local" }),
+      body: JSON.stringify({ agentId: "maker", harness: "opencode_local" }),
     });
     expect(schedule.status).toBe(202);
     const scheduleBody = (await schedule.json()) as {
@@ -98,7 +98,7 @@ describe("execution governance API", () => {
       {
         method: "POST",
         headers: { authorization: "Bearer governance-write", "content-type": "application/json" },
-        body: JSON.stringify({ agentId: "checker", harness: "dry_run_local" }),
+        body: JSON.stringify({ agentId: "checker", harness: "opencode_local" }),
       },
     );
     expect(checkerResponse.status).toBe(201);
@@ -172,7 +172,7 @@ describe("execution governance API", () => {
         goalId: fixture.lineage.goalId,
         workflowRunId: fixture.run.id,
         agentId: "maker",
-        harness: "dry_run_local",
+        harness: "opencode_local",
       },
       async () => "succeeded",
     );
@@ -317,7 +317,7 @@ describe("execution governance API", () => {
         goalId: fixture.lineage.goalId,
         workflowRunId: fixture.run.id,
         agentId: "maker",
-        harness: "dry_run_local",
+        harness: "opencode_local",
       },
       async ({ attempt }) => {
         await store.recordDeliveryCommit(item.id, attempt.id, commitSha, "worker/pr-delivery");

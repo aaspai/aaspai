@@ -1,11 +1,6 @@
 import type { AuthPrincipal } from "@aaspai/contracts";
 import { describe, expect, it } from "vitest";
-import {
-  AuthVerificationError,
-  authorizePrincipal,
-  InMemoryAuthVerifier,
-  safeAuthMessage,
-} from "../src";
+import { AuthVerificationError, InMemoryAuthVerifier, safeAuthMessage } from "../src";
 
 const sessionPrincipal: AuthPrincipal = {
   protocolVersion: 1,
@@ -15,16 +10,6 @@ const sessionPrincipal: AuthPrincipal = {
   roles: ["member"],
   scopes: ["read"],
   authMethod: "session",
-};
-
-const apiKeyPrincipal: AuthPrincipal = {
-  protocolVersion: 1,
-  userId: "user-2",
-  organizationId: "org-2",
-  apiKeyId: "key-2",
-  roles: ["operator"],
-  scopes: ["read", "deploy"],
-  authMethod: "api_key",
 };
 
 describe("API-owned auth verifier port", () => {
@@ -59,28 +44,6 @@ describe("API-owned auth verifier port", () => {
     expect(result).toEqual({ ok: true, principal: sessionPrincipal });
     expect(JSON.stringify(result)).not.toContain("valid-token");
     expect(JSON.stringify(result)).not.toContain("credential");
-  });
-
-  it("applies organization, scope, and role checks without leaking details", () => {
-    expect(authorizePrincipal(sessionPrincipal, { organizationId: "org-2" })).toEqual({
-      ok: false,
-      code: "organization_denied",
-    });
-    expect(authorizePrincipal(sessionPrincipal, { requiredScopes: ["deploy"] })).toEqual({
-      ok: false,
-      code: "scope_denied",
-    });
-    expect(authorizePrincipal(sessionPrincipal, { requiredRoles: ["operator"] })).toEqual({
-      ok: false,
-      code: "role_denied",
-    });
-    expect(
-      authorizePrincipal(apiKeyPrincipal, {
-        organizationId: "org-2",
-        requiredScopes: ["read"],
-        requiredRoles: ["operator"],
-      }),
-    ).toEqual({ ok: true, principal: apiKeyPrincipal });
   });
 
   it("uses stable sanitized error messages", () => {

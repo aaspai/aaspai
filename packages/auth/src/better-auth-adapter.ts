@@ -5,10 +5,7 @@ import {
   apiScopeSchema,
   authPrincipalSchema,
 } from "@aaspai/contracts";
-import { getLogger } from "@aaspai/observability";
 import type { AuthVerifier, AuthVerifyInput } from "./port";
-
-const log = getLogger("auth.better-auth-adapter");
 
 /**
  * The small subset of Better Auth's server API consumed by the API process.
@@ -20,9 +17,9 @@ export interface BetterAuthSessionApi {
 }
 
 export interface BetterAuthSessionAuthorization {
-  organizationId?: string | null;
-  roles?: readonly string[];
-  scopes?: readonly ApiScope[];
+  organizationId: string;
+  roles: readonly string[];
+  scopes: readonly ApiScope[];
 }
 
 export interface BetterAuthApiKeyIdentity {
@@ -120,23 +117,12 @@ function parseSession(value: unknown): BetterAuthSessionRecord | null {
  * deliberately the most restrictive defaults — read-only member access.
  * The warning log helps detect missing authorization resolvers in production.
  */
-const DEFAULT_SESSION_ROLES: readonly string[] = Object.freeze(["member"]);
-const DEFAULT_SESSION_SCOPES: readonly ApiScope[] = Object.freeze(["read"]);
-
 function principalFromSession(
   session: BetterAuthSessionRecord,
-  authorization: BetterAuthSessionAuthorization | null | undefined,
+  authorization: BetterAuthSessionAuthorization | null,
 ): AuthPrincipal | null {
-  const organizationId = authorization?.organizationId ?? session.session.activeOrganizationId;
-  if (!organizationId) return null;
-  if (!authorization?.roles || !authorization?.scopes) {
-    log.warn("principalFromSession fallback triggered", {
-      userId: session.user.id,
-      reason: "no authorization resolved, using default member/read",
-    });
-  }
-  const roles = authorization?.roles ?? DEFAULT_SESSION_ROLES;
-  const scopes = authorization?.scopes ?? DEFAULT_SESSION_SCOPES;
+  if (!authorization) return null;
+  const { organizationId, roles, scopes } = authorization;
   const parsedScopes = scopes.map((scope) => apiScopeSchema.safeParse(scope));
   if (parsedScopes.some((scope) => !scope.success)) return null;
   const principal = authPrincipalSchema.safeParse({
@@ -202,9 +188,8 @@ export function createBetterAuthVerifier(options: BetterAuthVerifierOptions): Au
         });
         const session = parseSession(raw);
         if (!session) return invalid();
-        const authorization = options.resolveSessionAuthorization
-          ? await options.resolveSessionAuthorization(session)
-          : undefined;
+        if (!options.resolveSessionAuthorization) return invalid();
+        const authorization = await options.resolveSessionAuthorization(session);
         const principal = principalFromSession(session, authorization);
         return principal ? { ok: true, principal } : invalid();
       } catch {

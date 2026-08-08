@@ -110,7 +110,7 @@ describe("execution scheduler API", () => {
         authorization: "Bearer scheduler-write",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ agentId: "agent_scheduler", harness: "dry_run_local" }),
+      body: JSON.stringify({ agentId: "agent_scheduler", harness: "opencode_local" }),
     });
     expect(schedule.status).toBe(202);
     await expect(schedule.json()).resolves.toMatchObject({
