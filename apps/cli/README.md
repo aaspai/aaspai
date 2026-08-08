@@ -1,151 +1,69 @@
-# aaspai
+# `@aaspai/cli`
 
-> Self-hosted control plane for AI-agent workforces.
-
-`aaspai` is a CLI for running a team of AI agents (operator, developer,
-tester, …) on a file-based config. You define agents, knowledge, and
-recurring loops in your project directory; `aaspai` reads them, schedules
-work, runs sessions, and records every decision to a local SQLite
-database.
-
-## Install
-
-```bash
-npm install -g @aaspai/cli
-```
-
-After install, the `aaspai` binary is on your PATH.
+The CLI is the local control-plane entry point for an aaspai workspace. It
+loads file-backed agents, knowledge, skills, and loops, then records durable
+session and execution state in SQLite.
 
 ## Quick start
 
 ```bash
-mkdir my-project && cd my-project
-aaspai init                 # scaffold definitions under .aaspai/
-aaspai agent list           # see the 4 seeded agents, including the CEO
+aaspai init
+aaspai agent list
 aaspai session start \
   --agent agent/operator \
-  --adapter dry_run_local \
+  --adapter opencode_local \
   --prompt "say hello"
 ```
 
-The CEO is the coordination entry point. To run a CEO conversation through
-the installed Codex CLI, opt in explicitly:
+The production harness registry exposes `opencode_local` only. It talks to an
+authenticated `opencode serve` process through HTTP/SSE and receives a Runtime
+V2 execution boundary from the caller. Runtime discovery exposes Local and
+Daytona; the CLI does not create or persist Daytona leases itself.
 
-```bash
-aaspai chat ceo --adapter codex_local --model gpt-5-codex
-```
+## Commands
 
-The CEO creates goals, delegates work through recorded sessions, and expects
-implementation work to finish with focused validation and a GitHub PR. Keep
-major issues in `docs/issues/` unless the human explicitly asks for a GitHub
-issue. Branch names must be descriptive and must not contain `codex`.
-
-The `dry_run_local` adapter synthesizes a response — no API key
-required, no network call. Switch to a real LLM by setting
-`adapter: opencode_cli` (or `claude_local`, `codex_local`, …) in
-`.aaspai/agents/operator/AGENT.md`.
-
-## What you get
-
-- **File-based config** — agents in `.aaspai/agents/<name>/AGENT.md`, knowledge
-  in `.aaspai/knowledge/<concept>/<file>.md` (OKF v0.1), loops in
-  `.aaspai/loops/<name>/LOOP.md`. Version your project config in git; the
-  runtime state (`.aaspai/state.db`) stays out.
-- **Two-storage tier** — your project (versioned) vs. `.aaspai/`
-  (gitignored). The CLI enforces the boundary.
-- **Provider harness adapters** — `dry_run_local`, Claude, Codex, Gemini,
-  Cursor local/cloud, Grok, Pi, Hermes local/gateway, OpenClaw gateway, and
-  OpenCode. Same agent
-  contract, swap adapters per agent.
-- **Seven starter loops** — `daily-triage`, `pr-babysitter`,
-  `ci-sweeper`, `dependency-sweeper`, `changelog-drafter`,
-  `post-merge-cleanup`, `issue-triage`. Each performs organization-scoped
-  discovery and produces a safe L1 report by default.
-- **Port-and-adapter design** — every external system (filesystem
-  watcher, LLM harness, DB) is behind a `Source` interface. Swap
-  SQLite for Postgres, or file-based config for a database, without
-  touching the orchestration code.
-
-## Subcommands
-
-```
-aaspai init          Scaffold a new aaspai project
-aaspai db            Database operations (migrate, status, backup)
-aaspai agent         Agent operations (list, show, validate)
-aaspai knowledge     Knowledge (OKF) operations
-aaspai loop          Loop operations (create, list, show, fire, pause, resume, tick)
-aaspai session       Session operations (list, show, start, stop, cancel)
-aaspai skill         Skill operations
-aaspai tool          Tool operations
-aaspai state         Workspace state (counts, recent activity)
-aaspai start         Start the scheduler daemon
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Your project (versioned in git)                    │
-│  ┌─────────┐ ┌──────────┐ ┌─────────┐               │
-│  │       versioned definitions under .aaspai/       │
-│  └────┬────┘ └─────┬────┘ └────┬────┘               │
-│       └────────────┴───────────┘                    │
-│            FileSource (port+adapter)                │
-└──────────────────────┬──────────────────────────────┘
-                       │
-┌──────────────────────┴──────────────────────────────┐
-│  aaspai runtime (this CLI)                          │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐     │
-│  │ Scheduler  │→ │ LoopRunner │→ │  Sessions  │     │
-│  └────────────┘  └────────────┘  └─────┬──────┘     │
-│                                       │             │
-│                                  ┌────┴─────┐       │
-│                                  │ Harness  │       │
-│                                  │ adapters │       │
-│                                  └──────────┘       │
-└──────────────────────┬──────────────────────────────┘
-                       │
-                  .aaspai/state.db (gitignored)
+```text
+aaspai init          scaffold a workspace
+aaspai agent         list, show, validate, and create agents
+aaspai provider      inspect production adapter/runtime capabilities
+aaspai session       list, show, start, stop, and cancel sessions
+aaspai knowledge     inspect OKF knowledge files
+aaspai skill         inspect and materialize skills
+aaspai tool          inspect caller-prepared tools
+aaspai loop          manage recurring loops
+aaspai state         show workspace state
+aaspai start         run the scheduler worker
+aaspai db            migrate, inspect, and back up SQLite state
 ```
 
 ## Configuration
 
-Each project has `.aaspai/aaspai.config.ts`:
+Workspace definitions live below `.aaspai/`. Keep definitions in version
+control and keep `.aaspai/state.db`, runtime artifacts, and credentials out of
+source control. OpenCode credentials are supplied through ephemeral process
+environment values; the CLI never writes `auth.json` or a global OpenCode
+configuration.
 
 ```ts
 import { defineConfig } from "@aaspai/config";
 
 export default defineConfig({
-  database: {
-    url: process.env.AASPAI_DB ?? "sqlite:./.aaspai/state.db",
-  },
+  database: { url: process.env.AASPAI_DB ?? "sqlite:./.aaspai/state.db" },
   organization: { id: "default", name: "My Project" },
   defaults: {
-    adapter: "claude_local",
-    runtime: { kind: "local" },
+    adapter: "opencode_local",
+    runtime: { kind: "local", envPassthrough: false },
   },
-  agents:     { root: "./.aaspai/agents" },
-  knowledge:  { root: "./.aaspai/knowledge" },
-  loops:      { root: "./.aaspai/loops" },
 });
 ```
 
-The CLI also accepts a JSON variant (`.aaspai/aaspai.config.json`).
+## Verification
 
-## Project status
+```bash
+yarn workspace @aaspai/cli typecheck
+yarn workspace @aaspai/cli test
+yarn test:real:production
+```
 
-This is a v0 release. The four reliability bugs found in Phase 3
-testing are fixed in `@aaspai/cli@0.1.x` and later:
-
-- Atomic wakeup claim (`UPDATE ... WHERE status='queued'`)
-- In-flight guard on the 5s poll
-- Retry-with-backoff on session errors
-- Cross-process file-based lock for `opencode-cli`
-- Graceful shutdown (SIGINT/SIGTERM)
-
-See [github.com/aaspai/aaspai](https://github.com/aaspai/aaspai) for
-the full monorepo, issues, and architecture docs.
-
-## License
-
-AGPL-3.0-only. See `LICENSE` in the source repo.
+The real production smoke writes JSON and HTML results under
+`.aaspai/artifacts/real-production-smoke/`.

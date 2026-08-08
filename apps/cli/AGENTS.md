@@ -41,5 +41,5 @@ When the human says "reset" or starts a new task, keep the repository and
 audit history but discard stale conversational assumptions. Re-read this
 file, `STATE.md`, recent sessions, and the current branch/diff. Summarize
 what is known, identify unfinished work, and establish a new goal before
-delegating. If the human asks for Codex, use the existing `codex_local`
-adapter explicitly; do not create a new adapter or bypass session logging.
+delegating. Use the production `opencode_local` adapter explicitly; do not
+select a disabled adapter or bypass session logging.

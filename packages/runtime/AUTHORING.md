@@ -1,68 +1,44 @@
-# `@aaspai/runtime` — Authoring Notes
+# `@aaspai/runtime` authoring notes
 
-In-repo notes for execution target authors. The user-facing guide lives
-at the project docs (TBD); this file holds invariants that are easy to
-violate from inside a runtime driver.
+Runtime V2 is a stateless infrastructure contract. It owns environments,
+leases, rooted filesystems, process handles, byte streams, and private
+endpoints. It does not own sessions, databases, harnesses, agents, or workspace
+sync policy.
 
-## No-remote-git contract (cross-run persistence)
+## Invariants
 
-The local execution-workspace cwd is the only persistence boundary across
-runs. No driver may depend on a git remote for cross-run state.
+- Validate provider config before probe or acquisition.
+- Persist only JSON-safe, secret-free lease metadata and execution bindings.
+- Treat in-memory SDK objects as caches; resume and destroy must work after the
+  provider instance is discarded.
+- Keep command and argument vectors separate. Shell execution is explicit.
+- Validate environment keys and bound stdout/stderr tails by bytes.
+- Preserve stdout/stderr ordering and await output delivery before `wait()`.
+- Cancellation is idempotent and resolves only after the exact process group is
+  confirmed dead. Timeout is TERM → grace → KILL → confirmed death.
+- Keep `releaseLease` distinct from `destroyLease`; cleanup failure overrides a
+  claimed success.
+- Root every filesystem operation at the realized workspace and reject traversal
+  and symlink escapes.
+- Never import database, session, company, harness, or adapter-provider code.
+- Never install or configure OpenCode/Codex/Claude from runtime code.
+- Never use a git remote as cross-run state; workspace sync belongs to execution.
 
-**Why:** aaspai resolves a local execution workspace (a worktree or a
-plain directory) for each run. Code state is carried forward by syncing
-that local cwd to wherever the agent actually runs — over ssh, into a
-sandbox, into a managed runtime — and then syncing changes back when the
-run finishes. Treating a `git remote` as the source of truth breaks
-dependent runs gated on the local worktree being caught up, and breaks
-isolated execution workspaces that have no remote configured at all.
+## Provider surface
 
-**How to apply:**
+`RuntimeProvider` is the only provider contract. The production registry exposes
+Local and Daytona. Other provider implementations are experimental and are not
+registered by `defaultRuntimeRegistry()` until their conformance and release
+gates pass.
 
-- Never `git push` from runtime code. Never assume the local worktree
-  has any `git remote` configured. If you need data from the previous
-  run, read it from the local cwd aaspai handed you.
-- When running on a different host (ssh, sandbox, remote container), use
-  the round-trip helpers in `@aaspai/runtime`:
-  `prepareRuntimeForExecution({spec, localDir, remoteDir})` bundles the
-  local cwd to the remote dir before the run;
-  `restoreRuntimeFromExecution({spec, localDir, remoteDir})` syncs
-  remote-side changes (including new git commits) back into the local
-  cwd after the run. Both run with no `git remote` configured.
-- A failed restore is a run-level error. Do not swallow restore errors.
+## Verification
 
-The invariant is enforced by the static check `scripts/check-no-git-push.mjs`
-which fails CI if any unapproved `git push` invocation is added. If you
-are building an operator-configured path that legitimately must push,
-add a `// aaspai:allow-git-push: <reason>` comment on the line (or the
-line above) so the opt-in shows up in code review.
+```bash
+yarn workspace @aaspai/runtime verify
+yarn check:architecture
+yarn test:real:production
+```
 
-## Runtime contract
-
-Every execution target is a `RuntimeTarget` (see
-[`@aaspai/contracts/runtime`](../contracts/src/runtime.ts)) and exposes:
-
-- `info` — `RuntimeTargetInfo` (kind, provider, label, status)
-- `run(options)` — runs a process, returns `RunProcessResult`
-- `prepareWorkspace(options)` — STUB until L3
-- `restoreWorkspace(options)` — STUB until L3
-
-## Sandbox driver contract
-
-Every sandbox driver implements the `SandboxClient` interface (6 methods:
-`makeDir`, `writeFile`, `readFile`, `listFiles`, `remove`, `run`) and
-the lease lifecycle (`acquire`, `resume`, `release`, `destroy`). See
-`packages/runtime/src/shared/sandbox-client.ts`.
-
-## Docker provider
-
-Docker is the first lifecycle-complete isolated provider. Each execution gets
-a disposable container with the assigned local workspace mounted at
-`/workspace`; the container never becomes the source of truth for git state.
-The driver provisions, readiness-checks, executes with streamed logs, and
-retries removal during cleanup. `recover(containerId)` is available to an
-orphan reconciler and reports `running`, `exited`, or `missing`.
-
-The provider deliberately does not implement cloud scheduling, snapshots, or
-remote git. Those are separate capabilities and are not silently implied by
-the Docker contract.
+Provider tests must cover every declared capability. The real smoke report is
+written under `.aaspai/artifacts/real-production-smoke/` and must contain no
+credentials or orphaned Daytona resources.
