@@ -15,7 +15,7 @@
  * `getWorkspaceForUser(userId)` reads from a registry of
  * workspace roots, indexed by org.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   CompanyCommandService,
@@ -84,8 +84,41 @@ import { asc, desc, eq } from "drizzle-orm";
 export function ensureWorkspaceEnv(): void {
   const root = workspaceRoot();
   process.env.AASPAI_CWD = root;
+  // Load workspace-scoped environment (the repo root `.env.local`), so
+  // provider credentials (DAYTONA_API_KEY, etc.) reach the Next.js
+  // process even though Next only auto-loads `apps/web/.env.local`.
+  loadWorkspaceEnvFile(root);
   if (!process.env.AASPAI_DB) {
     process.env.AASPAI_DB = `sqlite:${join(root, ".aaspai", "state.db")}`;
+  }
+}
+
+function loadWorkspaceEnvFile(root: string): void {
+  const candidates = [".env.local", ".env"];
+  for (const name of candidates) {
+    const file = join(root, name);
+    let raw: string;
+    try {
+      raw = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIndex = trimmed.indexOf("=");
+      if (eqIndex <= 0) continue;
+      const key = trimmed.slice(0, eqIndex).trim();
+      let value = trimmed.slice(eqIndex + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (!(key in process.env)) process.env[key] = value;
+    }
+    return; // .env.local wins over .env
   }
 }
 
@@ -194,6 +227,8 @@ export interface AgentSummary {
   reportsTo: string | null;
   manages: string[];
   peers: string[];
+  /** Merged runtime config (e.g. `{ default: ExecutionTarget }`). */
+  runtime: Record<string, unknown>;
 }
 
 export interface SessionSummary {
@@ -250,6 +285,7 @@ export async function listAgents(): Promise<AgentSummary[]> {
         reportsTo: cfg.reportsTo ?? null,
         manages: cfg.manages,
         peers: cfg.peers,
+        runtime: cfg.runtime ?? {},
       });
     } catch {
       // skip invalid agents
@@ -273,6 +309,7 @@ export async function getAgent(id: string): Promise<AgentSummary | null> {
       reportsTo: cfg.reportsTo ?? null,
       manages: cfg.manages,
       peers: cfg.peers,
+      runtime: cfg.runtime ?? {},
     };
   } catch {
     return null;
@@ -313,16 +350,18 @@ export async function getAgentHierarchy(): Promise<{
   return { agents, roots };
 }
 
-export async function listRecentSessions(limit = 20): Promise<SessionSummary[]> {
+export async function listRecentSessions(limit = 20, agentId?: string): Promise<SessionSummary[]> {
   ensureWorkspaceEnv();
   if (!isAaspaiWorkspace()) return [];
   const handle = getDefaultDb();
   try {
-    const rows = await handle.db
-      .select()
-      .from(sessions)
-      .orderBy(desc(sessions.startedAt))
-      .limit(limit);
+    const query = handle.db.select().from(sessions);
+    const rows = agentId
+      ? await query
+          .where(eq(sessions.agentId, agentId))
+          .orderBy(desc(sessions.startedAt))
+          .limit(limit)
+      : await query.orderBy(desc(sessions.startedAt)).limit(limit);
     return rows.map((r) => ({
       id: r.id,
       status: r.status ?? "unknown",

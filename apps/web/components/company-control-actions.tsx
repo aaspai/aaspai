@@ -20,15 +20,20 @@ export function CompanyControlActions({ lifecycleStatus }: { lifecycleStatus: st
   async function run() {
     setBusy(true);
     setError("");
-    const response = await fetch("/api/company/commands", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ type, approved: type === "activate_company" }),
-    });
-    if (!response.ok)
-      setError(((await response.json()) as { error?: string }).error ?? "Command failed");
-    else router.refresh();
-    setBusy(false);
+    try {
+      const response = await fetch("/api/company/commands", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type, approved: type === "activate_company" }),
+      });
+      if (!response.ok)
+        setError(((await response.json()) as { error?: string }).error ?? "Command failed");
+      else router.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Command failed");
+    } finally {
+      setBusy(false);
+    }
   }
   return (
     <div className="flex items-center gap-2">

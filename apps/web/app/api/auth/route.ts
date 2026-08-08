@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { clearSessionCookie, login, setSessionCookie, signup } from "@/lib/local-auth";
 import { ensureFrontendWorkspace } from "@/lib/workspace-bootstrap";
 
+function clientIp(request: Request): string {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0]?.trim() || "proxy";
+  return request.headers.get("x-real-ip") ?? "local";
+}
+
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   const action = body?.action;
@@ -35,7 +41,8 @@ export async function POST(request: Request) {
       if (typeof body?.email !== "string" || typeof body?.password !== "string") {
         return NextResponse.json({ error: "Email and password are required" }, { status: 400 });
       }
-      const result = await login(body.email, body.password);
+      const ip = clientIp(request);
+      const result = await login(body.email, body.password, ip);
       const response = NextResponse.json({
         data: { user: { name: result.user.name, email: result.user.email } },
       });

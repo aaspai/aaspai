@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
-import { listAgents } from "@/lib/aaspai";
+import { isAaspaiWorkspace, listAgents } from "@/lib/aaspai";
+import { currentUser } from "@/lib/local-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  if (!isAaspaiWorkspace()) {
+    return NextResponse.json({ error: "no aaspai workspace" }, { status: 404 });
+  }
   const agents = await listAgents();
   return NextResponse.json({ agents });
 }

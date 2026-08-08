@@ -3,6 +3,7 @@ import { companyCommandSchema } from "@aaspai/contracts";
 import { getDefaultDb, runMigrations } from "@aaspai/db";
 import { NextResponse } from "next/server";
 import { ensureWorkspaceEnv } from "@/lib/aaspai";
+import { deriveIdempotencyKey } from "@/lib/idempotency";
 import { currentUser } from "@/lib/local-auth";
 
 export async function POST(request: Request) {
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
       "idempotencyKey" in body &&
       typeof body.idempotencyKey === "string"
         ? body.idempotencyKey
-        : `${typeof body === "object" && body && "type" in body ? String(body.type) : "command"}:${Date.now()}`,
+        : deriveIdempotencyKey(body),
   });
   if (!parsed.success) {
     return NextResponse.json({ error: "A command type is required" }, { status: 400 });

@@ -19,24 +19,31 @@ export function ProjectCommandForm({
     event.preventDefault();
     setBusy(true);
     setError("");
-    const response = await fetch("/api/company/commands", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        type: "create_project",
-        title,
-        goalId,
-        description: "",
-        idempotencyKey: `project:${title.toLowerCase()}`,
-      }),
-    });
-    if (!response.ok)
-      setError(((await response.json()) as { error?: string }).error ?? "Project creation failed");
-    else {
-      setTitle("");
-      router.refresh();
+    try {
+      const response = await fetch("/api/company/commands", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "create_project",
+          title,
+          goalId,
+          description: "",
+          idempotencyKey: `project:${title.toLowerCase()}`,
+        }),
+      });
+      if (!response.ok)
+        setError(
+          ((await response.json()) as { error?: string }).error ?? "Project creation failed",
+        );
+      else {
+        setTitle("");
+        router.refresh();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Project creation failed");
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
   if (!objectives.length) return null;
   return (

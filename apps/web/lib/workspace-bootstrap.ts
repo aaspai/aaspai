@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExecutionTarget } from "@aaspai/contracts/runtime";
 import {
@@ -9,6 +9,23 @@ import {
   DEFAULT_LOOPS_DIR,
 } from "@aaspai/file-loader";
 import { workspaceRoot } from "./aaspai";
+
+/**
+ * Write a file only when it doesn't already exist. User-authored content
+ * (agenda, instructions, config, skills) must never be clobbered by a
+ * routine `ensureFrontendWorkspace` call (e.g. per goal creation).
+ * Derived files that legitimately change with the provider (tools.yaml)
+ * are still regenerated explicitly.
+ */
+async function writeIfMissing(file: string, content: string): Promise<boolean> {
+  try {
+    await stat(file);
+    return false;
+  } catch {
+    await writeFile(file, content, "utf8");
+    return true;
+  }
+}
 
 export type FrontendWorkspaceOptions = {
   ceoProvider?: string;
@@ -57,7 +74,7 @@ export async function ensureFrontendWorkspace(
   const root = workspaceRoot();
   const stored = await readStoredOnboarding();
   const onboarding: FrontendOnboarding = {
-    ceoProvider: options.ceoProvider ?? stored?.ceoProvider ?? "opencode_cli",
+    ceoProvider: options.ceoProvider ?? stored?.ceoProvider ?? "opencode_local",
     ceoModel: options.ceoModel ?? stored?.ceoModel,
     ceoAgenda: options.ceoAgenda?.trim() || stored?.ceoAgenda || defaultAgenda,
     ceoInstructions:
@@ -79,15 +96,13 @@ export async function ensureFrontendWorkspace(
   for (const skill of companySkills) {
     await mkdir(join(root, "skills", skill.key), { recursive: true });
   }
-  await writeFile(
+  await writeIfMissing(
     join(root, DEFAULT_JSON_CONFIG_PATH),
     `${JSON.stringify({ database: { url: "sqlite:./.aaspai/state.db" }, organization: { id: "default", name: companyName }, agents: { root: "./.aaspai/agents" }, knowledge: { root: "./.aaspai/knowledge" }, loops: { root: "./.aaspai/loops" } }, null, 2)}\n`,
-    "utf8",
   );
-  await writeFile(
+  await writeIfMissing(
     join(root, AASPAI_DIR, "AGENTS.md"),
     `# ${companyName}\n\nThis company is operated through auditable aaspai goals, work items, and sessions.\n`,
-    "utf8",
   );
   if (onboarding.completedAt) {
     await writeFile(
@@ -98,12 +113,11 @@ export async function ensureFrontendWorkspace(
   }
   const directory = join(root, DEFAULT_AGENTS_DIR, "ceo");
   await mkdir(directory, { recursive: true });
-  await writeFile(
+  await writeIfMissing(
     join(directory, "AGENT.md"),
     `---\nid: agent/ceo\ntype: Agent\ntitle: "Chief Executive Officer"\ndescription: ${JSON.stringify(`Chief Executive Officer for ${companyName}`)}\ntimestamp: ${new Date().toISOString()}\nadapter: ${onboarding.ceoProvider}\n${onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: ceo\nreportsTo: null\nmanages: []\npeers: []\nknowledge:\n  include: ["**"]\n  exclude: []\nruntime:\n  default: ${JSON.stringify(onboarding.runtime)}\n---\n\n# Chief Executive Officer\n\n## Company mission\n${onboarding.ceoAgenda}\n\n## Operating principles and boundaries\n${onboarding.ceoInstructions}\n\nYou are the only initial employee. Turn founder direction into a measurable operating plan. Use native CLI research tools, cite sources in durable artifacts, and never treat an unsourced model statement as evidence. Do useful work yourself until a specialist is justified. When a hire is needed, submit a typed hire_and_delegate action; never merely describe or invent an employee. In OpenCode call company_action. In Codex, return the exact final line AASPAI_COMPANY_ACTIONS={"actions":[...]}. Include projectId and projectRole ("manager" or "member"), the role, why it is needed now, scope, evidence requirements, and durable artifact paths. A new project manager's first assignment must require create_milestone and define_and_start_process company actions. Never claim external actions happened. Ask for approval before spending money, contacting people, publishing, deploying, or changing company governance.\n\nEnd every run with decisions made, evidence produced, blockers, requested founder decisions, and the next action.\n`,
-    "utf8",
   );
-  await writeFile(
+  await writeIfMissing(
     join(directory, "config.yaml"),
     `${JSON.stringify(
       {
@@ -113,17 +127,17 @@ export async function ensureFrontendWorkspace(
       null,
       2,
     )}\n`,
-    "utf8",
   );
+  // tools.yaml is derived from the provider — regenerate it on explicit
+  // provider changes (unlike user-authored content, which is preserved).
   await writeFile(join(directory, "tools.yaml"), toolsYaml(onboarding.ceoProvider), "utf8");
-  await writeFile(
+  await writeIfMissing(
     join(directory, "skills.lock.json"),
     `${JSON.stringify(companySkills, null, 2)}\n`,
-    "utf8",
   );
 
   const skillTimestamp = onboarding.completedAt || new Date().toISOString();
-  await writeFile(
+  await writeIfMissing(
     join(root, "skills", "company-operator", "SKILL.md"),
     `---
 key: company-operator
@@ -151,9 +165,8 @@ Use this skill only when the company must change its operating state. Never simu
 
 Delegated work runs in its own session. End your turn after the typed action instead of doing the employee's assignment yourself.
 `,
-    "utf8",
   );
-  await writeFile(
+  await writeIfMissing(
     join(root, "skills", "company-work", "SKILL.md"),
     `---
 key: company-work
@@ -171,51 +184,43 @@ Start actionable work in this session. Use the runtime's native read, write, she
 
 Finish with the work completed, artifact paths, verification evidence, limitations or blockers, and the next action.
 `,
-    "utf8",
   );
 
   const operatorDirectory = join(root, DEFAULT_AGENTS_DIR, "operator");
   await mkdir(operatorDirectory, { recursive: true });
-  await writeFile(
+  await writeIfMissing(
     join(operatorDirectory, "AGENT.md"),
     `---\nid: agent/operator\ntype: Agent\ntitle: "Company Manager"\ndescription: ${JSON.stringify(`Internal non-CLI manager control-loop coordinator for ${companyName}`)}\ntimestamp: ${new Date().toISOString()}\nadapter: ${onboarding.ceoProvider}\n${onboarding.ceoModel ? `model: ${JSON.stringify(onboarding.ceoModel)}\n` : ""}role: operator\nreportsTo: agent/ceo\nmanages: []\npeers: []\nruntime:\n  default: { kind: local }\n---\n\n# Company Manager\n\nThis definition represents the deterministic internal coordinator, not an employee CLI session. Run one bounded control decision at a time. Inspect durable state, schedule the next wakeup, and never execute tools or mutate strategic state outside typed company commands.\n`,
-    "utf8",
   );
-  await writeFile(
+  await writeIfMissing(
     join(operatorDirectory, "config.yaml"),
     "adapterConfig: {}\nruntimeConfig: {}\n",
-    "utf8",
   );
-  await writeFile(
+  await writeIfMissing(
     join(operatorDirectory, "tools.yaml"),
     "allow: []\ndeny: []\nrequire_approval_for: []\n",
-    "utf8",
   );
-  await writeFile(join(operatorDirectory, "skills.lock.json"), "[]\n", "utf8");
+  await writeIfMissing(join(operatorDirectory, "skills.lock.json"), "[]\n");
 }
 
 function toolsYaml(provider: string): string {
   const tools =
-    provider === "codex_local"
-      ? ["apply_patch", "shell", "web_search", "view_image"]
-      : provider === "claude_local"
-        ? ["Bash", "Edit", "Glob", "Grep", "Read", "WebFetch", "WebSearch", "Write"]
-        : provider === "opencode_cli"
-          ? [
-              "bash",
-              "browser_snapshot",
-              "edit",
-              "read",
-              "write",
-              "glob",
-              "grep",
-              "list",
-              "webfetch",
-              "websearch",
-              "todowrite",
-              "skill",
-              "company_action",
-            ]
-          : [];
+    provider === "opencode_local"
+      ? [
+          "bash",
+          "browser_snapshot",
+          "edit",
+          "read",
+          "write",
+          "glob",
+          "grep",
+          "list",
+          "webfetch",
+          "websearch",
+          "todowrite",
+          "skill",
+          "company_action",
+        ]
+      : [];
   return `allow:${tools.map((tool) => `\n  - ${tool}`).join("")}\ndeny: []\nrequire_approval_for: []\n`;
 }

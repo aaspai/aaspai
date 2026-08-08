@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, MessageSquare, MoreHorizontal, Send } from "lucide-react";
+import { ArrowLeft, Check, MoreHorizontal, Send } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ProjectEvaluationControls } from "@/components/project-evaluation-controls";
@@ -74,7 +74,6 @@ export function ProjectWorkspace({
             {project.description || "No project description yet."}
           </p>
         </div>
-        <Button>New task</Button>
       </header>
       <div className="grid gap-4 md:grid-cols-4">
         <Metric label="Tasks" value={tasks.length} />
@@ -306,10 +305,14 @@ export function TaskWorkspace({
     const body = draft.trim();
     if (!body) return;
     const id = crypto.randomUUID();
-    setItems((current) => [...current, { id, author: "You", body, timestamp: "Just now" }]);
+    const optimistic = { id, author: "You", body, timestamp: "Just now" };
+    setItems((current) => [...current, optimistic]);
     setDraft("");
-    const targetThread = threadId ?? (await loadDiscussionAndGetThread());
-    if (!targetThread) return;
+    const targetThread = threadId ?? (await getOrCreateThread());
+    if (!targetThread) {
+      setItems((current) => current.filter((item) => item.id !== id));
+      return;
+    }
     const response = await fetch(
       `/api/company/threads/${encodeURIComponent(targetThread)}/messages`,
       {
@@ -318,16 +321,44 @@ export function TaskWorkspace({
         body: JSON.stringify({ body, idempotencyKey: `message:${id}` }),
       },
     );
-    if (!response.ok) setItems((current) => current.filter((item) => item.id !== id));
+    if (!response.ok) {
+      // Roll back the optimistic comment; keep whatever the server holds.
+      setItems((current) => current.filter((item) => item.id !== id));
+      return;
+    }
+    // Reconcile: reload so the persisted message replaces the optimistic
+    // placeholder (its temp id). Merge rather than replace so nothing the
+    // user typed is dropped mid-flight.
+    await loadDiscussion();
   }
 
-  async function loadDiscussionAndGetThread() {
-    await loadDiscussion();
-    const response = await fetch(
+  // Resolve the durable thread id for this work item, creating it when
+  // missing. Does NOT reload the discussion items — that happens after
+  // the POST so the optimistic comment isn't dropped before it persists.
+  async function getOrCreateThread(): Promise<string | null> {
+    const threadsResponse = await fetch(
       `/api/company/threads?entityType=work&entityId=${encodeURIComponent(task.id)}`,
     );
-    const body = (await response.json().catch(() => ({}))) as { data?: Array<{ id: string }> };
-    const id = body.data?.[0]?.id ?? null;
+    if (!threadsResponse.ok) return null;
+    const threadBody = (await threadsResponse.json()) as { data?: Array<{ id: string }> };
+    let id = threadBody.data?.[0]?.id;
+    if (!id) {
+      const createResponse = await fetch("/api/company/threads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          entityType: "work",
+          entityId: task.id,
+          title: `Discussion: ${task.title}`,
+          idempotencyKey: `thread:${task.id}`,
+        }),
+      });
+      const created = (await createResponse.json().catch(() => ({}))) as {
+        data?: { id?: string };
+      };
+      id = created.data?.id;
+    }
+    if (!id) return null;
     setThreadId(id);
     return id;
   }
@@ -364,6 +395,7 @@ export function TaskWorkspace({
           <select
             value={status}
             onChange={(event) => void changeStatus(event.target.value)}
+            aria-label="Change task status"
             className="rounded-md border bg-background px-3 py-2 text-sm"
           >
             <option value="proposed">Proposed</option>
@@ -373,7 +405,6 @@ export function TaskWorkspace({
             <option value="completed">Completed</option>
             <option value="failed">Failed</option>
           </select>
-          <Button>Run task</Button>
         </div>
       </header>
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -407,6 +438,7 @@ export function TaskWorkspace({
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder="Write a comment or handoff…"
+                  aria-label="Write a comment"
                   className="min-h-20 flex-1 rounded-md border bg-background px-3 py-2 text-sm"
                 />
                 <Button onClick={addComment} size="icon" aria-label="Add comment">
@@ -443,21 +475,6 @@ export function TaskWorkspace({
               <Detail label="Updated" value={task.updatedAt} />
               <Detail label="Dependencies" value={String(task.dependencyIds.length)} />
               {task.blockedReason && <Detail label="Blocked reason" value={task.blockedReason} />}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Actions</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Button variant="outline" className="w-full justify-start">
-                <MessageSquare className="mr-2 h-4 w-4" />
-                Request review
-              </Button>
-              <Button variant="outline" className="w-full justify-start">
-                <MoreHorizontal className="mr-2 h-4 w-4" />
-                More actions
-              </Button>
             </CardContent>
           </Card>
         </aside>

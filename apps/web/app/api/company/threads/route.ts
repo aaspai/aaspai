@@ -3,6 +3,7 @@ import { companyCommandSchema } from "@aaspai/contracts";
 import { getDefaultDb, runMigrations } from "@aaspai/db";
 import { NextResponse } from "next/server";
 import { ensureWorkspaceEnv } from "@/lib/aaspai";
+import { deriveIdempotencyKey } from "@/lib/idempotency";
 import { currentUser } from "@/lib/local-auth";
 
 export async function GET(request: Request) {
@@ -35,7 +36,7 @@ export async function POST(request: Request) {
       "idempotencyKey" in body &&
       typeof body.idempotencyKey === "string"
         ? body.idempotencyKey
-        : `thread:${Date.now()}`,
+        : deriveIdempotencyKey(body, "thread"),
   });
   if (!parsed.success)
     return NextResponse.json({ error: "entityType and entityId are required" }, { status: 400 });

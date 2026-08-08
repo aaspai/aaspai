@@ -11,25 +11,11 @@ import {
   isAaspaiWorkspace,
   listRecentSessions,
 } from "@/lib/aaspai";
+import { roleLabel } from "@/lib/role-labels";
+import { isAgentUp } from "@/lib/sandboxes";
 import { formatRelative, truncate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
-
-const ROLE_LABEL: Record<string, string> = {
-  ceo: "Chief of Staff",
-  cto: "CTO",
-  cmo: "Marketing",
-  cfo: "Finance",
-  security: "Security",
-  engineer: "Engineer",
-  designer: "Designer",
-  pm: "PM",
-  qa: "QA",
-  devops: "DevOps",
-  researcher: "Researcher",
-  operator: "Manager",
-  general: "Generalist",
-};
 
 export default async function AgentDetailPage({ params }: { params: Promise<{ id: string[] }> }) {
   const { id } = await params;
@@ -37,10 +23,11 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
 
   if (!isAaspaiWorkspace()) notFound();
 
-  const [agent, systemPrompt, recentSessions] = await Promise.all([
+  const [agent, systemPrompt, recentSessions, agentUp] = await Promise.all([
     getAgent(agentId),
     getAgentSystemPrompt(agentId),
     listRecentSessions(20),
+    isAgentUp(agentId),
   ]);
   if (!agent) notFound();
 
@@ -59,7 +46,18 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">{agent.title}</h1>
-            <Badge variant="secondary">{ROLE_LABEL[agent.role] ?? agent.role}</Badge>
+            <Badge variant="secondary">{roleLabel(agent.role)}</Badge>
+            {agentUp ? (
+              <Badge variant="default" className="bg-emerald-500/15 text-emerald-600">
+                <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                up
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="text-muted-foreground">
+                <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
+                down
+              </Badge>
+            )}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{agent.id}</code>
@@ -81,7 +79,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
           <CardContent className="space-y-3 text-sm">
             <Row label="Adapter" value={agent.adapter} />
             <Row label="Model" value={agent.model ?? "—"} mono />
-            <Row label="Role" value={ROLE_LABEL[agent.role] ?? agent.role} />
+            <Row label="Role" value={roleLabel(agent.role)} />
             <Row
               label="Reports to"
               value={agent.reportsTo ?? "—"}

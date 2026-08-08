@@ -7,17 +7,22 @@ export function CompanyBackup() {
   const [bundle, setBundle] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   async function exportCompany() {
-    const response = await fetch("/api/company/export");
-    const body = (await response.json()) as { data?: unknown; error?: string };
-    if (!response.ok) return setMessage(body.error ?? "Export failed");
-    const text = JSON.stringify(body.data, null, 2);
-    setBundle(text);
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-    link.download = "aaspai-company-export-v2.json";
-    link.click();
-    URL.revokeObjectURL(link.href);
-    setMessage("Company export downloaded.");
+    setMessage(null);
+    try {
+      const response = await fetch("/api/company/export");
+      const body = (await response.json()) as { data?: unknown; error?: string };
+      if (!response.ok) return setMessage(body.error ?? "Export failed");
+      const text = JSON.stringify(body.data, null, 2);
+      setBundle(text);
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      link.download = "aaspai-company-export-v2.json";
+      link.click();
+      URL.revokeObjectURL(link.href);
+      setMessage("Company export downloaded.");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "Export failed");
+    }
   }
   async function importCompany() {
     try {
